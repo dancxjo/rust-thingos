@@ -59,6 +59,30 @@ fn has_user_audio_args(qemu_flags: &str) -> bool {
         || f.contains("ac97")
 }
 
+fn has_user_display_args(qemu_flags: &str) -> bool {
+    let f = qemu_flags;
+    f.contains("-display") || f.contains("-nographic") || f.contains("-vnc")
+}
+
+fn push_x86_interactive_display_args<'a>(
+    args: &mut Vec<&'a str>,
+    interactive: bool,
+    qemu_flags: &str,
+) {
+    if !interactive {
+        return;
+    }
+
+    args.extend_from_slice(&["-device", "virtio-vga", "-M", "q35,usb=off,vmport=off,i8042=on"]);
+
+    if !has_user_display_args(qemu_flags) {
+        // QEMU maps the virtio-gpu cursor queue to the frontend's host cursor.
+        // Keeping it visible while input is grabbed makes the hardware cursor
+        // usable in the default interactive GTK/SDL window.
+        args.extend_from_slice(&["-display", "default,show-cursor=on"]);
+    }
+}
+
 fn default_audiodev_arg() -> Option<String> {
     let backend = std::env::var("THINGOS_AUDIODEV").unwrap_or_else(|_| "pa".to_string());
     let backend = backend.trim();
@@ -165,14 +189,7 @@ pub fn run(
                 ]
             };
 
-            if interactive {
-                args.extend_from_slice(&[
-                    "-device",
-                    "virtio-vga",
-                    "-M",
-                    "q35,usb=off,vmport=off,i8042=on",
-                ]);
-            }
+            push_x86_interactive_display_args(&mut args, interactive, qemu_flags);
 
             let default_audio =
                 if !has_user_audio_args(qemu_flags) { default_audiodev_arg() } else { None };
@@ -328,9 +345,7 @@ pub fn run_bios(
         }
     }
 
-    if interactive {
-        args.extend_from_slice(&["-device", "virtio-vga", "-M", "q35,usb=off,vmport=off,i8042=on"]);
-    }
+    push_x86_interactive_display_args(&mut args, interactive, qemu_flags);
 
     args.extend(final_args.iter().map(String::as_str));
     run_qemu(sh, "qemu-system-x86_64", &args, &qemu_args)?;
@@ -377,14 +392,7 @@ pub fn run_hdd(
                 &netdev_val,
             ];
 
-            if interactive {
-                args.extend_from_slice(&[
-                    "-device",
-                    "virtio-vga",
-                    "-M",
-                    "q35,usb=off,vmport=off,i8042=on",
-                ]);
-            }
+            push_x86_interactive_display_args(&mut args, interactive, qemu_flags);
 
             let default_audio =
                 if !has_user_audio_args(qemu_flags) { default_audiodev_arg() } else { None };

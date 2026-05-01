@@ -241,13 +241,34 @@ impl VirtioGpu {
 
     /// Create a 2D resource with current dimensions
     pub fn create_resource_2d(&mut self, resource_id: u32) -> Result<(), &'static str> {
-        self.create_resource_2d_with_format(resource_id, VIRTIO_GPU_FORMAT_B8G8R8X8_UNORM)
+        self.create_resource_2d_sized_with_format(
+            resource_id,
+            self.display_width,
+            self.display_height,
+            VIRTIO_GPU_FORMAT_B8G8R8X8_UNORM,
+        )
     }
 
     /// Create a 2D resource with current dimensions and an explicit virtio-gpu format.
     pub fn create_resource_2d_with_format(
         &mut self,
         resource_id: u32,
+        format: u32,
+    ) -> Result<(), &'static str> {
+        self.create_resource_2d_sized_with_format(
+            resource_id,
+            self.display_width,
+            self.display_height,
+            format,
+        )
+    }
+
+    /// Create a 2D resource with explicit dimensions and format.
+    pub fn create_resource_2d_sized_with_format(
+        &mut self,
+        resource_id: u32,
+        width: u32,
+        height: u32,
         format: u32,
     ) -> Result<(), &'static str> {
         let cmd = VirtioGpuResourceCreate2d {
@@ -260,8 +281,8 @@ impl VirtioGpu {
             },
             resource_id,
             format,
-            width: self.display_width,
-            height: self.display_height,
+            width,
+            height,
         };
 
         let cmd_bytes = unsafe {
@@ -287,6 +308,16 @@ impl VirtioGpu {
         self.fb_stride = stride;
         self.external_backing = true;
 
+        self.attach_backing_preserve_state(resource_id, phys_addr, size)
+    }
+
+    /// Attach backing memory without modifying the helper's scanout bookkeeping.
+    pub fn attach_backing_preserve_state(
+        &mut self,
+        resource_id: u32,
+        phys_addr: u64,
+        size: usize,
+    ) -> Result<(), &'static str> {
         // Need to send header + 1 memory entry
         #[repr(C, packed)]
         struct AttachCmd {
@@ -809,8 +840,7 @@ impl VirtioGpu {
 
         let vq_virt =
             device_alloc_dma(self.claim_handle, 4).map_err(|_| "Failed to alloc cursor vq")?;
-        let vq_phys =
-            device_dma_phys(vq_virt).map_err(|_| "Failed to get cursor vq phys")?;
+        let vq_phys = device_dma_phys(vq_virt).map_err(|_| "Failed to get cursor vq phys")?;
 
         let vq = Virtqueue::new(vq_virt, vq_phys, 16);
 
@@ -878,11 +908,7 @@ impl VirtioGpu {
     /// Move the hardware cursor hotspot to a new screen position.
     ///
     /// Faster than [`update_cursor`]: no image data is transferred.
-    pub fn move_cursor_hw(
-        &mut self,
-        pos_x: u32,
-        pos_y: u32,
-    ) -> Result<(), &'static str> {
+    pub fn move_cursor_hw(&mut self, pos_x: u32, pos_y: u32) -> Result<(), &'static str> {
         self.send_cursor_cmd(0, 0, 0, pos_x, pos_y, true)
     }
 
@@ -903,26 +929,12 @@ impl VirtioGpu {
             return Err("No cursor DMA buffer");
         }
 
-        let cmd_type = if move_only {
-            VIRTIO_GPU_CMD_MOVE_CURSOR
-        } else {
-            VIRTIO_GPU_CMD_UPDATE_CURSOR
-        };
+        let cmd_type =
+            if move_only { VIRTIO_GPU_CMD_MOVE_CURSOR } else { VIRTIO_GPU_CMD_UPDATE_CURSOR };
 
         let cmd = VirtioGpuUpdateCursor {
-            hdr: VirtioGpuCtrlHdr {
-                type_: cmd_type,
-                flags: 0,
-                fence_id: 0,
-                ctx_id: 0,
-                padding: 0,
-            },
-            pos: VirtioGpuCursorPos {
-                scanout_id: 0,
-                x: pos_x,
-                y: pos_y,
-                padding: 0,
-            },
+            hdr: VirtioGpuCtrlHdr { type_: cmd_type, flags: 0, fence_id: 0, ctx_id: 0, padding: 0 },
+            pos: VirtioGpuCursorPos { scanout_id: 0, x: pos_x, y: pos_y, padding: 0 },
             resource_id,
             hot_x,
             hot_y,
@@ -972,8 +984,7 @@ impl VirtioGpu {
 
         // Notify cursor queue (queue index 1).
         let notify_off = self.cursorq_notify_off;
-        let notify_addr =
-            self.notify_cfg + (notify_off as u64 * self.notify_off_multiplier as u64);
+        let notify_addr = self.notify_cfg + (notify_off as u64 * self.notify_off_multiplier as u64);
         unsafe { write_volatile(notify_addr as *mut u16, 1u16) }
 
         Ok(())
@@ -1005,11 +1016,8 @@ impl VirtioGpu {
 
     fn notify_queue(&self, queue_idx: u16) {
         // Write queue index to notify register
-        let notify_off = if queue_idx == 0 {
-            self.controlq_notify_off
-        } else {
-            self.cursorq_notify_off
-        };
+        let notify_off =
+            if queue_idx == 0 { self.controlq_notify_off } else { self.cursorq_notify_off };
         let notify_addr = self.notify_cfg + (notify_off as u64 * self.notify_off_multiplier as u64);
         unsafe { write_volatile(notify_addr as *mut u16, queue_idx) }
     }

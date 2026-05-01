@@ -340,6 +340,11 @@ struct VirtioGpuDriver {
     /// Buffer ID of the cursor image that is currently loaded on the hardware
     /// cursor, or `None` if no cursor has been set.
     cursor_buffer_id: Option<BufferId>,
+    /// Scaled hardware cursor hotspot for the active 64x64 cursor resource.
+    cursor_hotspot: (u32, u32),
+    /// Last requested hardware cursor hotspot position in screen coordinates.
+    cursor_pos: (u32, u32),
+    cursor_visible: bool,
     /// DMA-allocated pixel buffer for the hardware cursor image.
     ///
     /// Pixels from the Bloom-imported cursor buffer are *copied* here on every
@@ -394,6 +399,14 @@ fn alpha_over_argb(src: u32, dst: u32, plane_alpha: u8) -> u32 {
 
 fn source_argb_for_blend(src: u32, format: PixelFormat) -> u32 {
     if format.has_alpha() { src } else { 0xff00_0000 | (src & 0x00ff_ffff) }
+}
+
+fn cursor_argb_to_host(src: u32) -> u32 {
+    let a = src & 0xff00_0000;
+    let r = (src >> 16) & 0xff;
+    let g = (src >> 8) & 0xff;
+    let b = src & 0xff;
+    a | (b << 16) | (g << 8) | r
 }
 
 fn scale_alpha(alpha: u8, coverage: u8) -> u8 {
@@ -514,9 +527,7 @@ fn vfs_device_call(driver: &mut VirtioGpuDriver, payload: &[u8]) -> ProviderResp
             let mut caps = DisplayCaps::ATOMIC | DisplayCaps::DMABUF_IMPORT;
             // Only advertise hardware cursor if the cursor queue is available
             // AND the DMA pixel buffer was successfully allocated at init time.
-            if driver.gpu.has_cursorq()
-                && driver.cursor_dma_buf != 0
-                && driver.cursor_dma_phys != 0
+            if driver.gpu.has_cursorq() && driver.cursor_dma_buf != 0 && driver.cursor_dma_phys != 0
             {
                 caps |= DisplayCaps::HARDWARE_CURSOR;
             }
@@ -1017,6 +1028,21 @@ fn vfs_device_call(driver: &mut VirtioGpuDriver, payload: &[u8]) -> ProviderResp
                             "DISP: ignoring VSYNC flag on synchronous VFS commit response path"
                         );
                     }
+
+                    if driver.cursor_resource_id != 0 && driver.cursor_buffer_id.is_some() {
+                        let (pos_x, pos_y) = driver.cursor_pos;
+                        let resource_id =
+                            if driver.cursor_visible { driver.cursor_resource_id } else { 0 };
+                        let (hot_x, hot_y) = driver.cursor_hotspot;
+                        if let Err(e) =
+                            driver.gpu.update_cursor(resource_id, hot_x, hot_y, pos_x, pos_y)
+                        {
+                            stem::warn!(
+                                "display_virtio_gpu: cursor reassert after commit failed: {}",
+                                e
+                            );
+                        }
+                    }
                 }
             }
 
@@ -1027,9 +1053,8 @@ fn vfs_device_call(driver: &mut VirtioGpuDriver, payload: &[u8]) -> ProviderResp
             if call_payload.len() < core::mem::size_of::<SetCursorRequest>() {
                 return ProviderResponse::err(Errno::EINVAL);
             }
-            let req: SetCursorRequest = unsafe {
-                core::ptr::read_unaligned(call_payload.as_ptr() as *const _)
-            };
+            let req: SetCursorRequest =
+                unsafe { core::ptr::read_unaligned(call_payload.as_ptr() as *const _) };
 
             if !driver.gpu.has_cursorq() {
                 return ProviderResponse::err(Errno::ENOSYS);
@@ -1107,12 +1132,13 @@ fn vfs_device_call(driver: &mut VirtioGpuDriver, payload: &[u8]) -> ProviderResp
                             src_y.saturating_mul(src_stride as usize) + src_x.saturating_mul(bpp),
                         )
                             as *const u32);
+                        let cursor_px = cursor_argb_to_host(src_px);
                         core::ptr::write_unaligned(
                             (driver.cursor_dma_buf as *mut u8).add(
                                 (dst_y as usize).saturating_mul(dst_stride)
                                     + (dst_x as usize).saturating_mul(bpp),
                             ) as *mut u32,
-                            src_px,
+                            cursor_px,
                         );
                     }
                 }
@@ -1132,19 +1158,19 @@ fn vfs_device_call(driver: &mut VirtioGpuDriver, payload: &[u8]) -> ProviderResp
                     // Size changed: reuse the existing ID to avoid ID exhaustion.
                     driver.cursor_resource_id
                 };
-                driver.gpu.set_dimensions(HW_CURSOR_SIDE, HW_CURSOR_SIDE);
-                if let Err(e) = driver.gpu.create_resource_2d_with_format(
+                if let Err(e) = driver.gpu.create_resource_2d_sized_with_format(
                     res_id,
+                    HW_CURSOR_SIDE,
+                    HW_CURSOR_SIDE,
                     virtio_gpu::VIRTIO_GPU_FORMAT_B8G8R8A8_UNORM,
                 ) {
                     stem::warn!("display_virtio_gpu: cursor resource create failed: {}", e);
                     return ProviderResponse::err(Errno::ENOMEM);
                 }
-                if let Err(e) = driver.gpu.attach_backing(
+                if let Err(e) = driver.gpu.attach_backing_preserve_state(
                     res_id,
                     driver.cursor_dma_phys,
                     dma_size,
-                    dst_stride as u32,
                 ) {
                     stem::warn!("display_virtio_gpu: cursor attach_backing failed: {}", e);
                     return ProviderResponse::err(Errno::ENOMEM);
@@ -1167,12 +1193,15 @@ fn vfs_device_call(driver: &mut VirtioGpuDriver, payload: &[u8]) -> ProviderResp
             let resource_id = if req.visible != 0 { res_id } else { 0 };
             let hot_x = cursor_hw_hotspot(req.hotspot_x, src_w);
             let hot_y = cursor_hw_hotspot(req.hotspot_y, src_h);
-            if let Err(e) = driver.gpu.update_cursor(resource_id, hot_x, hot_y, 0, 0) {
+            let (pos_x, pos_y) = driver.cursor_pos;
+            if let Err(e) = driver.gpu.update_cursor(resource_id, hot_x, hot_y, pos_x, pos_y) {
                 stem::warn!("display_virtio_gpu: update_cursor failed: {}", e);
                 return ProviderResponse::err(Errno::EIO);
             }
 
             driver.cursor_buffer_id = Some(req.buffer_id);
+            driver.cursor_hotspot = (hot_x, hot_y);
+            driver.cursor_visible = req.visible != 0;
             stem::debug!(
                 "display_virtio_gpu: hw cursor set buffer={} size={}x{} hw_size={}x{} hotspot={},{} hw_hotspot={},{} visible={} (dma_phys=0x{:x})",
                 req.buffer_id.0,
@@ -1194,9 +1223,8 @@ fn vfs_device_call(driver: &mut VirtioGpuDriver, payload: &[u8]) -> ProviderResp
             if call_payload.len() < core::mem::size_of::<MoveCursorRequest>() {
                 return ProviderResponse::err(Errno::EINVAL);
             }
-            let req: MoveCursorRequest = unsafe {
-                core::ptr::read_unaligned(call_payload.as_ptr() as *const _)
-            };
+            let req: MoveCursorRequest =
+                unsafe { core::ptr::read_unaligned(call_payload.as_ptr() as *const _) };
 
             if !driver.gpu.has_cursorq() {
                 return ProviderResponse::err(Errno::ENOSYS);
@@ -1205,10 +1233,17 @@ fn vfs_device_call(driver: &mut VirtioGpuDriver, payload: &[u8]) -> ProviderResp
             // Clamp to screen bounds; saturating cast to u32 handles negatives.
             let pos_x = req.x.max(0) as u32;
             let pos_y = req.y.max(0) as u32;
+            driver.cursor_pos = (pos_x, pos_y);
+            driver.cursor_visible = req.visible != 0;
 
             if req.visible != 0 {
-                if let Err(e) = driver.gpu.move_cursor_hw(pos_x, pos_y) {
-                    stem::warn!("display_virtio_gpu: move_cursor_hw failed: {}", e);
+                let res_id = driver.cursor_resource_id;
+                if res_id == 0 || driver.cursor_buffer_id.is_none() {
+                    return ProviderResponse::err(Errno::ENOENT);
+                }
+                let (hot_x, hot_y) = driver.cursor_hotspot;
+                if let Err(e) = driver.gpu.update_cursor(res_id, hot_x, hot_y, pos_x, pos_y) {
+                    stem::warn!("display_virtio_gpu: cursor move update failed: {}", e);
                     return ProviderResponse::err(Errno::EIO);
                 }
             } else {
@@ -1584,24 +1619,22 @@ fn main(boot_arg: usize) -> ! {
         use stem::syscall::{device_alloc_dma, device_dma_phys};
         let claim = gpu.claim_handle();
         match device_alloc_dma(claim, MAX_CURSOR_PAGES) {
-            Ok(virt) => {
-                match device_dma_phys(virt) {
-                    Ok(phys) => {
-                        info!(
-                            "display_virtio_gpu: cursor DMA buffer ready ({} pages at phys=0x{:x})",
-                            MAX_CURSOR_PAGES, phys
-                        );
-                        (virt, phys)
-                    }
-                    Err(e) => {
-                        warn!(
-                            "display_virtio_gpu: cursor DMA phys lookup failed: {:?}; hw cursor unavailable",
-                            e
-                        );
-                        (0u64, 0u64)
-                    }
+            Ok(virt) => match device_dma_phys(virt) {
+                Ok(phys) => {
+                    info!(
+                        "display_virtio_gpu: cursor DMA buffer ready ({} pages at phys=0x{:x})",
+                        MAX_CURSOR_PAGES, phys
+                    );
+                    (virt, phys)
                 }
-            }
+                Err(e) => {
+                    warn!(
+                        "display_virtio_gpu: cursor DMA phys lookup failed: {:?}; hw cursor unavailable",
+                        e
+                    );
+                    (0u64, 0u64)
+                }
+            },
             Err(e) => {
                 warn!(
                     "display_virtio_gpu: cursor DMA alloc failed: {:?}; hw cursor unavailable",
@@ -1762,6 +1795,9 @@ fn main(boot_arg: usize) -> ! {
         cursor_commit_logged: false,
         cursor_resource_id: 0,
         cursor_buffer_id: None,
+        cursor_hotspot: (0, 0),
+        cursor_pos: (0, 0),
+        cursor_visible: false,
         cursor_dma_buf,
         cursor_dma_phys,
         cursor_attached_size: (0, 0),

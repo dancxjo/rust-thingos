@@ -274,6 +274,7 @@ Feature: Bloom compositor service loop and responsiveness
     Then the serial output should contain "bloom: output0" within 60s
     When the user moves the mouse pointer
     Then the serial output should contain "bloom: hw cursor move" within 60s
+    And the pointer debug overlay should update after mouse movement
 
   Scenario: display_bootfb does not advertise hardware cursor
     # The boot framebuffer driver has no cursor queue and must not advertise

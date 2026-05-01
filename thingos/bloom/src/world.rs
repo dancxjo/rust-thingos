@@ -35,6 +35,7 @@ pub struct BloomWorld {
     /// plane via `DISPLAY_OP_SET_CURSOR`.  `None` means the hardware cursor has
     /// not been initialised yet this session.
     hw_cursor_buffer: Option<u32>,
+    hw_cursor_position: Option<(i32, i32, bool)>,
     /// Port write handle to the Wayland server thread's event port, if running.
     pub wayland_evt_write: Option<u32>,
     /// The ID of the surface that was active during the last frame.
@@ -66,6 +67,7 @@ impl BloomWorld {
             vsync_enabled,
             cursor_present_logged: false,
             hw_cursor_buffer: None,
+            hw_cursor_position: None,
             wayland_evt_write: None,
             last_active_id: None,
         }
@@ -343,7 +345,9 @@ impl BloomWorld {
         // ── Hardware cursor fast path ──────────────────────────────────────
         // When the display driver supports hardware cursor planes and there is
         // no window/content damage (only cursor position changed), skip full
-        // scene recomposition and issue a lightweight MOVE_CURSOR call instead.
+        // scene recomposition and issue a lightweight cursor position update
+        // instead. Frames with content damage reassert the cursor after the
+        // framebuffer commit so the scanout update cannot cover it.
         if self.display.supports_hw_cursor() {
             // (Re-)upload the cursor image whenever the buffer changes.
             if let Some(c) = cursor {
@@ -365,12 +369,22 @@ impl BloomWorld {
                             c.hotspot_y,
                         );
                         self.hw_cursor_buffer = Some(c.buffer_id);
-                        if !self.display.move_cursor(pointer_x, pointer_y, true) {
-                            stem::warn!(
-                                "bloom: hw cursor initial move failed after image upload"
-                            );
-                        }
+                        self.hw_cursor_position = None;
                     }
+                }
+            }
+
+            let cursor_visible = cursor.is_some();
+            let wanted_cursor_position = (pointer_x, pointer_y, cursor_visible);
+            let mut hw_cursor_positioned = self.hw_cursor_position == Some(wanted_cursor_position);
+            if self.hw_cursor_buffer.is_some() && !hw_cursor_positioned {
+                hw_cursor_positioned =
+                    self.display.move_cursor(pointer_x, pointer_y, cursor_visible);
+                if hw_cursor_positioned {
+                    self.hw_cursor_position = Some(wanted_cursor_position);
+                    stem::trace!("bloom: hw cursor move {},{}", pointer_x, pointer_y);
+                } else {
+                    stem::warn!("bloom: hw cursor move failed");
                 }
             }
 
@@ -382,8 +396,7 @@ impl BloomWorld {
                 // via DISPLAY_OP_MOVE_CURSOR without a framebuffer upload.
                 // Reset dirty flag; cursor positioning is direct via hardware.
                 let _ = self.damage.take(); // Side-effect only: clears dirty state.
-                let moved = self.display.move_cursor(pointer_x, pointer_y, cursor.is_some());
-                if moved {
+                if hw_cursor_positioned {
                     stem::trace!(
                         "bloom: hw cursor move {},{} (no recompose)",
                         pointer_x,
@@ -437,9 +450,7 @@ impl BloomWorld {
         // planes above them, and log aggregate debug counters.
         let (culled_composition, cull_counters) =
             cull_composition(&composition, self.primary.width, self.primary.height);
-        if cull_counters.hidden_regions_skipped > 0
-            || cull_counters.fullscreen_direct_present > 0
-        {
+        if cull_counters.hidden_regions_skipped > 0 || cull_counters.fullscreen_direct_present > 0 {
             stem::trace!(
                 "bloom: cull opaque={} blend={} skipped={} fullscreen={}",
                 cull_counters.opaque_planes_copied,
@@ -463,9 +474,7 @@ impl BloomWorld {
         if result.success {
             if !self.cursor_present_logged {
                 if self.display.supports_hw_cursor() && self.hw_cursor_buffer.is_some() {
-                    stem::debug!(
-                        "bloom: hw cursor active, software cursor plane omitted",
-                    );
+                    stem::debug!("bloom: hw cursor active, software cursor plane omitted",);
                 } else if let Some(c) = cursor {
                     stem::debug!(
                         "bloom: presented cursor buffer={} at {},{} size={}x{}",

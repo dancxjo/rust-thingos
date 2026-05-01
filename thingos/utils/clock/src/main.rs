@@ -29,6 +29,7 @@ const TOPLEVEL_ID: u32 = 12;
 
 const PISTIL_PATH: &str = "/lib/libpistil.so";
 const DRAW_DSEG7_TEXT_SYMBOL: &[u8] = b"pistil_draw_dseg7_text";
+const DRAW_TEXT_SYMBOL: &[u8] = b"pistil_draw_text";
 const DSEG7_FONT_PATH: &str = "/share/fonts/DSEG7Classic-Regular.ttf";
 const SERIAL_TICK_INTERVAL_NS: u64 = 37_000_000_000;
 const TZ_REFRESH_INTERVAL_NS: u64 = 60_000_000_000;
@@ -44,6 +45,7 @@ type DrawTextFn = extern "C" fn(*const u8, *mut u32, u32, u32, u32, i32, i32, f3
 struct TextRenderer {
     _handle: *mut core::ffi::c_void,
     draw_dseg7_text: DrawTextFn,
+    draw_text: DrawTextFn,
 }
 
 #[derive(Clone, Copy)]
@@ -388,7 +390,7 @@ fn render_clock(
         );
 
         let am_pm_x = text_x + estimated_w + 12;
-        draw_dseg7_text(
+        draw_generic_text(
             text_renderer,
             pixels,
             buffer.width,
@@ -412,7 +414,7 @@ fn render_clock(
             4,
             CLOCK_GOLD,
         );
-        draw_dseg7_text(
+        draw_generic_text(
             text_renderer,
             pixels,
             buffer.width,
@@ -423,7 +425,7 @@ fn render_clock(
             "ALARM",
             0xFF586E75,
         );
-        draw_dseg7_text(
+        draw_generic_text(
             text_renderer,
             pixels,
             buffer.width,
@@ -498,6 +500,45 @@ fn draw_dseg7_text(
     }
 }
 
+fn draw_generic_text(
+    text_renderer: Option<&TextRenderer>,
+    pixels: &mut [u32],
+    width: u32,
+    height: u32,
+    x: i32,
+    y: i32,
+    px_size: f32,
+    text: &str,
+    color: u32,
+) {
+    let Some(renderer) = text_renderer else {
+        return;
+    };
+
+    let mut text_c = [0u8; 128];
+    let bytes = text.as_bytes();
+    if bytes.len() >= text_c.len() {
+        stem::warn!("clock: text too long for pistil text call");
+        return;
+    }
+    text_c[..bytes.len()].copy_from_slice(bytes);
+
+    let rc = (renderer.draw_text)(
+        text_c.as_ptr(),
+        pixels.as_mut_ptr(),
+        width,
+        height,
+        width,
+        x,
+        y,
+        px_size,
+        color,
+    );
+    if rc != 0 {
+        stem::warn!("clock: pistil_draw_text failed: {}", rc);
+    }
+}
+
 fn load_text_renderer() -> Option<TextRenderer> {
     let handle = dlopen_str(PISTIL_PATH, RTLD_NOW);
     if handle.is_null() {
@@ -505,15 +546,23 @@ fn load_text_renderer() -> Option<TextRenderer> {
         return None;
     }
 
-    let sym = dlsym_bytes(handle, DRAW_DSEG7_TEXT_SYMBOL);
-    if sym.is_null() {
+    let sym_dseg7 = dlsym_bytes(handle, DRAW_DSEG7_TEXT_SYMBOL);
+    if sym_dseg7.is_null() {
         log_dlerror("clock: failed to resolve pistil_draw_dseg7_text");
         return None;
     }
 
-    let draw_dseg7_text: DrawTextFn = unsafe { core::mem::transmute(sym) };
+    let sym_text = dlsym_bytes(handle, DRAW_TEXT_SYMBOL);
+    if sym_text.is_null() {
+        log_dlerror("clock: failed to resolve pistil_draw_text");
+        return None;
+    }
+
+    let draw_dseg7_text: DrawTextFn = unsafe { core::mem::transmute(sym_dseg7) };
+    let draw_text: DrawTextFn = unsafe { core::mem::transmute(sym_text) };
     info!("clock: pistil DSEG7 text renderer loaded with {}", DSEG7_FONT_PATH);
-    Some(TextRenderer { _handle: handle, draw_dseg7_text })
+    info!("clock: pistil generic text renderer loaded with /share/fonts/Inter-Regular.ttf");
+    Some(TextRenderer { _handle: handle, draw_dseg7_text, draw_text })
 }
 
 fn log_dlerror(prefix: &str) {
