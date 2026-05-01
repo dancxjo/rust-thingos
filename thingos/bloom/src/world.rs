@@ -46,6 +46,11 @@ impl BloomWorld {
         primary: OutputInfo,
     ) -> Self {
         let vsync_enabled = display.supports_vblank();
+        let mut damage = damage;
+        // Bind the tracker to the primary output so `take()` can clip and
+        // coalesce damage rects (and fall back to full-output damage when the
+        // rect count exceeds `damage::MAX_DAMAGE_RECTS`).
+        damage.set_output_bounds(primary.width, primary.height);
         Self {
             scene,
             damage,
