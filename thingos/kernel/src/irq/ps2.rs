@@ -102,7 +102,7 @@ pub fn take_scancode() -> Option<u8> {
     let res = PS2_QUEUE.pop();
     if let Some(val) = res {
         let byte = val as u8;
-        crate::kinfo!("PS/2 take_scancode: popped 0x{:02x} (is_aux={})", byte, (val >> 8) != 0);
+        crate::ktrace!("PS/2 take_scancode: popped 0x{:02x} (is_aux={})", byte, (val >> 8) != 0);
         Some(byte)
     } else {
         None
