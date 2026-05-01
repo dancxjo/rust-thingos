@@ -128,47 +128,59 @@ impl Supervisor {
         let mut open_terminal = false;
         let mut buf = [0u8; 1024];
 
-        let mut cmdline_str: Option<alloc::string::String> = None;
+        fn apply_cmdline_options(
+            cmdline: &str,
+            force_bootfb: &mut bool,
+            safe_shell_only: &mut bool,
+            open_terminal: &mut bool,
+        ) {
+            stem::debug!("SPROUT: Parsed command line: '{}'", cmdline);
+            for part in cmdline.split(|c| c == ' ' || c == '\n' || c == '\r') {
+                if part == "display=bootfb" {
+                    *force_bootfb = true;
+                    stem::debug!("SPROUT: Detected 'display=bootfb' command line argument");
+                } else if part == "sprout.safe=sh" {
+                    *safe_shell_only = true;
+                    *open_terminal = true;
+                    stem::debug!("SPROUT: Detected safe shell mode");
+                } else if part == "sprout.active_ui=terminal" {
+                    *open_terminal = true;
+                    stem::debug!("SPROUT: Detected terminal-first UI request");
+                }
+            }
+        }
 
-        // Try standard argv_get first
+        // Parse both the init module argv and the kernel command line.  Limine
+        // module_cmdline normally contributes "init", while safe-mode flags
+        // are kernel arguments exposed through /dev/cmdline.
         if let Ok(needed) = stem::syscall::argv_get(&mut buf) {
             let limit = needed.min(buf.len());
             if limit > 0 {
                 if let Ok(cmdline) = core::str::from_utf8(&buf[..limit]) {
-                    cmdline_str = Some(cmdline.to_string());
+                    apply_cmdline_options(
+                        cmdline,
+                        &mut force_bootfb,
+                        &mut safe_shell_only,
+                        &mut open_terminal,
+                    );
                 }
             }
         }
 
-        // Fallback to /dev/cmdline if needed
-        if cmdline_str.is_none() {
-            if let Ok(fd) =
-                stem::syscall::vfs::vfs_open("/dev/cmdline", abi::syscall::vfs_flags::O_RDONLY)
-            {
-                if let Ok(n) = stem::syscall::vfs::vfs_read(fd, &mut buf) {
-                    if let Ok(cmdline) = core::str::from_utf8(&buf[..n]) {
-                        cmdline_str = Some(cmdline.to_string());
-                    }
-                }
-                let _ = stem::syscall::vfs::vfs_close(fd);
-            }
-        }
-
-        if let Some(cmdline) = cmdline_str {
-            stem::debug!("SPROUT: Parsed command line: '{}'", cmdline);
-            for part in cmdline.split(|c| c == ' ' || c == '\n' || c == '\r') {
-                if part == "display=bootfb" {
-                    force_bootfb = true;
-                    stem::debug!("SPROUT: Detected 'display=bootfb' command line argument");
-                } else if part == "sprout.safe=sh" {
-                    safe_shell_only = true;
-                    open_terminal = true;
-                    stem::debug!("SPROUT: Detected safe shell mode");
-                } else if part == "sprout.active_ui=terminal" {
-                    open_terminal = true;
-                    stem::debug!("SPROUT: Detected terminal-first UI request");
+        if let Ok(fd) =
+            stem::syscall::vfs::vfs_open("/dev/cmdline", abi::syscall::vfs_flags::O_RDONLY)
+        {
+            if let Ok(n) = stem::syscall::vfs::vfs_read(fd, &mut buf) {
+                if let Ok(cmdline) = core::str::from_utf8(&buf[..n]) {
+                    apply_cmdline_options(
+                        cmdline,
+                        &mut force_bootfb,
+                        &mut safe_shell_only,
+                        &mut open_terminal,
+                    );
                 }
             }
+            let _ = stem::syscall::vfs::vfs_close(fd);
         }
 
         Config { force_bootfb, safe_shell_only, open_terminal }
@@ -521,6 +533,9 @@ impl Supervisor {
     }
 
     fn spawn_display_if_needed(&mut self) {
+        if self.config.safe_shell_only {
+            return;
+        }
         if self.display_spawned {
             return;
         }
