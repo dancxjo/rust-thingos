@@ -452,6 +452,12 @@ fn scale_alpha(alpha: u8, coverage: u8) -> u8 {
 /// GPU `TRANSFER_TO_HOST_2D` + `RESOURCE_FLUSH` commands — no per-pixel alpha
 /// arithmetic is needed, so the CPU work is minimal.
 ///
+/// `z_order` is intentionally not considered here: a fully opaque plane at any
+/// z-level can use `memcpy` because it overwrites the destination pixels
+/// completely.  Planes are sorted and drawn in z-order, so lower-z content is
+/// already in the frame buffer when the opaque `memcpy` runs — the overwrite is
+/// always correct.
+///
 /// Any other plane (transparent, alpha-blended, or clipped) falls back to the
 /// CPU composition path which calls [`alpha_over_argb`] per pixel.
 #[inline]
@@ -859,6 +865,12 @@ fn vfs_device_call(driver: &mut VirtioGpuDriver, payload: &[u8]) -> ProviderResp
                     // which is then uploaded to the GPU via TRANSFER_TO_HOST_2D.
                     // CPU fallback path: anything requiring per-pixel alpha
                     // arithmetic or rounded-rectangle masking.
+                    //
+                    // The counters below are incremented once per *plane*, not
+                    // once per dirty rectangle.  A single plane may be rendered
+                    // into multiple intersecting dirty rects in the damage list,
+                    // but the composition path is decided once for the plane and
+                    // applied consistently across all of its dirty regions.
                     let use_gpu_path = plane_can_use_gpu_path(plane, src);
                     let should_blend = !use_gpu_path;
                     if use_gpu_path {
@@ -1057,6 +1069,9 @@ fn vfs_device_call(driver: &mut VirtioGpuDriver, payload: &[u8]) -> ProviderResp
                     if !driver.first_commit_logged {
                         if let Some((buffer_id, src_px, dst_px, copy_w, copy_h)) = first_copy_sample
                         {
+                            // `gpu_planes` and `cpu_planes` are cumulative totals
+                            // across all commits processed so far (including this
+                            // one), not counts for this commit alone.
                             stem::info!(
                                 "display_virtio_gpu: first commit copied buffer={} rect={}x{} src_px=0x{:08x} dst_px=0x{:08x} damage={}x{}+{},{} res_id={} gpu_planes={} cpu_planes={}",
                                 buffer_id,
