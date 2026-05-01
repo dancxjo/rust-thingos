@@ -258,9 +258,9 @@ pub fn compute_popup_placement(
         let fg = flip_x(gravity);
         let (nx, _) =
             positioner_raw_position(positioner.anchor_rect, fa, fg, pw, ph, off_x, off_y);
-        // Accept the flip if the new position fits, or if it overflows less.
-        let orig_overflow = i32::max(0 - x, 0).max(x + w - output_w);
-        let new_overflow = i32::max(0 - nx, 0).max(nx + w - output_w);
+        // Accept the flip if the new position overflows less than the original.
+        let orig_overflow = (-x).max(0).max((x + w - output_w).max(0));
+        let new_overflow = (-nx).max(0).max((nx + w - output_w).max(0));
         if new_overflow < orig_overflow {
             x = nx;
             anchor = fa;
@@ -274,11 +274,12 @@ pub fn compute_popup_placement(
         let fg = flip_y(gravity);
         let (_, ny) =
             positioner_raw_position(positioner.anchor_rect, fa, fg, pw, ph, off_x, off_y);
-        let orig_overflow = i32::max(0 - y, 0).max(y + h - output_h);
-        let new_overflow = i32::max(0 - ny, 0).max(ny + h - output_h);
+        let orig_overflow = (-y).max(0).max((y + h - output_h).max(0));
+        let new_overflow = (-ny).max(0).max((ny + h - output_h).max(0));
         if new_overflow < orig_overflow {
             y = ny;
-            // anchor/gravity Y component updated (exact tracking omitted for brevity)
+            anchor = fa;
+            gravity = fg;
         }
     }
 
