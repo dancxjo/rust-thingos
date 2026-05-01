@@ -133,6 +133,7 @@ members = [
   "thingos/utils/ln",
   "thingos/utils/loglevel",
   "thingos/utils/ls",
+  "thingos/utils/lsusb",
   "thingos/utils/lspci",
   "thingos/utils/mkdir",
   "thingos/utils/mount",

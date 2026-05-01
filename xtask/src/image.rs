@@ -213,6 +213,7 @@ pub fn default_programs() -> Vec<ProgramConfig> {
         ProgramConfig { name: "ps2_kbd", is_init: false, boot_module: true, features: vec![] },
         ProgramConfig { name: "sh", is_init: true, boot_module: true, features: vec![] },
         ProgramConfig { name: "ls", is_init: true, boot_module: true, features: vec![] },
+        ProgramConfig { name: "lsusb", is_init: true, boot_module: true, features: vec![] },
         ProgramConfig { name: "lspci", is_init: true, boot_module: true, features: vec![] },
         ProgramConfig { name: "ln", is_init: true, boot_module: true, features: vec![] },
         ProgramConfig { name: "ps", is_init: true, boot_module: true, features: vec![] },
