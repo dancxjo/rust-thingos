@@ -197,6 +197,12 @@ fn poll_port(
             }
         };
 
+        // Diagnostic: catch sporadic null/bad Arc pointers
+        let raw_port_ptr = Arc::as_ptr(&port);
+        if (raw_port_ptr as usize) < 0x1000 {
+            panic!("BAD PORT POINTER in poll_port (READABLE path): {:p}, handle={:?}", raw_port_ptr, handle);
+        }
+
         let is_empty = port.is_empty();
         let has_writers = port.has_writers();
         if !is_empty {
@@ -216,6 +222,12 @@ fn poll_port(
                 None => return Ok(Some(error_result(spec, Errno::EBADF))),
             }
         };
+
+        // Diagnostic: catch sporadic null/bad Arc pointers
+        let raw_port_ptr = Arc::as_ptr(&port);
+        if (raw_port_ptr as usize) < 0x1000 {
+            panic!("BAD PORT POINTER in poll_port (WRITABLE path): {:p}, handle={:?}", raw_port_ptr, handle);
+        }
 
         if !port.is_full() {
             ready_flags |= wait::ready::WRITABLE;

@@ -341,6 +341,7 @@ fn accumulate_and_dispatch(
                         let mut p = [0u8; 4];
                         p.copy_from_slice(&event_bytes[20..24]);
                         let payload = KeyEventPayload::from_bytes(&p);
+                        stem::info!("bristle: KeyDown received: {:?}", payload.key());
 
                         match payload.key() {
                             Key::F2 => {

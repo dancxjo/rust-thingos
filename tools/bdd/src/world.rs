@@ -64,7 +64,7 @@ pub enum QmpEndpoint {
     Tcp(std::net::SocketAddr),
 }
 
-trait QmpStream: AsyncRead + AsyncWrite {}
+pub(crate) trait QmpStream: AsyncRead + AsyncWrite {}
 
 impl<T: AsyncRead + AsyncWrite + ?Sized> QmpStream for T {}
 
@@ -559,7 +559,7 @@ impl ThingOsWorld {
     }
 
     /// Connect to a QMP socket and perform handshake.
-    async fn connect_qmp(
+    pub(crate) async fn connect_qmp(
         endpoint: &QmpEndpoint,
     ) -> Result<Box<dyn QmpStream + Unpin + Send>, Box<dyn std::error::Error + Send + Sync>> {
         let mut stream: Box<dyn QmpStream + Unpin + Send> = match endpoint {

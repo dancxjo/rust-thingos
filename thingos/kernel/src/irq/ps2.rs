@@ -7,7 +7,7 @@ const PS2_STATUS_OUTPUT_FULL: u8 = 0x01;
 struct Ps2Queue {
     head: AtomicUsize,
     tail: AtomicUsize,
-    buf: UnsafeCell<[u8; PS2_QUEUE_CAPACITY]>,
+    buf: UnsafeCell<[u16; PS2_QUEUE_CAPACITY]>,
 }
 
 impl Ps2Queue {
@@ -23,7 +23,7 @@ impl Ps2Queue {
         self.head.load(Ordering::Acquire) == self.tail.load(Ordering::Acquire)
     }
 
-    fn push(&self, byte: u8) {
+    fn push(&self, val: u16) {
         let head = self.head.load(Ordering::Relaxed);
         let next = (head + 1) % PS2_QUEUE_CAPACITY;
         let tail = self.tail.load(Ordering::Acquire);
@@ -33,21 +33,31 @@ impl Ps2Queue {
         }
 
         unsafe {
-            (*self.buf.get())[head] = byte;
+            (*self.buf.get())[head] = val;
         }
         self.head.store(next, Ordering::Release);
     }
 
-    fn pop(&self) -> Option<u8> {
+    fn pop(&self) -> Option<u16> {
         let tail = self.tail.load(Ordering::Relaxed);
         let head = self.head.load(Ordering::Acquire);
         if tail == head {
             return None;
         }
 
-        let byte = unsafe { (*self.buf.get())[tail] };
+        let val = unsafe { (*self.buf.get())[tail] };
         self.tail.store((tail + 1) % PS2_QUEUE_CAPACITY, Ordering::Release);
-        Some(byte)
+        Some(val)
+    }
+
+    fn peek(&self) -> Option<u16> {
+        let tail = self.tail.load(Ordering::Relaxed);
+        let head = self.head.load(Ordering::Acquire);
+        if tail == head {
+            return None;
+        }
+
+        unsafe { Some((*self.buf.get())[tail]) }
     }
 }
 
@@ -74,7 +84,7 @@ pub fn set_fb_input_enabled(enabled: bool) {
 }
 
 pub fn take_input_char() -> Option<u8> {
-    INPUT_QUEUE.pop()
+    INPUT_QUEUE.pop().map(|v| v as u8)
 }
 
 const SCANCODE_MAP_NORMAL: &[u8] =
@@ -82,14 +92,34 @@ const SCANCODE_MAP_NORMAL: &[u8] =
 const SCANCODE_MAP_SHIFT: &[u8] =
     b"\0\x1b!@#$%^&*()_+\x08\tQWERTYUIOP{}\n\0ASDFGHJKL:\"~ \0ZXCVBNM<>?\0*\0 ";
 
-pub fn buffer_scancode(byte: u8) -> bool {
-    crate::kinfo!("buffer_scancode: 0x{:02x}", byte);
-    PS2_QUEUE.push(byte);
+pub fn buffer_scancode(byte: u8, is_aux: bool) -> bool {
+    let val = byte as u16 | ((is_aux as u16) << 8);
+    PS2_QUEUE.push(val);
     update_pause_hotkey_state(byte)
 }
 
 pub fn take_scancode() -> Option<u8> {
-    PS2_QUEUE.pop()
+    let res = PS2_QUEUE.pop();
+    if let Some(val) = res {
+        let byte = val as u8;
+        crate::kinfo!("PS/2 take_scancode: popped 0x{:02x} (is_aux={})", byte, (val >> 8) != 0);
+        Some(byte)
+    } else {
+        None
+    }
+}
+
+pub fn overlay_status(status: u8) -> u8 {
+    if let Some(val) = PS2_QUEUE.peek() {
+        let is_aux = (val >> 8) != 0;
+        let mut s = (status & !0x20) | PS2_STATUS_OUTPUT_FULL;
+        if is_aux {
+            s |= 0x20;
+        }
+        s
+    } else {
+        status
+    }
 }
 
 pub fn take_terminal_hotkey() -> bool {
@@ -103,9 +133,6 @@ pub fn take_log_level_hotkey() -> Option<u8> {
     }
 }
 
-pub fn overlay_status(status: u8) -> u8 {
-    if PS2_QUEUE.is_empty() { status } else { status | PS2_STATUS_OUTPUT_FULL }
-}
 
 fn update_pause_hotkey_state(byte: u8) -> bool {
     match byte {
@@ -123,8 +150,6 @@ fn update_pause_hotkey_state(byte: u8) -> bool {
     let extended = EXTENDED_PREFIX.swap(false, Ordering::AcqRel);
     let released = (byte & 0x80) != 0;
     let scancode = byte & 0x7F;
-
-    crate::kinfo!("PS/2 update_pause: ext={} scan=0x{:02x} rel={}", extended, scancode, released);
 
     // Track modifiers
     match (extended, scancode) {
@@ -194,7 +219,7 @@ fn update_pause_hotkey_state(byte: u8) -> bool {
                             c -= b'A' - 1;
                         }
                     }
-                    INPUT_QUEUE.push(c);
+                    INPUT_QUEUE.push(c as u16);
                 }
             }
             false
@@ -222,20 +247,20 @@ mod tests {
     fn alt_f12_triggers_once() {
         reset_state();
 
-        assert!(!buffer_scancode(0x38));
-        assert!(buffer_scancode(0x58));
-        assert!(!buffer_scancode(0x58));
-        assert!(!buffer_scancode(0xD8));
-        assert!(!buffer_scancode(0xB8));
+        assert!(!buffer_scancode(0x38, false));
+        assert!(buffer_scancode(0x58, false));
+        assert!(!buffer_scancode(0x58, false));
+        assert!(!buffer_scancode(0xD8, false));
+        assert!(!buffer_scancode(0xB8, false));
     }
 
     #[test]
     fn right_alt_triggers_combo() {
         reset_state();
 
-        assert!(!buffer_scancode(0xE0));
-        assert!(!buffer_scancode(0x38));
-        assert!(buffer_scancode(0x58));
+        assert!(!buffer_scancode(0xE0, false));
+        assert!(!buffer_scancode(0x38, false));
+        assert!(buffer_scancode(0x58, false));
     }
 
     #[test]
@@ -243,7 +268,7 @@ mod tests {
         reset_state();
 
         assert_eq!(overlay_status(0), 0);
-        assert!(!buffer_scancode(0x1E));
+        assert!(!buffer_scancode(0x1E, false));
         assert_ne!(overlay_status(0) & PS2_STATUS_OUTPUT_FULL, 0);
         assert_eq!(take_scancode(), Some(0x1E));
         assert_eq!(overlay_status(0) & PS2_STATUS_OUTPUT_FULL, 0);
@@ -253,18 +278,18 @@ mod tests {
     fn plain_f12_sets_terminal_hotkey_once() {
         reset_state();
 
-        assert!(!buffer_scancode(0x58));
+        assert!(!buffer_scancode(0x58, false));
         assert!(take_terminal_hotkey());
         assert!(!take_terminal_hotkey());
 
         // Typematic repeat while held should not retrigger.
-        assert!(!buffer_scancode(0x58));
+        assert!(!buffer_scancode(0x58, false));
         assert!(!take_terminal_hotkey());
 
         // Release + press should retrigger.
-        assert!(!buffer_scancode(0xD8));
+        assert!(!buffer_scancode(0xD8, false));
         assert!(!take_terminal_hotkey());
-        assert!(!buffer_scancode(0x58));
+        assert!(!buffer_scancode(0x58, false));
         assert!(take_terminal_hotkey());
     }
 
@@ -273,17 +298,17 @@ mod tests {
         reset_state();
  
         assert_eq!(crate::logging::get_log_level(), 3);
-        assert!(!buffer_scancode(0x3B));
+        assert!(!buffer_scancode(0x3B, false));
         assert_eq!(take_log_level_hotkey(), Some(4));
         assert_eq!(crate::logging::get_log_level(), 4);
  
         // Typematic repeat while held should not cycle.
-        assert!(!buffer_scancode(0x3B));
+        assert!(!buffer_scancode(0x3B, false));
         assert_eq!(take_log_level_hotkey(), None);
         assert_eq!(crate::logging::get_log_level(), 4);
  
-        assert!(!buffer_scancode(0xBB));
-        assert!(!buffer_scancode(0x3B));
+        assert!(!buffer_scancode(0xBB, false));
+        assert!(!buffer_scancode(0x3B, false));
         assert_eq!(take_log_level_hotkey(), Some(5));
         assert_eq!(crate::logging::get_log_level(), 5);
     }
@@ -293,12 +318,12 @@ mod tests {
         reset_state();
         crate::logging::set_log_level(5);
  
-        assert!(!buffer_scancode(0x3B));
+        assert!(!buffer_scancode(0x3B, false));
         assert_eq!(take_log_level_hotkey(), Some(0));
         assert_eq!(crate::logging::get_log_level(), 0);
  
-        assert!(!buffer_scancode(0xBB));
-        assert!(!buffer_scancode(0x3B));
+        assert!(!buffer_scancode(0xBB, false));
+        assert!(!buffer_scancode(0x3B, false));
         assert_eq!(take_log_level_hotkey(), Some(1));
         assert_eq!(crate::logging::get_log_level(), 1);
     }

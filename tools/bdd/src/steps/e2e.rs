@@ -686,6 +686,33 @@ async fn latest_serial_contains_within(
     Ok(())
 }
 
+#[when(regex = r#"^I click at (\d+), (\d+)$"#)]
+async fn when_click_at(world: &mut ThingOsWorld, x: i32, y: i32) -> Result<(), StepError> {
+    let qmp = world.qmp_control.as_ref().ok_or_else(|| StepError("No QMP connection".to_string()))?;
+    let mut stream = ThingOsWorld::connect_qmp(qmp).await.map_err(|e| StepError(e.to_string()))?;
+
+    // Move to coordinates
+    let move_cmd = format!(
+        r#"{{"execute": "input-send-event", "arguments": {{"events": [{{"type": "abs", "data": {{"axis": "x", "value": {}}}}}, {{"type": "abs", "data": {{"axis": "y", "value": {}}}}}]}}}}"#,
+        (x as f64 * 32768.0 / 1920.0) as u32,
+        (y as f64 * 32768.0 / 1080.0) as u32
+    );
+    crate::artifacts::qmp::execute_on_stream(&mut stream, &move_cmd).await.map_err(|e| StepError(e.to_string()))?;
+
+    // Press left button
+    let down_cmd = r#"{"execute": "input-send-event", "arguments": {"events": [{"type": "btn", "data": {"down": true, "button": "left"}}]}}"#;
+    crate::artifacts::qmp::execute_on_stream(&mut stream, &down_cmd).await.map_err(|e| StepError(e.to_string()))?;
+
+    // Wait a bit
+    tokio::time::sleep(std::time::Duration::from_millis(100)).await;
+
+    // Release left button
+    let up_cmd = r#"{"execute": "input-send-event", "arguments": {"events": [{"type": "btn", "data": {"down": false, "button": "left"}}]}}"#;
+    crate::artifacts::qmp::execute_on_stream(&mut stream, &up_cmd).await.map_err(|e| StepError(e.to_string()))?;
+
+    Ok(())
+}
+
 #[when(regex = r#"^I press (.+)$"#)]
 async fn when_press_combo(world: &mut ThingOsWorld, keys: String) {
     if world.qmp_control.is_some() {
@@ -715,6 +742,7 @@ async fn when_press_combo(world: &mut ThingOsWorld, keys: String) {
                 r#"{{"execute": "input-send-event", "arguments": {{"events": [{{"type": "key", "data": {{"down": true, "key": {{"type": "qcode", "data": "{}"}}}}}}]}}}}"#,
                 qcode
             );
+            eprintln!("│  │  │      debug: QMP Send: {}", press);
             let release = format!(
                 r#"{{"execute": "input-send-event", "arguments": {{"events": [{{"type": "key", "data": {{"down": false, "key": {{"type": "qcode", "data": "{}"}}}}}}]}}}}"#,
                 qcode

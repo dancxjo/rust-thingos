@@ -138,9 +138,15 @@ fn wait_input_empty() {
 fn flush_output_buffer() {
     // Drain up to 16 bytes of garbage
     for _ in 0..16 {
-        if ioport_read(PS2_STATUS, 1) & STATUS_OUTPUT_FULL != 0 {
-            let b = ioport_read(PS2_DATA, 1);
-            debug!("ps2_mouse: flushed garbage byte: 0x{:02x}", b);
+        let status = ioport_read(PS2_STATUS, 1);
+        if status & STATUS_OUTPUT_FULL != 0 {
+            if status & STATUS_AUX_DATA != 0 {
+                let b = ioport_read(PS2_DATA, 1);
+                debug!("ps2_mouse: flushed garbage byte: 0x{:02x}", b);
+            } else {
+                // Not ours, leave it for ps2_kbd
+                break;
+            }
         } else {
             break;
         }
@@ -160,15 +166,6 @@ fn read_data_filtered(expect_aux: bool, label: &str) -> Option<u8> {
         let is_aux = (status & STATUS_AUX_DATA) != 0;
 
         if is_aux != expect_aux {
-            // During init we must drain the head byte, even if it belongs to the
-            // other side of the shared i8042 controller, or the response we are
-            // waiting for can remain hidden behind it indefinitely.
-            let _ = ioport_read(PS2_DATA, 1);
-            if is_aux {
-                discarded_aux = discarded_aux.wrapping_add(1);
-            } else {
-                discarded_non_aux = discarded_non_aux.wrapping_add(1);
-            }
             stem::yield_now();
             continue;
         }

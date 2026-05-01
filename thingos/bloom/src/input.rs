@@ -292,6 +292,7 @@ impl InputState {
                 let mut p = [0u8; PointerButtonPayload::SIZE];
                 p.copy_from_slice(&payload[..PointerButtonPayload::SIZE]);
                 let btn = PointerButtonPayload::from_bytes(&p);
+                stem::info!("bloom: PointerButtonDown at {},{} button={}", self.pointer_x, self.pointer_y, btn.button);
                 // Flush any pending coalesced motion so clients see the latest
                 // position before the button event (preserves ordering).
                 // flush_pointer_motion calls update_pointer_focus internally
@@ -431,7 +432,14 @@ impl InputState {
                 let mut p = [0u8; KeyEventPayload::SIZE];
                 p.copy_from_slice(&payload[..KeyEventPayload::SIZE]);
                 let key = KeyEventPayload::from_bytes(&p);
-                stem::info!("bloom: KeyDown received: {:?}", key.key());
+                let raw_key = key.key;
+                stem::info!(
+                    "bloom: KeyDown received: {:?} (raw={:#06x}, mods={:?}, repeat={})",
+                    key.key(),
+                    raw_key,
+                    key.mods(),
+                    key.is_repeat()
+                );
                 self.keyboard_modifiers = key.mods;
                 if is_pointer_overlay_toggle(key) {
                     if !key.is_repeat() {
@@ -467,11 +475,9 @@ impl InputState {
 
                 if key.key() == Key::F11 {
                     if !key.is_repeat() {
-                        stem::info!("bloom: F11 pressed, keyboard_focus={:?}", scene.keyboard_focus);
+                        stem::info!("BLOOM_FULLSCREEN_TOGGLE_TRIGGERED");
                         if let Some(surface_id) = scene.keyboard_focus {
                             self.toggle_fullscreen(scene, damage, wayland_evt_write, surface_id);
-                        } else {
-                            stem::info!("bloom: F11 ignored, no keyboard focus");
                         }
                     }
                     return true;

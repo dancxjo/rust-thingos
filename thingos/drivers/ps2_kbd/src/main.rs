@@ -184,7 +184,9 @@ fn drain_keyboard_data(bristle_pid: u32, state: &mut KeyboardState, drop_counter
         if status & STATUS_AUX_DATA == 0 {
             // Keyboard data - read and send
             let scancode = ioport_read(PS2_DATA, 1) as u8;
+            stem::info!("ps2_kbd: read scancode 0x{:02x}", scancode);
             if let Some(edge) = state.process_ps2(scancode) {
+                stem::info!("ps2_kbd: edge detected: {:?}", edge);
                 send_key_event(bristle_pid, edge, drop_counter);
             }
         } else {
@@ -219,7 +221,9 @@ fn send_key_event(bristle_pid: u32, edge: KeyEdge, drop_counter: &mut u32) {
     buf[20..24].copy_from_slice(&payload.to_bytes());
 
     let send_ok = msg_send(bristle_pid, abi::KindId(KIND_BRISTLE_DEVICE_EVENT), &buf[..24]).is_ok();
-    if !send_ok {
+    if send_ok {
+        stem::info!("ps2_kbd: sent {:?} to bristle (pid={})", key, bristle_pid);
+    } else {
         *drop_counter = drop_counter.wrapping_add(1);
         if *drop_counter <= 4 || *drop_counter % 100 == 0 {
             warn!(

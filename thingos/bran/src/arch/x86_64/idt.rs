@@ -895,17 +895,20 @@ fn capture_ps2_keyboard(max_reads: usize) -> (bool, bool, bool, Option<u8>, usiz
         if status & PS2_STATUS_OUTPUT_FULL == 0 {
             break;
         }
-        if status & PS2_STATUS_AUX_DATA != 0 {
-            break;
-        }
-
+        let is_aux = (status & PS2_STATUS_AUX_DATA) != 0;
         let byte = raw_inb(PS2_DATA_PORT);
         captured += 1;
-        kernel::kprintln!("PS/2 byte received: 0x{:02x}", byte);
+        kernel::ktrace!("PS/2 byte received: 0x{:02x} (is_aux={})", byte, is_aux);
+
+        if is_aux {
+            kernel::irq::ps2::buffer_scancode(byte, true);
+            continue;
+        }
+
         if detect_ctrl_alt_del_reboot(byte) {
             ctrl_alt_del = true;
         }
-        if kernel::irq::ps2::buffer_scancode(byte) {
+        if kernel::irq::ps2::buffer_scancode(byte, false) {
             pause_dump = true;
         }
         if kernel::irq::ps2::take_terminal_hotkey() {
@@ -927,17 +930,20 @@ fn capture_pause_reboot_hotkey(max_reads: usize) -> bool {
         if status & PS2_STATUS_OUTPUT_FULL == 0 {
             break;
         }
-        if status & PS2_STATUS_AUX_DATA != 0 {
-            break;
+        let is_aux = (status & PS2_STATUS_AUX_DATA) != 0;
+        let byte = raw_inb(PS2_DATA_PORT);
+
+        if is_aux {
+            kernel::irq::ps2::buffer_scancode(byte, true);
+            continue;
         }
 
-        let byte = raw_inb(PS2_DATA_PORT);
         let released = (byte & PS2_SCANCODE_RELEASE_MASK) != 0;
         let scancode = byte & PS2_SCANCODE_KEY_MASK;
         if detect_ctrl_alt_del_reboot(byte) {
             reboot = true;
         }
-        let _ = kernel::irq::ps2::buffer_scancode(byte);
+        let _ = kernel::irq::ps2::buffer_scancode(byte, false);
         if !released && scancode == PS2_SCANCODE_F12 {
             reboot = true;
         }
@@ -1460,11 +1466,7 @@ pub extern "C" fn rust_irq_handler(vector: u64, irq_snapshot: *const IrqRegister
 
     if resolved == 0x2C {
         let count = IRQ12_COUNT.fetch_add(1, Ordering::Relaxed) + 1;
-        /*
-        if count <= 3 || (count % 128 == 0) {
-            kinfo!("IRQ12 fired (count={})", count);
-        }
-        */
+        let _ = capture_ps2_keyboard(32);
     }
 
     // Send EOI to Local APIC early to avoid wedging during context switch
