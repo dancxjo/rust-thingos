@@ -8356,6 +8356,10 @@ dependencies = [
 ]
 
 [[package]]
+name = "terminal_core"
+version = "0.1.0"
+
+[[package]]
 name = "terminal_size"
 version = "0.4.4"
 source = "registry+https://github.com/rust-lang/crates.io-index"
@@ -9745,6 +9749,15 @@ dependencies = [
  "libdl",
  "pistil-types",
  "stem",
+]
+
+[[package]]
+name = "wayland_terminal"
+version = "0.1.0"
+dependencies = [
+ "abi",
+ "stem",
+ "terminal_core",
 ]
 
 [[package]]

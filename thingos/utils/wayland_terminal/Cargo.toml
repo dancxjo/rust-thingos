@@ -1,0 +1,16 @@
+[package]
+name = "wayland_terminal"
+version = "0.1.0"
+edition = "2021"
+
+[dependencies]
+stem = { path = "../../stem", features = ["rt"] }
+abi = { path = "../../abi" }
+terminal_core = { path = "../../libs/terminal_core" }
+
+[[bin]]
+name = "wayland_terminal"
+path = "src/main.rs"
+test = false
+bench = false
+
