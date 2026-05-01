@@ -19,3 +19,11 @@ Feature: PCI Bus and Discovery
     And the shell command "cat /sys/device_snapshot" succeeds
     Then the latest command output should contain "pci-0000:"
     And the latest command output should contain "present"
+
+  Scenario: lspci lists PCI devices from sysfs
+    Given the machine is booted
+    When I wait for the shell prompt
+    And the shell command "lspci" succeeds
+    Then the latest command output should contain "00:"
+    And the latest command output should contain "Host bridge"
+    And the latest command output should contain "["

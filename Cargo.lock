@@ -4168,6 +4168,13 @@ dependencies = [
 ]
 
 [[package]]
+name = "lspci"
+version = "0.1.0"
+dependencies = [
+ "stem",
+]
+
+[[package]]
 name = "lzma-sys"
 version = "0.1.20"
 source = "registry+https://github.com/rust-lang/crates.io-index"
