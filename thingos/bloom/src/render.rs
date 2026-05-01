@@ -35,12 +35,12 @@ const WINDOW_ICON_RESTORE_PATH: &str = "/share/icons/lucide/minimize-2.svg";
 const WINDOW_ICON_CLOSE_PATH: &str = "/share/icons/lucide/x.svg";
 const DEFAULT_FONT_PATH: &str = "/share/fonts/Inter-Regular.ttf";
 const SYMBOL_FONT_PATH: &str = "/share/fonts/NotoSansSymbol2-Regular.ttf";
-const CURSOR_SIZE: u32 = 96;
+const CURSOR_SIZE: u32 = 48;
 const CURSOR_PIXELS: usize = (CURSOR_SIZE * CURSOR_SIZE) as usize;
 const POINTER_OVERLAY_MAX_W: u32 = 460;
 const POINTER_OVERLAY_MAX_H: u32 = 144;
 const POINTER_OVERLAY_MARGIN: u32 = 12;
-const POINTER_OVERLAY_CURSOR_INSET: i32 = 24;
+const POINTER_OVERLAY_CURSOR_INSET: i32 = 12;
 const CHROME_ICON_X_BIAS: i32 = 0;
 const CHROME_ICON_Y_BIAS: i32 = 0;
 
