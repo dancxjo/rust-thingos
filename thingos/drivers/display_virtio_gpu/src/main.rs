@@ -33,6 +33,12 @@ const THINGOS_DRIVER_NAME: &[u8] = b"display_virtio_gpu";
 const DISPLAY_PROVIDER_POLL_ISOLATION: bool = true;
 const DISPLAY_BPP: u32 = 4;
 const FRAME_POOL_COUNT: usize = 1;
+/// Bytes per pixel for the frame pool buffers (always BGRX8888 / BGRA8888).
+const FRAME_POOL_BPP: usize = DISPLAY_BPP as usize;
+/// Maximum number of `Accel2dCommand` entries accepted in a single
+/// `DISPLAY_OP_ACCEL2D` batch.  Limits CPU time and prevents DoS from
+/// malformed large batches.
+const MAX_ACCEL2D_BATCH_CMDS: usize = 4096;
 
 /// Maximum cursor image side length (pixels). Allocating DMA pages up-front
 /// for this many pixels × 4 bytes ensures the cursor pixel buffer is
@@ -1403,7 +1409,7 @@ fn execute_accel2d(driver: &mut VirtioGpuDriver, call_payload: &[u8]) -> Provide
     let cmd_count = header.cmd_count as usize;
     // Reject unreasonably large batches before arithmetic to prevent
     // malformed requests from exhausting memory.
-    if cmd_count > 4096 {
+    if cmd_count > MAX_ACCEL2D_BATCH_CMDS {
         return ProviderResponse::err(Errno::EINVAL);
     }
     let needed = batch_size.saturating_add(cmd_count.saturating_mul(ACCEL2D_COMMAND_SIZE));
@@ -1513,7 +1519,7 @@ fn accel2d_clear_rect(
     let target_ptr = driver.frame_pool[idx].ptr;
     let target_size = driver.frame_pool[idx].size;
     let stride = driver.disp_stride as usize;
-    let bpp = 4usize; // frame pool is always 4 bytes per pixel
+    let bpp = FRAME_POOL_BPP;
     if stride == 0 || target_size == 0 {
         return Ok(());
     }
@@ -1557,7 +1563,7 @@ fn accel2d_copy_rect(
     }
     let src = driver.imported_buffers.get(&src_buffer).ok_or(Errno::ENOENT)?;
     let bpp = src.format.bytes_per_pixel();
-    let fb_bpp = 4usize;
+    let fb_bpp = FRAME_POOL_BPP;
     if bpp != fb_bpp || bpp == 0 {
         return Err(Errno::ENOSYS);
     }
@@ -1642,10 +1648,14 @@ fn accel2d_stretch_blit(
     let target_ptr = driver.frame_pool[idx].ptr;
     let target_size = driver.frame_pool[idx].size;
     let fb_stride = driver.disp_stride as usize;
+    // Pre-compute scale ratios to avoid repeated integer division in the inner
+    // loop.  Using fixed-point 16.16 to stay no_std (no float).
+    let scale_x = if dst_w > 0 { (src_w << 16) / dst_w } else { 0 };
+    let scale_y = if dst_h > 0 { (src_h << 16) / dst_h } else { 0 };
     for dy in 0..dst_h {
-        let sy = (dy * src_h / dst_h).min(src_h.saturating_sub(1));
+        let sy = ((dy * scale_y) >> 16).min(src_h.saturating_sub(1));
         for dx in 0..dst_w {
-            let sx = (dx * src_w / dst_w).min(src_w.saturating_sub(1));
+            let sx = ((dx * scale_x) >> 16).min(src_w.saturating_sub(1));
             let src_off =
                 (src_y0 + sy).saturating_mul(src_stride) + (src_x0 + sx).saturating_mul(bpp);
             let dst_off =
@@ -1816,6 +1826,8 @@ fn accel2d_masked_blit(
                     let r = (m_raw >> 16) & 0xff;
                     let g = (m_raw >> 8) & 0xff;
                     let b = m_raw & 0xff;
+                    // ITU-R BT.601 luma approximation: Y = 0.299R + 0.587G + 0.114B
+                    // Coefficients scaled to integers that sum to 256 (≈ 77 + 150 + 29).
                     ((r * 77 + g * 150 + b * 29) >> 8) as u8
                 };
                 let d_ptr = target_ptr.add(dst_off) as *mut u32;
