@@ -18,6 +18,7 @@
 //! | 7    | wl_data_device_manager   | 3       |
 //! | 8    | zwp_linux_dmabuf_v1      | 3       |
 //! | 9    | wp_presentation          | 1       |
+//! | 10   | zwlr_layer_shell_v1      | 4       |
 
 use alloc::string::String;
 use alloc::vec;
@@ -42,6 +43,7 @@ pub const GLOBAL_WL_SUBCOMPOSITOR: u32 = 6;
 pub const GLOBAL_WL_DATA_DEVICE_MANAGER: u32 = 7;
 pub const GLOBAL_ZWP_LINUX_DMABUF: u32 = 8;
 pub const GLOBAL_WP_PRESENTATION: u32 = 9;
+pub const GLOBAL_ZWLR_LAYER_SHELL: u32 = 10;
 
 const DRM_FORMAT_ARGB8888: u32 = 0x3432_5241; // "AR24"
 const DRM_FORMAT_XRGB8888: u32 = 0x3432_5258; // "XR24"
@@ -102,6 +104,8 @@ pub fn dispatch(
         ObjKind::DataOffer => dispatch_data_offer(msg, client, obj_id),
         ObjKind::Presentation => dispatch_presentation(msg, client, obj_id),
         ObjKind::PresentationFeedback => dispatch_presentation_feedback(msg, client, obj_id),
+        ObjKind::LayerShell => dispatch_layer_shell(msg, client, obj_id, output),
+        ObjKind::LayerSurface => dispatch_layer_surface(msg, client, obj_id, cmd_write, output),
         ObjKind::Destroyed | ObjKind::Unknown => vec![],
     }
 }
@@ -137,6 +141,8 @@ enum ObjKind {
     DataOffer,
     Presentation,
     PresentationFeedback,
+    LayerShell,
+    LayerSurface,
     Destroyed,
     Unknown,
 }
@@ -170,6 +176,8 @@ fn classify(e: &ObjectEntry) -> ObjKind {
         ObjectEntry::DataOffer => ObjKind::DataOffer,
         ObjectEntry::Presentation => ObjKind::Presentation,
         ObjectEntry::PresentationFeedback => ObjKind::PresentationFeedback,
+        ObjectEntry::LayerShell => ObjKind::LayerShell,
+        ObjectEntry::LayerSurface { .. } => ObjKind::LayerSurface,
         ObjectEntry::Destroyed => ObjKind::Destroyed,
     }
 }
@@ -218,6 +226,7 @@ fn dispatch_display(
                 (GLOBAL_WL_SUBCOMPOSITOR, "wl_subcompositor", 1u32),
                 (GLOBAL_WL_DATA_DEVICE_MANAGER, "wl_data_device_manager", 3u32),
                 (GLOBAL_WP_PRESENTATION, "wp_presentation", 1u32),
+                (GLOBAL_ZWLR_LAYER_SHELL, "zwlr_layer_shell_v1", 4u32),
             ] {
                 let mut p = Vec::new();
                 p.extend_from_slice(&name.to_ne_bytes());
@@ -313,6 +322,9 @@ fn dispatch_registry(
             const CLOCK_MONOTONIC: u32 = 1;
             // wp_presentation.clock_id opcode = 0: (clk_id: uint)
             client.send(new_id, 0, &CLOCK_MONOTONIC.to_ne_bytes());
+        }
+        GLOBAL_ZWLR_LAYER_SHELL => {
+            client.insert(new_id, ObjectEntry::LayerShell);
         }
         _ => {
             client.send_protocol_error(new_id, 0, "unknown global");
@@ -466,6 +478,7 @@ fn dispatch_compositor(
                 ObjectEntry::Surface {
                     bloom_surface_id,
                     xdg_surface_obj: None,
+                    layer_surface_obj: None,
                     pending_buffer: None,
                     pending_damage: None,
                     pending_frame_cb: None,
@@ -912,11 +925,19 @@ fn handle_surface_commit(
     let mut out: Vec<Vec<u8>> = vec![];
 
     // Extract surface state.
-    let (bloom_surface_id, xdg_obj, pending_buffer, pending_damage, pending_frame_cb) = {
+    let (
+        bloom_surface_id,
+        xdg_obj,
+        layer_surface_obj,
+        pending_buffer,
+        pending_damage,
+        pending_frame_cb,
+    ) = {
         match client.objects.get(&wl_surface_obj) {
             Some(ObjectEntry::Surface {
                 bloom_surface_id,
                 xdg_surface_obj,
+                layer_surface_obj,
                 pending_buffer,
                 pending_damage,
                 pending_frame_cb,
@@ -924,6 +945,7 @@ fn handle_surface_commit(
             }) => (
                 *bloom_surface_id,
                 *xdg_surface_obj,
+                *layer_surface_obj,
                 *pending_buffer,
                 *pending_damage,
                 *pending_frame_cb,
@@ -953,6 +975,16 @@ fn handle_surface_commit(
                 // Handle any blossom commands (e.g. SendXdgSurfaceConfigure re-sent).
                 send_blossom_commands(client, &blossom_cmds, cmd_write);
             }
+        }
+    }
+
+    // wlr-layer-shell lifecycle validation.  This mirrors the xdg_surface
+    // configure/ack handshake but is driven by the dispatcher rather than a
+    // blossom helper because layer-shell state is small and per-surface.
+    if let Some(layer_id) = layer_surface_obj {
+        if !on_layer_surface_commit(layer_id, client, pending_buffer.is_some(), &mut out) {
+            // Protocol error already sent.
+            return out;
         }
     }
 
@@ -1067,6 +1099,18 @@ fn dispatch_xdg_wm_base(
                     return vec![];
                 }
             };
+            // wl_surface may carry at most one role.  Refuse if the surface
+            // already has the layer-surface role.
+            if let Some(ObjectEntry::Surface { layer_surface_obj: Some(_), .. }) =
+                client.objects.get(&wl_surface_obj)
+            {
+                blossom_warn!(
+                    "wayland-server: get_xdg_surface refused: wl_surface={} already has layer-surface role",
+                    wl_surface_obj
+                );
+                client.send_protocol_error(obj_id, 0, "wl_surface already has a role");
+                return vec![];
+            }
             let client_id = client.fd;
             match blossom.get_xdg_surface(client_id, new_id, bloom_surface_id) {
                 Ok(_) => {
@@ -1373,18 +1417,31 @@ fn dispatch_subcompositor(msg: &WireMsg, client: &mut WaylandClient, obj_id: u32
             }
 
             // Validate child is a wl_surface and not yet a subsurface and not
-            // already an xdg_surface (Wayland spec: a wl_surface may carry at
-            // most one role).
-            let (child_is_surface, child_already_sub, child_already_xdg) =
+            // already an xdg_surface or layer_surface (Wayland spec: a
+            // wl_surface may carry at most one role).
+            let (child_is_surface, child_already_sub, child_already_xdg, child_already_layer) =
                 match client.objects.get(&surface_obj) {
-                    Some(ObjectEntry::Surface { subsurface_obj, xdg_surface_obj, .. }) => {
-                        (true, subsurface_obj.is_some(), xdg_surface_obj.is_some())
-                    }
-                    _ => (false, false, false),
+                    Some(ObjectEntry::Surface {
+                        subsurface_obj,
+                        xdg_surface_obj,
+                        layer_surface_obj,
+                        ..
+                    }) => (
+                        true,
+                        subsurface_obj.is_some(),
+                        xdg_surface_obj.is_some(),
+                        layer_surface_obj.is_some(),
+                    ),
+                    _ => (false, false, false, false),
                 };
             let parent_is_surface =
                 matches!(client.objects.get(&parent_obj), Some(ObjectEntry::Surface { .. }));
-            if !child_is_surface || !parent_is_surface || child_already_sub || child_already_xdg {
+            if !child_is_surface
+                || !parent_is_surface
+                || child_already_sub
+                || child_already_xdg
+                || child_already_layer
+            {
                 client.send_protocol_error(
                     obj_id,
                     WL_SUBCOMPOSITOR_ERROR_BAD_SURFACE,
@@ -1835,6 +1892,415 @@ fn xdg_state_atom_value(atom: &blossom::XdgToplevelStateAtom) -> u32 {
         TiledTop => 7,
         TiledBottom => 8,
     }
+}
+
+// ── zwlr_layer_shell_v1 / zwlr_layer_surface_v1 ─────────────────────────────
+//
+// Implements the wlr-layer-shell protocol (background / bottom / top /
+// overlay layers used for panels, wallpapers, lock screens, etc.).  This
+// implementation is deliberately minimal:
+//
+// * Single-output: anchors and exclusive zones are computed against the
+//   compositor's primary output (the same `OutputInfo` Bloom advertises via
+//   wl_output and zwp_linux_dmabuf_v1).
+// * Stacking: each layer maps to a fixed `z_order` band (see
+//   `blossom::LayerShellLayer::z_order`).  Within a layer, the most recently
+//   committed surface wins.
+// * Configure/ack lifecycle is handled per-layer-surface (no blossom helper).
+// * Geometry is computed by `blossom::compute_layer_placement` so that the
+//   same logic can be unit tested without a running compositor.
+//
+// Bloom does not yet implement DnD-style popup attachment for layer
+// surfaces, the keyboard interactivity hint, or per-layer exclusive zones
+// for siblings — these are accepted on the wire as no-ops to keep simple
+// clients (panels, wallpapers) functional.
+
+/// zwlr_layer_shell_v1 request opcodes.
+const ZWLR_LAYER_SHELL_GET_LAYER_SURFACE: u16 = 0;
+const ZWLR_LAYER_SHELL_DESTROY: u16 = 1;
+const ZWLR_LAYER_SHELL_GET_POPUP: u16 = 2;
+
+/// zwlr_layer_shell_v1.error codes.
+const ZWLR_LAYER_SHELL_ERROR_ROLE: u32 = 0;
+const ZWLR_LAYER_SHELL_ERROR_INVALID_LAYER: u32 = 1;
+const ZWLR_LAYER_SHELL_ERROR_ALREADY_CONSTRUCTED: u32 = 2;
+
+fn dispatch_layer_shell(
+    msg: &WireMsg,
+    client: &mut WaylandClient,
+    obj_id: u32,
+    output: &crate::display::OutputInfo,
+) -> Vec<Vec<u8>> {
+    match msg.opcode {
+        ZWLR_LAYER_SHELL_DESTROY => {
+            client.destroy(obj_id);
+        }
+        ZWLR_LAYER_SHELL_GET_LAYER_SURFACE => {
+            // get_layer_surface(id: new_id, surface: object<wl_surface>,
+            //                   output: object<wl_output>|null,
+            //                   layer: uint, namespace: string)
+            let new_id = match read_u32(&msg.data, 0) {
+                Some(id) => id,
+                None => return vec![],
+            };
+            let wl_surface_obj = read_u32(&msg.data, 4).unwrap_or(0);
+            let _output_obj = read_u32(&msg.data, 8).unwrap_or(0);
+            let layer_wire = read_u32(&msg.data, 12).unwrap_or(u32::MAX);
+            // namespace string follows; we don't currently need it.
+
+            let layer = match blossom::LayerShellLayer::from_wire(layer_wire) {
+                Some(l) => l,
+                None => {
+                    blossom_warn!(
+                        "wayland-server: zwlr_layer_shell.get_layer_surface invalid layer={}",
+                        layer_wire
+                    );
+                    client.send_protocol_error(
+                        obj_id,
+                        ZWLR_LAYER_SHELL_ERROR_INVALID_LAYER,
+                        "invalid layer",
+                    );
+                    return vec![];
+                }
+            };
+
+            // Validate the wl_surface and that no other role has been assigned.
+            let (bloom_surface_id, role_conflict) = match client.objects.get(&wl_surface_obj) {
+                Some(ObjectEntry::Surface {
+                    bloom_surface_id,
+                    xdg_surface_obj,
+                    layer_surface_obj,
+                    subsurface_obj,
+                    ..
+                }) => (
+                    *bloom_surface_id,
+                    xdg_surface_obj.is_some()
+                        || layer_surface_obj.is_some()
+                        || subsurface_obj.is_some(),
+                ),
+                _ => {
+                    client.send_protocol_error(obj_id, ZWLR_LAYER_SHELL_ERROR_ROLE, "invalid wl_surface");
+                    return vec![];
+                }
+            };
+            if role_conflict {
+                blossom_warn!(
+                    "wayland-server: get_layer_surface refused: wl_surface={} already has a role",
+                    wl_surface_obj
+                );
+                client.send_protocol_error(
+                    obj_id,
+                    ZWLR_LAYER_SHELL_ERROR_ROLE,
+                    "wl_surface already has a role",
+                );
+                return vec![];
+            }
+
+            // The layer-shell spec also forbids attaching a buffer before the
+            // initial commit/configure handshake.  Reject if the surface
+            // already has a pending buffer.
+            let has_pending_buffer = matches!(
+                client.objects.get(&wl_surface_obj),
+                Some(ObjectEntry::Surface { pending_buffer: Some(_), .. })
+            );
+            if has_pending_buffer {
+                client.send_protocol_error(
+                    obj_id,
+                    ZWLR_LAYER_SHELL_ERROR_ALREADY_CONSTRUCTED,
+                    "wl_surface already has buffer attached before role",
+                );
+                return vec![];
+            }
+
+            client.insert(
+                new_id,
+                ObjectEntry::LayerSurface {
+                    wl_surface_obj,
+                    bloom_surface_id,
+                    state: blossom::LayerSurfaceState::new(layer),
+                },
+            );
+            // Link the wl_surface back to this layer_surface.
+            if let Some(ObjectEntry::Surface { layer_surface_obj, .. }) =
+                client.objects.get_mut(&wl_surface_obj)
+            {
+                *layer_surface_obj = Some(new_id);
+            }
+            blossom_debug!(
+                "wayland-server: zwlr_layer_surface obj={} created for surface={} layer={:?} output={}x{}",
+                new_id,
+                bloom_surface_id,
+                layer,
+                output.width,
+                output.height
+            );
+        }
+        ZWLR_LAYER_SHELL_GET_POPUP => {
+            // Layer-surface popups are not implemented in v1; accept and
+            // ignore so the binding object can be cleaned up by the client.
+            let _ = read_u32(&msg.data, 0);
+        }
+        _ => {}
+    }
+    vec![]
+}
+
+/// zwlr_layer_surface_v1 request opcodes.
+const ZWLR_LAYER_SURFACE_SET_SIZE: u16 = 0;
+const ZWLR_LAYER_SURFACE_SET_ANCHOR: u16 = 1;
+const ZWLR_LAYER_SURFACE_SET_EXCLUSIVE_ZONE: u16 = 2;
+const ZWLR_LAYER_SURFACE_SET_MARGIN: u16 = 3;
+const ZWLR_LAYER_SURFACE_SET_KEYBOARD_INTERACTIVITY: u16 = 4;
+const ZWLR_LAYER_SURFACE_GET_POPUP: u16 = 5;
+const ZWLR_LAYER_SURFACE_ACK_CONFIGURE: u16 = 6;
+const ZWLR_LAYER_SURFACE_DESTROY: u16 = 7;
+const ZWLR_LAYER_SURFACE_SET_LAYER: u16 = 8;
+
+fn dispatch_layer_surface(
+    msg: &WireMsg,
+    client: &mut WaylandClient,
+    obj_id: u32,
+    cmd_write: u32,
+    _output: &crate::display::OutputInfo,
+) -> Vec<Vec<u8>> {
+    match msg.opcode {
+        ZWLR_LAYER_SURFACE_SET_SIZE => {
+            let w = read_u32(&msg.data, 0).unwrap_or(0);
+            let h = read_u32(&msg.data, 4).unwrap_or(0);
+            with_layer_state_mut(client, obj_id, |s| s.config.size = (w, h));
+        }
+        ZWLR_LAYER_SURFACE_SET_ANCHOR => {
+            let a = read_u32(&msg.data, 0).unwrap_or(0);
+            with_layer_state_mut(client, obj_id, |s| s.config.anchor = a);
+        }
+        ZWLR_LAYER_SURFACE_SET_EXCLUSIVE_ZONE => {
+            let z = read_i32(&msg.data, 0).unwrap_or(0);
+            with_layer_state_mut(client, obj_id, |s| s.config.exclusive_zone = z);
+        }
+        ZWLR_LAYER_SURFACE_SET_MARGIN => {
+            let t = read_i32(&msg.data, 0).unwrap_or(0);
+            let r = read_i32(&msg.data, 4).unwrap_or(0);
+            let b = read_i32(&msg.data, 8).unwrap_or(0);
+            let l = read_i32(&msg.data, 12).unwrap_or(0);
+            with_layer_state_mut(client, obj_id, |s| {
+                s.config.margin_top = t;
+                s.config.margin_right = r;
+                s.config.margin_bottom = b;
+                s.config.margin_left = l;
+            });
+        }
+        ZWLR_LAYER_SURFACE_SET_KEYBOARD_INTERACTIVITY => {
+            // Accepted as a no-op until input routing supports per-surface
+            // keyboard focus rules (Bloom currently uses scene-wide focus).
+        }
+        ZWLR_LAYER_SURFACE_GET_POPUP => {
+            // Accepted as no-op (see comment on ZWLR_LAYER_SHELL_GET_POPUP).
+        }
+        ZWLR_LAYER_SURFACE_SET_LAYER => {
+            let l = read_u32(&msg.data, 0).unwrap_or(u32::MAX);
+            match blossom::LayerShellLayer::from_wire(l) {
+                Some(layer) => {
+                    with_layer_state_mut(client, obj_id, |s| s.config.layer = layer);
+                }
+                None => {
+                    client.send_protocol_error(
+                        obj_id,
+                        ZWLR_LAYER_SHELL_ERROR_INVALID_LAYER,
+                        "invalid layer",
+                    );
+                }
+            }
+        }
+        ZWLR_LAYER_SURFACE_ACK_CONFIGURE => {
+            let serial = read_u32(&msg.data, 0).unwrap_or(0);
+            let recognised = with_layer_state_mut(client, obj_id, |s| {
+                if let Some(pos) = s.pending_configures.iter().position(|&p| p == serial) {
+                    for _ in 0..=pos {
+                        s.pending_configures.pop_front();
+                    }
+                    s.configured = true;
+                    true
+                } else {
+                    false
+                }
+            })
+            .unwrap_or(false);
+            if !recognised {
+                blossom_warn!(
+                    "wayland-server: zwlr_layer_surface.ack_configure unknown serial={}",
+                    serial
+                );
+            }
+        }
+        ZWLR_LAYER_SURFACE_DESTROY => {
+            // Unmap the surface and detach the role from its wl_surface so
+            // the same wl_surface could later be re-used with a different
+            // role (per spec).  Destroy IPC for the underlying scene surface
+            // is not emitted here — the wl_surface itself remains live until
+            // it is destroyed by the client.
+            let (wl_surface_obj, bloom_surface_id) = match client.objects.get(&obj_id) {
+                Some(ObjectEntry::LayerSurface { wl_surface_obj, bloom_surface_id, .. }) => {
+                    (*wl_surface_obj, *bloom_surface_id)
+                }
+                _ => (0, 0),
+            };
+            if wl_surface_obj != 0 {
+                if let Some(ObjectEntry::Surface { layer_surface_obj, .. }) =
+                    client.objects.get_mut(&wl_surface_obj)
+                {
+                    if *layer_surface_obj == Some(obj_id) {
+                        *layer_surface_obj = None;
+                    }
+                }
+            }
+            // Tell the main thread to stop treating this surface as a layer
+            // surface (clear its z_order and dest_rect contribution by
+            // sending a zero-everything update).  This keeps stacking sane
+            // if the underlying wl_surface is later reused.
+            if bloom_surface_id != 0 {
+                let cmd = ipc::encode_set_layer_surface(
+                    bloom_surface_id, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0,
+                );
+                let _ = stem::syscall::port_send_all(cmd_write, &cmd);
+            }
+            client.destroy(obj_id);
+            blossom_debug!(
+                "wayland-server: zwlr_layer_surface obj={} destroyed (surface={})",
+                obj_id,
+                bloom_surface_id
+            );
+        }
+        _ => {}
+    }
+    vec![]
+}
+
+/// Apply a mutation to a layer-surface's accumulated state, returning the
+/// closure's value if the object exists.
+fn with_layer_state_mut<R>(
+    client: &mut WaylandClient,
+    obj_id: u32,
+    f: impl FnOnce(&mut blossom::LayerSurfaceState) -> R,
+) -> Option<R> {
+    match client.objects.get_mut(&obj_id) {
+        Some(ObjectEntry::LayerSurface { state, .. }) => Some(f(state)),
+        _ => None,
+    }
+}
+
+/// Drive the layer-surface configure/ack handshake from `wl_surface.commit`.
+///
+/// Returns `true` when the commit may continue down the regular import /
+/// damage / commit path; `false` if a protocol error has been sent and the
+/// caller should bail out.
+///
+/// On the very first commit (the spec-mandated empty commit that triggers
+/// the initial configure) we send a `configure(serial, w, h)` event with the
+/// computed size and queue the serial for the client to ack before any
+/// buffer may be attached.  On subsequent commits we push a fresh
+/// `WCMD_SET_LAYER_SURFACE` so the main thread can recompute placement
+/// (size/anchor/margins may have changed since the last commit).
+fn on_layer_surface_commit(
+    layer_obj_id: u32,
+    client: &mut WaylandClient,
+    has_buffer: bool,
+    out: &mut Vec<Vec<u8>>,
+) -> bool {
+    // Snapshot what we need without holding a borrow.
+    let (config, initial_done, configured, bloom_surface_id) =
+        match client.objects.get(&layer_obj_id) {
+            Some(ObjectEntry::LayerSurface { state, bloom_surface_id, .. }) => (
+                state.config,
+                state.initial_commit_done,
+                state.configured,
+                *bloom_surface_id,
+            ),
+            _ => return true,
+        };
+
+    if has_buffer && !configured {
+        // Spec: the client must complete the initial configure handshake
+        // before attaching a buffer.
+        blossom_warn!(
+            "wayland-server: zwlr_layer_surface obj={} buffer committed before ack_configure",
+            layer_obj_id
+        );
+        client.send_protocol_error(
+            layer_obj_id,
+            blossom::layer_surface_error::INVALID_SURFACE_STATE,
+            "buffer committed before ack_configure",
+        );
+        return false;
+    }
+
+    // Always push the latest layer-surface state to the main thread so the
+    // scene picks up size/anchor/layer changes on this commit.
+    out.push(
+        ipc::encode_set_layer_surface(
+            bloom_surface_id,
+            config.layer as u32,
+            config.anchor,
+            config.exclusive_zone,
+            config.margin_top,
+            config.margin_right,
+            config.margin_bottom,
+            config.margin_left,
+            config.size.0,
+            config.size.1,
+            1, // active
+        )
+        .to_vec(),
+    );
+
+    if !initial_done {
+        // First commit: trigger the initial configure event.  The configure
+        // size is computed against the primary output by the main thread,
+        // but we need to send it now from the wayland thread; fall back to
+        // (0, 0) which the client interprets as "compositor has no
+        // preference, please choose your own size".  Real placement comes
+        // from the WCMD_SET_LAYER_SURFACE above; the configure here only
+        // exists to satisfy the lifecycle.
+        let serial = next_layer_serial(client);
+        let cw = config.size.0;
+        let ch = config.size.1;
+        send_layer_surface_configure(client, layer_obj_id, serial, cw, ch);
+        if let Some(ObjectEntry::LayerSurface { state, .. }) = client.objects.get_mut(&layer_obj_id)
+        {
+            state.initial_commit_done = true;
+            state.pending_configures.push_back(serial);
+        }
+    }
+
+    true
+}
+
+/// Allocate a fresh serial for layer-surface configures.  Re-uses the
+/// per-client buffer-key counter as a monotonic source — the values do not
+/// need to share a namespace with xdg-shell serials.
+fn next_layer_serial(client: &mut WaylandClient) -> u32 {
+    client.alloc_buf_key()
+}
+
+/// Send `zwlr_layer_surface_v1.configure(serial, width, height)` (opcode 0).
+fn send_layer_surface_configure(
+    client: &WaylandClient,
+    layer_obj_id: u32,
+    serial: u32,
+    width: u32,
+    height: u32,
+) {
+    let mut payload = alloc::vec::Vec::with_capacity(12);
+    payload.extend_from_slice(&serial.to_ne_bytes());
+    payload.extend_from_slice(&width.to_ne_bytes());
+    payload.extend_from_slice(&height.to_ne_bytes());
+    client.send(layer_obj_id, 0, &payload);
+    blossom_debug!(
+        "wayland-server: zwlr_layer_surface.configure obj={} serial={} {}x{}",
+        layer_obj_id,
+        serial,
+        width,
+        height
+    );
 }
 
 // ── wl_data_device_manager ────────────────────────────────────────────────────

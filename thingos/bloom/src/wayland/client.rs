@@ -52,6 +52,10 @@ pub enum ObjectEntry {
         bloom_surface_id: u32,
         /// xdg_surface object ID, if assigned.
         xdg_surface_obj: Option<u32>,
+        /// zwlr_layer_surface_v1 object ID, if assigned.  A `wl_surface` may
+        /// carry at most one role; the dispatcher rejects requests that
+        /// would assign a second role.
+        layer_surface_obj: Option<u32>,
         /// Pending buffer object ID (set by wl_surface.attach).
         pending_buffer: Option<u32>,
         /// Pending damage rect (x, y as i32; w, h as u32 matching Wayland wire).
@@ -87,6 +91,21 @@ pub enum ObjectEntry {
     XdgToplevel { xdg_surface_obj: u32 },
     /// xdg_popup.
     XdgPopup { xdg_surface_obj: u32 },
+    /// zwlr_layer_shell_v1 global.
+    LayerShell,
+    /// zwlr_layer_surface_v1 — per-surface layer-shell role state.
+    ///
+    /// State is owned by the dispatcher; this variant just identifies the
+    /// object and links it back to its underlying `wl_surface`.
+    LayerSurface {
+        /// Object ID of the wl_surface that has the layer-surface role.
+        wl_surface_obj: u32,
+        /// Bloom scene surface ID (mirrors the wl_surface's value for fast
+        /// lookup without a second hash step).
+        bloom_surface_id: u32,
+        /// Accumulated layer-surface state (size, anchors, margins, layer …).
+        state: blossom::LayerSurfaceState,
+    },
     /// wl_subsurface — relates a wl_surface to its parent wl_surface.
     ///
     /// Per the Wayland spec, `sync` defaults to `true` (synchronized mode):

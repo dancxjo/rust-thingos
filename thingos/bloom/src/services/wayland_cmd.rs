@@ -66,6 +66,7 @@ impl WaylandCommandService {
             ipc::WCMD_SET_CHROME => self.handle_set_chrome(data, world),
             ipc::WCMD_SET_TITLE => self.handle_set_title(data, world),
             ipc::WCMD_SET_SUBSURFACE => self.handle_set_subsurface(data, world),
+            ipc::WCMD_SET_LAYER_SURFACE => self.handle_set_layer_surface(data, world),
             other => {
                 warn!("wayland-cmd: unknown command type {}", other);
                 false
@@ -307,6 +308,106 @@ impl WaylandCommandService {
         }
         false
     }
+
+    /// Apply a `WCMD_SET_LAYER_SURFACE` from the Wayland thread.
+    ///
+    /// Computes the target rectangle and z-order via
+    /// [`blossom::compute_layer_placement`] using the current primary output
+    /// size, then pushes the result through the same scene mutators that
+    /// xdg-shell surfaces use.  The chrome is also cleared so the surface
+    /// renders without a titlebar/frame regardless of the default applied at
+    /// `WCMD_CREATE_SURFACE` time.
+    fn handle_set_layer_surface(&mut self, data: &[u8], world: &mut BloomWorld) -> bool {
+        if data.len() < 44 {
+            return false;
+        }
+        let active = data[1] != 0;
+        let bloom_surface_id = u32::from_ne_bytes(data[4..8].try_into().unwrap_or([0; 4]));
+        let layer = u32::from_ne_bytes(data[8..12].try_into().unwrap_or([0; 4]));
+        let anchor = u32::from_ne_bytes(data[12..16].try_into().unwrap_or([0; 4]));
+        let exclusive_zone = i32::from_ne_bytes(data[16..20].try_into().unwrap_or([0; 4]));
+        let margin_top = i32::from_ne_bytes(data[20..24].try_into().unwrap_or([0; 4]));
+        let margin_right = i32::from_ne_bytes(data[24..28].try_into().unwrap_or([0; 4]));
+        let margin_bottom = i32::from_ne_bytes(data[28..32].try_into().unwrap_or([0; 4]));
+        let margin_left = i32::from_ne_bytes(data[32..36].try_into().unwrap_or([0; 4]));
+        let width = u32::from_ne_bytes(data[36..40].try_into().unwrap_or([0; 4]));
+        let height = u32::from_ne_bytes(data[40..44].try_into().unwrap_or([0; 4]));
+
+        if bloom_surface_id == 0 {
+            return false;
+        }
+
+        if !active {
+            // Surface is no longer a layer surface — clear its layer-shell
+            // placement contribution.  We deliberately do not destroy the
+            // scene surface (the underlying wl_surface remains live).
+            debug!("wayland-cmd: layer-surface deactivated id={}", bloom_surface_id);
+            return false;
+        }
+
+        let layer_enum = match blossom::LayerShellLayer::from_wire(layer) {
+            Some(l) => l,
+            None => {
+                warn!("wayland-cmd: invalid layer-shell layer value={} (surface={})", layer, bloom_surface_id);
+                return false;
+            }
+        };
+        let cfg = blossom::LayerSurfaceConfig {
+            layer: layer_enum,
+            anchor,
+            size: (width, height),
+            exclusive_zone,
+            margin_top,
+            margin_right,
+            margin_bottom,
+            margin_left,
+        };
+        let (out_w, out_h) = world.display.output_size();
+        let p = blossom::compute_layer_placement(out_w, out_h, &cfg);
+
+        // Layer surfaces have no compositor-drawn chrome.  Clear it so any
+        // default titlebar/frame applied at create-surface time goes away.
+        let _ = world.scene.set_surface_chrome(
+            self.wayland_client_id,
+            bloom_surface_id,
+            crate::scene::SurfaceChrome { titlebar_height: 0, frame_thickness: 0 },
+        );
+
+        if p.x < 0 || p.y < 0 {
+            warn!(
+                "wayland-cmd: layer-surface id={} placement out of bounds x={} y={} (clamped to 0)",
+                bloom_surface_id, p.x, p.y
+            );
+        }
+        let rect = abi::display_protocol::Rect {
+            x: p.x.max(0) as u32,
+            y: p.y.max(0) as u32,
+            w: p.width,
+            h: p.height,
+        };
+        let old_visual = world.scene.surface_visual_rect(bloom_surface_id);
+        world.scene.set_pending_dest_rect(self.wayland_client_id, bloom_surface_id, rect);
+        world.scene.set_pending_z_order(self.wayland_client_id, bloom_surface_id, p.z_order);
+        if let Some(r) = old_visual {
+            world.damage.mark_rect(r);
+        }
+        world.damage.mark_rect(rect);
+        debug!(
+            "wayland-cmd: layer-surface id={} layer={:?} rect=({},{},{},{}) z={}",
+            bloom_surface_id, layer_enum, rect.x, rect.y, rect.w, rect.h, p.z_order
+        );
+        world.sync_wayland_session_fs(alloc::format!(
+            "layer_surface id={} layer={} x={} y={} w={} h={} z={}\n",
+            bloom_surface_id,
+            layer,
+            rect.x,
+            rect.y,
+            rect.w,
+            rect.h,
+            p.z_order
+        ));
+        true
+    }
 }
 
 impl BloomService for WaylandCommandService {
@@ -365,6 +466,7 @@ fn wayland_command_len(data: &[u8]) -> Option<usize> {
         ipc::WCMD_SET_CHROME => 16,
         ipc::WCMD_SET_TITLE => 8 + ipc::MAX_TITLE_BYTES,
         ipc::WCMD_SET_SUBSURFACE => 24,
+        ipc::WCMD_SET_LAYER_SURFACE => 44,
         _ => 1,
     };
     Some(len)
