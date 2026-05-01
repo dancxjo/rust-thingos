@@ -3,20 +3,28 @@ use core::sync::atomic::{AtomicU32, Ordering};
 
 use abi::device::{DeviceCall, DeviceKind};
 use abi::display::{
-    BufferHandle, CommitFlags, CommitRequest, DISPLAY_OP_COMMIT, DISPLAY_OP_GET_INFO,
-    DISPLAY_OP_IMPORT_BUFFER, DISPLAY_OP_MOVE_CURSOR, DISPLAY_OP_RELEASE_BUFFER,
-    DISPLAY_OP_SET_CURSOR, DisplayInfo, MoveCursorRequest, PlaneCommit, PlaneId, SetCursorRequest,
+    BufferHandle, BufferId, CommitFlags, CommitRequest, DISPLAY_OP_ACCEL2D, DISPLAY_OP_COMMIT,
+    DISPLAY_OP_GET_INFO, DISPLAY_OP_IMPORT_BUFFER, DISPLAY_OP_MOVE_CURSOR,
+    DISPLAY_OP_RELEASE_BUFFER, DISPLAY_OP_SET_CURSOR, DisplayCaps, DisplayInfo,
+    MoveCursorRequest, PlaneCommit, PlaneId, SetCursorRequest,
 };
 use abi::display_protocol::Rect;
 use abi::pixel::PixelFormat;
 use stem::syscall::vfs::{vfs_close, vfs_device_call_raw, vfs_open};
 
+use crate::accel2d_batch::{Accel2dBatchBuilder, MAX_BLOOM_ACCEL2D_PAYLOAD};
 use crate::render::{CursorPlane, OverlayPlane, WindowOverlayPlane};
 use crate::scene::CompositionEntry;
 
 const MAX_COMMIT_PLANES: usize = 16;
 const MAX_DAMAGE_RECTS: usize = 32;
 const BACKGROUND_Z_ORDER: i32 = i32::MIN;
+
+/// Feature flag: set to `true` (default) to use `DISPLAY_OP_ACCEL2D` batches
+/// when the driver advertises the required capabilities.  Set to `false` to
+/// force the legacy `DISPLAY_OP_COMMIT` plane-list path unconditionally, which
+/// is useful for debugging or fallback testing.
+const ENABLE_ACCEL2D: bool = true;
 
 const MAX_COMMIT_PAYLOAD_BYTES: usize = core::mem::size_of::<CommitRequest>()
     + MAX_COMMIT_PLANES * core::mem::size_of::<PlaneCommit>()
@@ -243,6 +251,33 @@ impl DisplayBackend {
         self.info.caps.contains(abi::display::DisplayCaps::RESOURCE_CACHE)
     }
 
+    /// Returns `true` when the driver advertises the minimum ACCEL2D command
+    /// set required for the Bloom batch composition path.
+    ///
+    /// Required capabilities: `ACCEL2D_COPY`, `ACCEL2D_ALPHA_BLIT`,
+    /// `ACCEL2D_FLUSH_DAMAGE`.  (`ACCEL2D_STRETCH` and
+    /// `ACCEL2D_ROUNDED_CLIP_BLIT` are optional; the batch builder falls back
+    /// gracefully when they are absent.)
+    pub fn supports_accel2d(&self) -> bool {
+        self.info.caps.contains(
+            DisplayCaps::ACCEL2D_COPY
+                | DisplayCaps::ACCEL2D_ALPHA_BLIT
+                | DisplayCaps::ACCEL2D_FLUSH_DAMAGE,
+        )
+    }
+
+    /// Returns `true` when the driver supports the ACCEL2D scaled-blit command
+    /// (`ACCEL2D_CMD_STRETCH_BLIT`).  Used to select the optimal command for
+    /// scaled surface planes in the ACCEL2D batch path.
+    pub fn supports_accel2d_stretch(&self) -> bool {
+        self.info.caps.contains(DisplayCaps::ACCEL2D_STRETCH)
+    }
+
+    /// Returns `true` when the driver supports `ACCEL2D_CMD_ROUNDED_CLIP_BLIT`.
+    pub fn supports_accel2d_rounded_clip(&self) -> bool {
+        self.info.caps.contains(DisplayCaps::ACCEL2D_ROUNDED_CLIP_BLIT)
+    }
+
     pub fn enumerate_outputs(&self) -> Vec<OutputInfo> {
         alloc::vec![self.primary_output_info()]
     }
@@ -315,6 +350,22 @@ impl DisplayBackend {
         flags: CommitFlags,
         corner_radius: u8,
     ) -> PresentResult {
+        // Route to the ACCEL2D batch path when the feature flag is enabled and
+        // the driver advertises the required capabilities.  Fall through to the
+        // legacy plane-commit path otherwise.
+        if ENABLE_ACCEL2D && self.supports_accel2d() {
+            return self.present_accel2d(
+                composition_list,
+                damage,
+                fallback_buffer,
+                body_overlays,
+                chrome_overlays,
+                pointer_overlay,
+                cursor,
+                corner_radius,
+            );
+        }
+
         let mut planes = [empty_plane_commit(); MAX_COMMIT_PLANES];
         let mut plane_count = 0usize;
 
@@ -543,6 +594,208 @@ impl DisplayBackend {
             Err(e) => {
                 stem::error!("bloom: DISPLAY_OP_COMMIT failed: {:?}", e);
                 false
+            }
+        }
+    }
+
+    // ── ACCEL2D batch composition path ────────────────────────────────────────
+
+    /// Compose and present the current scene using `DISPLAY_OP_ACCEL2D` command
+    /// batches instead of the legacy `DISPLAY_OP_COMMIT` plane-list.
+    ///
+    /// Planes are translated to ACCEL2D commands bottom-to-top:
+    /// - Solid/image background  → `COPY_RECT` (or `STRETCH_BLIT` if scaled)
+    /// - Window body overlays    → `COPY_RECT`
+    /// - Window content (opaque) → `COPY_RECT` or `ROUNDED_CLIP_BLIT`
+    /// - Window content (scaled) → `STRETCH_BLIT`
+    /// - Window content (alpha)  → `ALPHA_BLIT`
+    /// - Window chrome overlays  → `ALPHA_BLIT`
+    /// - Pointer / cursor        → `ALPHA_BLIT`
+    /// - Damage regions          → `FLUSH_DAMAGE`
+    ///
+    /// Note: `CommitFlags::VSYNC` is not forwarded — the ACCEL2D protocol does
+    /// not carry a vsync signal.
+    fn present_accel2d(
+        &self,
+        composition_list: &[CompositionEntry],
+        damage: &[Rect],
+        fallback_buffer: Option<u32>,
+        body_overlays: &[WindowOverlayPlane],
+        chrome_overlays: &[WindowOverlayPlane],
+        pointer_overlay: Option<OverlayPlane>,
+        cursor: Option<CursorPlane>,
+        corner_radius: u8,
+    ) -> PresentResult {
+        let mut batch = Accel2dBatchBuilder::new();
+        let (out_w, out_h) = self.output_size();
+        let out_rect = Rect { x: 0, y: 0, w: out_w, h: out_h };
+
+        let supports_stretch = self.supports_accel2d_stretch();
+        let supports_rounded_clip = self.supports_accel2d_rounded_clip();
+
+        // 1. Background plane — always first (lowest z).
+        if let Some(id) = fallback_buffer {
+            batch.copy_rect(BufferId(id), out_rect, BufferId(0), out_rect);
+        }
+
+        // 2. Surface planes — iterate bottom-to-top (composition_list is
+        //    pre-sorted by z_order ascending from the scene graph).
+        for entry in composition_list {
+            // 2.1 Window body overlay (themed background drawn under content).
+            if let Some(overlay) = find_window_overlay(body_overlays, entry.surface_id) {
+                if !entry.is_fullscreen && !entry.chrome.is_empty() {
+                    let dst = Rect {
+                        x: overlay.x.max(0) as u32,
+                        y: overlay.y.max(0) as u32,
+                        w: overlay.width,
+                        h: overlay.height,
+                    };
+                    let src = Rect { x: 0, y: 0, w: overlay.width, h: overlay.height };
+                    batch.copy_rect(BufferId(overlay.buffer_id), src, BufferId(0), dst);
+                }
+            }
+
+            // 2.2 Window content plane.
+            if !batch.is_full() {
+                let is_scaled = entry.src_rect.w != entry.dest_rect.w
+                    || entry.src_rect.h != entry.dest_rect.h;
+                let use_rounded_clip = !entry.is_fullscreen
+                    && !entry.chrome.is_empty()
+                    && corner_radius > 0
+                    && supports_rounded_clip
+                    && entry.alpha == 255;
+
+                if use_rounded_clip {
+                    batch.rounded_clip_blit(
+                        BufferId(entry.buffer_id),
+                        entry.src_rect,
+                        BufferId(0),
+                        entry.dest_rect,
+                        corner_radius,
+                    );
+                } else if entry.alpha == 255 && !is_scaled {
+                    batch.copy_rect(
+                        BufferId(entry.buffer_id),
+                        entry.src_rect,
+                        BufferId(0),
+                        entry.dest_rect,
+                    );
+                } else if entry.alpha == 255 && is_scaled && supports_stretch {
+                    batch.stretch_blit(
+                        BufferId(entry.buffer_id),
+                        entry.src_rect,
+                        BufferId(0),
+                        entry.dest_rect,
+                    );
+                } else {
+                    // Alpha < 255, or scaled without STRETCH_BLIT support:
+                    // fall back to alpha blit (may not scale, but blends correctly).
+                    batch.alpha_blit(
+                        BufferId(entry.buffer_id),
+                        entry.src_rect,
+                        BufferId(0),
+                        entry.dest_rect,
+                        entry.alpha,
+                    );
+                }
+            }
+
+            // 2.3 Window chrome overlay (title bar / frame, drawn over content).
+            if let Some(overlay) = find_window_overlay(chrome_overlays, entry.surface_id) {
+                if !entry.is_fullscreen && !entry.chrome.is_empty() && !batch.is_full() {
+                    let dst = Rect {
+                        x: overlay.x.max(0) as u32,
+                        y: overlay.y.max(0) as u32,
+                        w: overlay.width,
+                        h: overlay.height,
+                    };
+                    let src = Rect { x: 0, y: 0, w: overlay.width, h: overlay.height };
+                    // Chrome typically contains per-pixel alpha (rounded corners,
+                    // shadows, buttons) so we always use ALPHA_BLIT.
+                    batch.alpha_blit(BufferId(overlay.buffer_id), src, BufferId(0), dst, 255);
+                }
+            }
+        }
+
+        // 3. Diagnostic pointer overlay (above all windows).
+        if let Some(overlay) = pointer_overlay {
+            if !batch.is_full() {
+                let dst = Rect {
+                    x: overlay.x.max(0) as u32,
+                    y: overlay.y.max(0) as u32,
+                    w: overlay.width,
+                    h: overlay.height,
+                };
+                let src = Rect { x: 0, y: 0, w: overlay.width, h: overlay.height };
+                batch.alpha_blit(BufferId(overlay.buffer_id), src, BufferId(0), dst, 255);
+            }
+        }
+
+        // 4. Software cursor plane (topmost, only when hardware cursor is absent).
+        if let Some(cursor) = cursor {
+            if !batch.is_full() {
+                let dst_x = cursor.x.max(0) as u32;
+                let dst_y = cursor.y.max(0) as u32;
+                let src_x = if cursor.x < 0 { cursor.x.unsigned_abs() } else { 0 };
+                let src_y = if cursor.y < 0 { cursor.y.unsigned_abs() } else { 0 };
+                let visible_w =
+                    cursor.width.saturating_sub(src_x).min(out_w.saturating_sub(dst_x));
+                let visible_h =
+                    cursor.height.saturating_sub(src_y).min(out_h.saturating_sub(dst_y));
+                if visible_w > 0 && visible_h > 0 {
+                    let src = Rect { x: src_x, y: src_y, w: visible_w, h: visible_h };
+                    let dst = Rect { x: dst_x, y: dst_y, w: visible_w, h: visible_h };
+                    batch.alpha_blit(BufferId(cursor.buffer_id), src, BufferId(0), dst, 255);
+                }
+            }
+        }
+
+        if batch.is_empty() {
+            return PresentResult { success: false };
+        }
+
+        // 5. Damage flush — clip rects to the output bounds then emit.
+        let (w, h) = (out_w, out_h);
+        let mut damage_rects = [Rect { x: 0, y: 0, w: 0, h: 0 }; MAX_DAMAGE_RECTS];
+        let mut damage_count = 0usize;
+        for rect in damage.iter().take(MAX_DAMAGE_RECTS) {
+            if let Some(clipped) = clip_rect_to_output(*rect, w, h) {
+                if !damage_rects[..damage_count].contains(&clipped) {
+                    damage_rects[damage_count] = clipped;
+                    damage_count += 1;
+                }
+            }
+        }
+        // An empty damage set means full-surface flush.
+        batch.flush_damage(&damage_rects[..damage_count]);
+
+        self.commit_accel2d_batch(&batch)
+    }
+
+    /// Serialise `batch` and submit it to the display driver via
+    /// `DISPLAY_OP_ACCEL2D`.
+    fn commit_accel2d_batch(&self, batch: &Accel2dBatchBuilder) -> PresentResult {
+        let mut payload = [0u8; MAX_BLOOM_ACCEL2D_PAYLOAD];
+        let len = batch.write_payload(&mut payload);
+        if len == 0 {
+            stem::error!("bloom: ACCEL2D payload serialisation failed (buffer too small)");
+            return PresentResult { success: false };
+        }
+
+        let call = DeviceCall {
+            kind: DeviceKind::Display,
+            op: DISPLAY_OP_ACCEL2D,
+            in_ptr: payload.as_ptr() as u64,
+            in_len: len as u32,
+            out_ptr: 0,
+            out_len: 0,
+        };
+
+        match vfs_device_call_raw(self.fd, &call) {
+            Ok(_) => PresentResult { success: true },
+            Err(e) => {
+                stem::error!("bloom: DISPLAY_OP_ACCEL2D failed: {:?}", e);
+                PresentResult { success: false }
             }
         }
     }
