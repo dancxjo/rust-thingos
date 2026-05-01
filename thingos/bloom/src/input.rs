@@ -140,10 +140,6 @@ impl InputState {
         self.primary_button_down
     }
 
-    pub fn has_pointer_grab(&self) -> bool {
-        self.pointer_grab.is_some()
-    }
-
     pub fn visible_cursor_kind(&self) -> CursorKind {
         self.visible_cursor_kind
     }

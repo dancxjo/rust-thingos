@@ -22,6 +22,8 @@ use crate::render::CompositorVisuals;
 use crate::scene::{CommitResult, CompositionEntry, Scene, SurfaceBuffer};
 use crate::session_fs;
 
+const ENABLE_HARDWARE_CURSOR: bool = false;
+
 /// All mutable compositor state owned by the main loop.
 pub struct BloomWorld {
     pub scene: Scene,
@@ -397,7 +399,7 @@ impl BloomWorld {
         let (pointer_x, pointer_y) = self.input.visible_pointer_position();
         let cursor_kind = self.input.visible_cursor_kind();
         let cursor = self.visuals.cursor_plane(&self.display, cursor_kind, pointer_x, pointer_y);
-        let use_hw_cursor = self.display.supports_hw_cursor() && !self.input.has_pointer_grab();
+        let use_hw_cursor = ENABLE_HARDWARE_CURSOR && self.display.supports_hw_cursor();
 
         // ── Hardware cursor fast path ──────────────────────────────────────
         // When the display driver supports hardware cursor planes and there is
@@ -466,14 +468,6 @@ impl BloomWorld {
                 // Move failed — fall through to the full compose path and
                 // restore dirty so we retry on the next frame.
                 self.damage.mark_full(self.primary.width, self.primary.height);
-            }
-        } else if self.hw_cursor_buffer.is_some()
-            && self.hw_cursor_position.map(|(_, _, visible)| visible).unwrap_or(true)
-        {
-            // During move/resize grabs, composite the cursor with the scene so
-            // the cursor and dragged window are presented atomically.
-            if self.display.move_cursor(pointer_x, pointer_y, false) {
-                self.hw_cursor_position = Some((pointer_x, pointer_y, false));
             }
         }
 
