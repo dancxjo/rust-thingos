@@ -1217,6 +1217,21 @@ impl VirtioGpu {
     pub fn claim_handle(&self) -> usize {
         self.claim_handle
     }
+
+    /// Allocate `pages` pages of device-DMA memory.
+    ///
+    /// Returns `(virtual_addr, physical_addr)` on success.  The returned
+    /// virtual address is mapped into the driver's address space and the
+    /// physical address is suitable for passing to [`attach_backing`] or
+    /// [`attach_backing_3d`].
+    pub fn alloc_dma(&mut self, pages: usize) -> Result<(u64, u64), &'static str> {
+        use stem::syscall::{device_alloc_dma, device_dma_phys};
+        let virt = device_alloc_dma(self.claim_handle, pages)
+            .map_err(|_| "device_alloc_dma failed")?;
+        let phys =
+            device_dma_phys(virt).map_err(|_| "device_dma_phys failed")?;
+        Ok((virt, phys))
+    }
 }
 
 fn read_sys_u32(path: &str) -> Option<u32> {

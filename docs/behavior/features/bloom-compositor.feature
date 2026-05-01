@@ -336,6 +336,17 @@ Feature: Bloom compositor service loop and responsiveness
     Then the serial output should contain "display_virtio_gpu: GPU initialized successfully" within 60s
     And the serial output should contain "display_virtio_gpu: composition paths: gpu_opaque_copy=enabled cpu_alpha_blend=enabled" within 60s
 
+  Scenario: virtio GPU driver advertises GPU_ALPHA_BLEND when virgl 3D is available
+    # When the virtio-gpu device supports virgl 3D, the driver initialises the
+    # GPU alpha-blend pipeline and logs the extended composition path message.
+    # Bloom uses supports_gpu_alpha_blend() to branch on this capability and
+    # avoid per-pixel CPU blend loops on the client side.
+    Given the machine is booted
+    Then the serial output should contain "display_virtio_gpu: GPU initialized successfully" within 60s
+    And the serial output should contain "display_virtio_gpu: virgl GPU alpha blend ready" within 60s
+    And the serial output should contain "gpu_alpha_blend=enabled" within 60s
+    And the serial output should contain "bloom: display driver supports GPU alpha blending" within 120s
+
   Scenario: virtio GPU driver records GPU vs CPU plane composition counts on first commit
     # After the first successful DISPLAY_OP_COMMIT the driver logs how many
     # planes went through the GPU fast-copy path and how many required CPU
