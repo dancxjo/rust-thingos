@@ -55,8 +55,6 @@ where
             return;
         };
 
-        // eprintln!("[bdd-debug] Event: {:?}", event.value);
-
         match &event.value {
             Cucumber::Started => {
                 eprintln!("\n╔══════════════════════════════════════════════════════════════╗");
@@ -174,11 +172,8 @@ impl ThingOsReporter {
                     let mut collector = artifacts::global().lock().await;
                     collector.screenshot_path("before")
                 };
-                /*
                 let screenshot_before =
                     artifacts::qmp::take_screenshot_global(&screenshot_before_path).await.ok();
-                */
-                let screenshot_before = None;
 
                 let mut collector = artifacts::global().lock().await;
                 collector.on_step_start(
@@ -215,11 +210,8 @@ impl ThingOsReporter {
             let mut collector = artifacts::global().lock().await;
             collector.screenshot_path("after")
         };
-        /*
         let screenshot_after =
             artifacts::qmp::take_screenshot_global(&screenshot_after_path).await.ok();
-        */
-        let screenshot_after = None;
 
         // Try to dump registers
         let registers = None;

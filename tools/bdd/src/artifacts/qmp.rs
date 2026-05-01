@@ -251,6 +251,12 @@ pub async fn take_screenshot_global(
     // Convert PPM to PNG
     let png_path = output_path.with_extension("png");
     let img = image::open(&ppm_path)?;
+    // Ensure parent directory exists
+    if let Some(parent) = png_path.parent() {
+        let _ = std::fs::create_dir_all(parent);
+    }
+
+    // Write the PNG file
     img.save(&png_path)?;
     let _ = std::fs::remove_file(&ppm_path);
 

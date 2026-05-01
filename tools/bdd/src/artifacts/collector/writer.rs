@@ -115,49 +115,58 @@ pub fn write_scenario_readme(
 
     for (i, step) in scenario.steps.iter().enumerate() {
         let step_num = i + 1;
-        let step_dir_name = format!("{:02}", step_num);
-        
-        let before_link = if step.screenshot_before.is_some() {
-            format!(
-                "<a href=\"./{}/before.png\"><img src=\"./{}/before.png\" width=\"120\" /></a>",
-                step_dir_name, step_dir_name
-            )
+        let step_num_str = format!("{:02}", step_num);
+
+        let before_img = if let Some(path) = &step.screenshot_before {
+            if path.exists() {
+                format!(
+                    "<a href=\"./{}/before.png\"><img src=\"./{}/before.png\" width=\"120\" /></a>",
+                    step_num_str, step_num_str
+                )
+            } else {
+                "-".to_string()
+            }
         } else {
             "-".to_string()
         };
 
-        let after_link = if step.screenshot_after.is_some() {
-            format!(
-                "<a href=\"./{}/after.png\"><img src=\"./{}/after.png\" width=\"120\" /></a>",
-                step_dir_name, step_dir_name
-            )
+        let after_img = if let Some(path) = &step.screenshot_after {
+            if path.exists() {
+                format!(
+                    "<a href=\"./{}/after.png\"><img src=\"./{}/after.png\" width=\"120\" /></a>",
+                    step_num_str, step_num_str
+                )
+            } else {
+                "-".to_string()
+            }
         } else {
             "-".to_string()
         };
 
-        let log_link = if step.serial_log.is_some() {
-            format!("[📜](./{}/serial.log)", step_dir_name)
-        } else {
-            "".to_string()
-        };
-        let reg_link = if step.registers.is_some() {
-            format!("[💾](./{}/registers.txt)", step_dir_name)
-        } else {
-            "".to_string()
-        };
+        let mut artifact_links = Vec::new();
+        if let Some(path) = &step.serial_log {
+            if path.exists() {
+                artifact_links.push(format!("[📜](./{}/serial.log)", step_num_str));
+            }
+        }
+        if let Some(path) = &step.registers {
+            if path.exists() {
+                artifact_links.push(format!("[💾](./{}/registers.txt)", step_num_str));
+            }
+        }
+        let artifacts_str = artifact_links.join(" ");
 
         writeln!(
             file,
-            "| {} | {} {} | {} | {}ms | {} | {} | {} {} |",
+            "| {} | {} {} | {} | {}ms | {} | {} | {} |",
             step_num,
             step.keyword,
             step.name,
             step.result.emoji(),
             step.duration_ms,
-            before_link,
-            after_link,
-            log_link,
-            reg_link
+            before_img,
+            after_img,
+            artifacts_str
         )?;
     }
     writeln!(file)?;

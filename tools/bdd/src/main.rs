@@ -54,9 +54,12 @@ async fn main() {
     // Create custom reporter with artifact collection
     let reporter = ThingOsReporter::new(&arch);
 
-    // Create output directory
+    // Create output directory and JSON file
     let output_dir = PathBuf::from("docs/behavior").join(&arch);
     let _ = fs::create_dir_all(&output_dir);
+    let json_file =
+        fs::File::create(output_dir.join("results.json")).expect("Failed to create results.json");
+    let json_writer = cucumber::writer::Json::new::<ThingOsWorld>(json_file);
 
     // Run cucumber
     ThingOsWorld::cucumber()
@@ -76,7 +79,7 @@ async fn main() {
                     .last();
             })
         })
-        .with_writer(reporter)
+        .with_writer(cucumber::writer::Tee::new(reporter, json_writer))
         .after(|_feature, _rule, _scenario, _ev, world: Option<&mut ThingOsWorld>| {
             Box::pin(async move {
                 if let Some(w) = world {
