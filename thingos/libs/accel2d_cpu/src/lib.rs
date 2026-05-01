@@ -226,6 +226,78 @@ pub struct PixelBuf {
 unsafe impl Send for PixelBuf {}
 unsafe impl Sync for PixelBuf {}
 
+// ─── Fast inner-loop helpers (SIMD / scalar dispatch) ─────────────────────
+
+/// Tile dimension for cache-friendly traversal of large rectangles.
+///
+/// A 64×64 tile of 4-byte pixels occupies 16 KB, leaving room for a paired
+/// src/dst tile pair (32 KB total) within a typical 32 KB L1 data cache.
+const TILE_DIM: usize = 64;
+
+/// Fill `count` consecutive `u32` values at `ptr` with `color`.
+///
+/// On x86/x86_64 with the `simd` feature this dispatches to AVX2 (8 pixels /
+/// iteration) or SSE2 (4 pixels / iteration).  Otherwise falls back to a
+/// scalar loop that LLVM can still auto-vectorise.
+#[inline(always)]
+unsafe fn fill_u32_row(ptr: *mut u32, color: u32, count: usize) {
+    #[cfg(all(any(target_arch = "x86", target_arch = "x86_64"), feature = "simd"))]
+    {
+        simd_x86::fill_row(ptr, color, count);
+        return;
+    }
+    #[allow(unreachable_code)]
+    {
+        core::slice::from_raw_parts_mut(ptr, count).fill(color);
+    }
+}
+
+/// Alpha-blend one row of `count` source pixels over the destination.
+///
+/// `force_opaque_src` treats the source alpha as 255 (e.g. `Bgrx8888`).
+/// `global_alpha` is the per-command opacity multiplier.
+///
+/// When `force_opaque_src && global_alpha == 255` the operation degenerates
+/// to a plain memcpy and is handled specially before any blending math.
+#[inline(always)]
+unsafe fn alpha_blit_row(
+    src: *const u32,
+    dst: *mut u32,
+    count: usize,
+    global_alpha: u8,
+    force_opaque_src: bool,
+) {
+    // Fully opaque source without per-pixel alpha → straight pixel copy.
+    if force_opaque_src && global_alpha == 255 {
+        core::ptr::copy_nonoverlapping(src as *const u8, dst as *mut u8, count * 4);
+        return;
+    }
+    #[cfg(all(any(target_arch = "x86", target_arch = "x86_64"), feature = "simd"))]
+    {
+        simd_x86::alpha_blit_row_sse2(src, dst, count, global_alpha, force_opaque_src);
+        return;
+    }
+    #[allow(unreachable_code)]
+    alpha_blit_row_scalar(src, dst, count, global_alpha, force_opaque_src);
+}
+
+/// Pure-scalar reference row blend; used when SIMD is unavailable or disabled.
+#[inline]
+unsafe fn alpha_blit_row_scalar(
+    src: *const u32,
+    dst: *mut u32,
+    count: usize,
+    global_alpha: u8,
+    force_opaque_src: bool,
+) {
+    for i in 0..count {
+        let s_raw = *src.add(i);
+        let s = if force_opaque_src { 0xff00_0000 | (s_raw & 0x00ff_ffff) } else { s_raw };
+        let d = *dst.add(i);
+        *dst.add(i) = alpha_over_argb(s, d, global_alpha);
+    }
+}
+
 // ─── ACCEL2D_CMD_CLEAR_RECT ────────────────────────────────────────────────
 
 /// Fill `rect` in `dst` with `color` (0xAARRGGBB little-endian word).
@@ -234,7 +306,6 @@ unsafe impl Sync for PixelBuf {}
 ///
 /// `dst.ptr` must be valid and writable for `dst.size` bytes.
 pub unsafe fn clear_rect(dst: &PixelBuf, rect: Rect, color: u32) {
-    let bpp = 4usize;
     let stride = dst.stride as usize;
     if stride == 0 || dst.size == 0 {
         return;
@@ -249,14 +320,18 @@ pub unsafe fn clear_rect(dst: &PixelBuf, rect: Rect, color: u32) {
     if w == 0 || h == 0 {
         return;
     }
+    // Compute the byte offset of the first pixel in the fill region and
+    // verify that the *last* pixel in the region also lies within the buffer.
+    // This single bounds check replaces the per-pixel check in the original
+    // loop, eliminating branch overhead in the hot path.
+    let row_start = y.saturating_mul(stride) + x.saturating_mul(4);
+    let last_off = row_start + (h - 1).saturating_mul(stride) + (w - 1).saturating_mul(4) + 4;
+    if last_off > dst.size {
+        return;
+    }
     for row in 0..h {
-        for col in 0..w {
-            let off = (y + row).saturating_mul(stride) + (x + col).saturating_mul(bpp);
-            if off + bpp > dst.size {
-                break;
-            }
-            core::ptr::write_unaligned(dst.ptr.add(off) as *mut u32, color);
-        }
+        let off = row_start + row * stride;
+        fill_u32_row(dst.ptr.add(off) as *mut u32, color, w);
     }
 }
 
@@ -302,12 +377,18 @@ pub unsafe fn copy_rect(
     let dy = dst_rect.y as usize;
     let src_stride = src.stride as usize;
     let dst_stride = dst.stride as usize;
+    // Precompute row base offsets and do a single bounds check for the entire
+    // operation, eliminating the per-row check from the original inner loop.
+    let src_base = sy.saturating_mul(src_stride) + sx.saturating_mul(bpp);
+    let dst_base = dy.saturating_mul(dst_stride) + dx.saturating_mul(bpp);
+    let last_src = src_base + (copy_h - 1).saturating_mul(src_stride) + row_bytes;
+    let last_dst = dst_base + (copy_h - 1).saturating_mul(dst_stride) + row_bytes;
+    if last_src > src.size || last_dst > dst.size {
+        return;
+    }
     for row in 0..copy_h {
-        let src_off = (sy + row).saturating_mul(src_stride) + sx.saturating_mul(bpp);
-        let dst_off = (dy + row).saturating_mul(dst_stride) + dx.saturating_mul(bpp);
-        if src_off + row_bytes > src.size || dst_off + row_bytes > dst.size {
-            break;
-        }
+        let src_off = src_base + row * src_stride;
+        let dst_off = dst_base + row * dst_stride;
         core::ptr::copy_nonoverlapping(src.ptr.add(src_off), dst.ptr.add(dst_off), row_bytes);
     }
 }
@@ -352,18 +433,42 @@ pub unsafe fn stretch_blit(
     // Fixed-point 16.16 scale ratios.
     let scale_x = (src_w << 16) / dst_w;
     let scale_y = (src_h << 16) / dst_h;
+
+    // Cache the last rendered (source-row index, destination-row pointer) pair so
+    // that consecutive destination rows mapping to the same source row can be
+    // filled by memcpy instead of re-sampling.
+    let mut prev_row: Option<(usize, *const u8)> = None;
+
     for dy in 0..dst_h {
         let sy = ((dy * scale_y) >> 16).min(src_h.saturating_sub(1));
+        let dst_off = (dy0 + dy).saturating_mul(dst_stride) + dx0.saturating_mul(bpp);
+        if dst_off + dst_w * bpp > dst.size {
+            break;
+        }
+        let dst_row = dst.ptr.add(dst_off);
+
+        if let Some((last_sy, last_row)) = prev_row {
+            if sy == last_sy {
+                // Same source row as previous → replicate by memcpy.
+                core::ptr::copy_nonoverlapping(last_row, dst_row, dst_w * bpp);
+                continue;
+            }
+        }
+
+        // Precompute the base byte offset for this source row.
+        let src_row_base = (sy0 + sy).saturating_mul(src_stride) + sx0.saturating_mul(bpp);
+
         for dx in 0..dst_w {
             let sx = ((dx * scale_x) >> 16).min(src_w.saturating_sub(1));
-            let src_off = (sy0 + sy).saturating_mul(src_stride) + (sx0 + sx).saturating_mul(bpp);
-            let dst_off = (dy0 + dy).saturating_mul(dst_stride) + (dx0 + dx).saturating_mul(bpp);
-            if src_off + bpp > src.size || dst_off + bpp > dst.size {
+            let src_off = src_row_base + sx.saturating_mul(bpp);
+            if src_off + bpp > src.size {
                 continue;
             }
             let px = core::ptr::read_unaligned(src.ptr.add(src_off) as *const u32);
-            core::ptr::write_unaligned(dst.ptr.add(dst_off) as *mut u32, px);
+            core::ptr::write_unaligned(dst_row.add(dx.saturating_mul(bpp)) as *mut u32, px);
         }
+
+        prev_row = Some((sy, dst_row as *const u8));
     }
 }
 
@@ -374,6 +479,9 @@ pub unsafe fn stretch_blit(
 /// `global_alpha` is multiplied with the source pixel's own alpha before
 /// compositing.  A value of 0 produces a no-op; 255 composites with the
 /// source's intrinsic alpha only.
+///
+/// Large rectangles are split into `TILE_DIM × TILE_DIM` tiles to keep
+/// working sets in L1 cache during the read-modify-write blend pass.
 ///
 /// # Safety
 ///
@@ -386,6 +494,9 @@ pub unsafe fn alpha_blit(
     dst_rect: Rect,
     global_alpha: u8,
 ) {
+    if global_alpha == 0 {
+        return;
+    }
     let bpp = src.format.bytes_per_pixel();
     if bpp != 4 || dst.format.bytes_per_pixel() != 4 {
         return;
@@ -409,21 +520,42 @@ pub unsafe fn alpha_blit(
     let dy = dst_rect.y as usize;
     let src_stride = src.stride as usize;
     let dst_stride = dst.stride as usize;
-    for row in 0..copy_h {
-        for col in 0..copy_w {
-            let src_off = (sy + row).saturating_mul(src_stride) + (sx + col).saturating_mul(bpp);
-            let dst_off = (dy + row).saturating_mul(dst_stride) + (dx + col).saturating_mul(bpp);
-            if src_off + bpp > src.size || dst_off + bpp > dst.size {
-                continue;
+    let force_opaque = !src.format.has_alpha();
+
+    // Precompute base byte offsets for the origin of the blend region.
+    let src_base = sy.saturating_mul(src_stride) + sx.saturating_mul(bpp);
+    let dst_base = dy.saturating_mul(dst_stride) + dx.saturating_mul(bpp);
+
+    // Validate that the corners of the blend region are within their buffers.
+    let last_src = src_base + (copy_h - 1).saturating_mul(src_stride) + copy_w.saturating_mul(bpp);
+    let last_dst = dst_base + (copy_h - 1).saturating_mul(dst_stride) + copy_w.saturating_mul(bpp);
+    if last_src > src.size || last_dst > dst.size {
+        return;
+    }
+
+    // Tile-based traversal for cache locality.  For small regions the single
+    // tile covers the whole rect; for large regions (e.g. full-screen) we keep
+    // the active src+dst tile pair inside L1.
+    let mut tile_y = 0;
+    while tile_y < copy_h {
+        let tile_h = (copy_h - tile_y).min(TILE_DIM);
+        let mut tile_x = 0;
+        while tile_x < copy_w {
+            let tile_w = (copy_w - tile_x).min(TILE_DIM);
+            for row in tile_y..tile_y + tile_h {
+                let src_off = src_base + row * src_stride + tile_x * bpp;
+                let dst_off = dst_base + row * dst_stride + tile_x * bpp;
+                alpha_blit_row(
+                    src.ptr.add(src_off) as *const u32,
+                    dst.ptr.add(dst_off) as *mut u32,
+                    tile_w,
+                    global_alpha,
+                    force_opaque,
+                );
             }
-            let s_px = source_argb_for_blend(
-                core::ptr::read_unaligned(src.ptr.add(src_off) as *const u32),
-                src.format,
-            );
-            let d_ptr = dst.ptr.add(dst_off) as *mut u32;
-            let dst_px = core::ptr::read_unaligned(d_ptr);
-            core::ptr::write_unaligned(d_ptr, alpha_over_argb(s_px, dst_px, global_alpha));
+            tile_x += TILE_DIM;
         }
+        tile_y += TILE_DIM;
     }
 }
 
@@ -478,24 +610,29 @@ pub unsafe fn masked_blit(
     let msk_stride = mask.stride as usize;
     let dst_stride = dst.stride as usize;
     let msk_format = mask.format;
+    let use_alpha = msk_format.has_alpha();
+    let force_opaque_src = !src.format.has_alpha();
+
+    // Precompute row base offsets and do a single bounds check.
+    let src_base = sy0.saturating_mul(src_stride) + sx0.saturating_mul(bpp);
+    let msk_base = my0.saturating_mul(msk_stride) + mx0.saturating_mul(msk_bpp);
+    let dst_base = dy0.saturating_mul(dst_stride) + dx0.saturating_mul(bpp);
+    let last_src = src_base + (copy_h - 1).saturating_mul(src_stride) + copy_w.saturating_mul(bpp);
+    let last_msk = msk_base + (copy_h - 1).saturating_mul(msk_stride) + copy_w.saturating_mul(msk_bpp);
+    let last_dst = dst_base + (copy_h - 1).saturating_mul(dst_stride) + copy_w.saturating_mul(bpp);
+    if last_src > src.size || last_msk > mask.size || last_dst > dst.size {
+        return;
+    }
+
     for row in 0..copy_h {
+        let src_row = src.ptr.add(src_base + row * src_stride) as *const u32;
+        let msk_row = mask.ptr.add(msk_base + row * msk_stride) as *const u32;
+        let dst_row = dst.ptr.add(dst_base + row * dst_stride) as *mut u32;
         for col in 0..copy_w {
-            let src_off = (sy0 + row).saturating_mul(src_stride) + (sx0 + col).saturating_mul(bpp);
-            let msk_off =
-                (my0 + row).saturating_mul(msk_stride) + (mx0 + col).saturating_mul(msk_bpp);
-            let dst_off = (dy0 + row).saturating_mul(dst_stride) + (dx0 + col).saturating_mul(bpp);
-            if src_off + bpp > src.size
-                || msk_off + msk_bpp > mask.size
-                || dst_off + bpp > dst.size
-            {
-                continue;
-            }
-            let s_px = source_argb_for_blend(
-                core::ptr::read_unaligned(src.ptr.add(src_off) as *const u32),
-                src.format,
-            );
-            let m_raw = core::ptr::read_unaligned(mask.ptr.add(msk_off) as *const u32);
-            let mask_a = if msk_format.has_alpha() {
+            let s_raw = *src_row.add(col);
+            let s = if force_opaque_src { 0xff00_0000 | (s_raw & 0x00ff_ffff) } else { s_raw };
+            let m_raw = *msk_row.add(col);
+            let mask_a = if use_alpha {
                 ((m_raw >> 24) & 0xff) as u8
             } else {
                 // ITU-R BT.601 luma approximation: Y ≈ 0.299R + 0.587G + 0.114B.
@@ -505,11 +642,11 @@ pub unsafe fn masked_blit(
                 let b = m_raw & 0xff;
                 ((r * 77 + g * 150 + b * 29) >> 8) as u8
             };
-            let d_ptr = dst.ptr.add(dst_off) as *mut u32;
-            let dst_px = core::ptr::read_unaligned(d_ptr);
-            let blended_alpha = scale_alpha((s_px >> 24) as u8, mask_a);
-            let src_with_mask = (s_px & 0x00ff_ffff) | ((blended_alpha as u32) << 24);
-            core::ptr::write_unaligned(d_ptr, alpha_over_argb(src_with_mask, dst_px, 255));
+            let d_ptr = dst_row.add(col);
+            let dst_px = *d_ptr;
+            let blended_alpha = scale_alpha((s >> 24) as u8, mask_a);
+            let src_with_mask = (s & 0x00ff_ffff) | ((blended_alpha as u32) << 24);
+            *d_ptr = alpha_over_argb(src_with_mask, dst_px, 255);
         }
     }
 }
@@ -576,6 +713,223 @@ pub unsafe fn rounded_clip_blit(
             let d_ptr = dst.ptr.add(dst_off) as *mut u32;
             let dst_px = core::ptr::read_unaligned(d_ptr);
             core::ptr::write_unaligned(d_ptr, alpha_over_argb(s_px, dst_px, coverage));
+        }
+    }
+}
+
+// ─── SIMD implementations (x86 / x86_64) ─────────────────────────────────
+
+/// SSE2 and AVX2 fast paths for fill and alpha-blend operations.
+///
+/// All functions in this module are only compiled when the crate's `simd`
+/// feature flag is enabled and the target architecture is x86 or x86_64.
+/// SSE2 is unconditionally available on all x86_64 CPUs; AVX2 is probed at
+/// runtime via a cached CPUID check so there is no need for a compile-time
+/// target-feature flag on the binary.
+#[cfg(all(any(target_arch = "x86", target_arch = "x86_64"), feature = "simd"))]
+mod simd_x86 {
+    #[cfg(target_arch = "x86")]
+    use core::arch::x86::*;
+    #[cfg(target_arch = "x86_64")]
+    use core::arch::x86_64::*;
+    use core::sync::atomic::{AtomicU8, Ordering};
+
+    // Cached AVX2 availability: 0 = unknown, 1 = not available, 2 = available.
+    static AVX2_AVAILABLE: AtomicU8 = AtomicU8::new(0);
+
+    /// Return `true` when the current CPU supports AVX2 (result is cached).
+    pub(crate) fn is_avx2_available() -> bool {
+        let cached = AVX2_AVAILABLE.load(Ordering::Relaxed);
+        if cached != 0 {
+            return cached == 2;
+        }
+        // CPUID leaf 7, sub-leaf 0: EBX bit 5 = AVX2.
+        let cpuid = __cpuid_count(7, 0);
+        let available = (cpuid.ebx & (1 << 5)) != 0;
+        AVX2_AVAILABLE.store(if available { 2 } else { 1 }, Ordering::Relaxed);
+        available
+    }
+
+    /// Dispatch to AVX2 fill (8 px/iter) or SSE2 fill (4 px/iter).
+    #[inline]
+    pub(crate) unsafe fn fill_row(dst: *mut u32, color: u32, count: usize) {
+        if is_avx2_available() {
+            fill_row_avx2(dst, color, count);
+        } else {
+            fill_row_sse2(dst, color, count);
+        }
+    }
+
+    /// Fill `count` u32 slots at `dst` with `color` using AVX2 (8 pixels / iter).
+    #[target_feature(enable = "avx2")]
+    pub(crate) unsafe fn fill_row_avx2(dst: *mut u32, color: u32, count: usize) {
+        let v256 = _mm256_set1_epi32(color as i32);
+        let v128 = _mm_set1_epi32(color as i32);
+        let mut i = 0usize;
+        while i + 8 <= count {
+            _mm256_storeu_si256(dst.add(i) as *mut __m256i, v256);
+            i += 8;
+        }
+        while i + 4 <= count {
+            _mm_storeu_si128(dst.add(i) as *mut __m128i, v128);
+            i += 4;
+        }
+        while i < count {
+            *dst.add(i) = color;
+            i += 1;
+        }
+    }
+
+    /// Fill `count` u32 slots at `dst` with `color` using SSE2 (4 pixels / iter).
+    #[target_feature(enable = "sse2")]
+    pub(crate) unsafe fn fill_row_sse2(dst: *mut u32, color: u32, count: usize) {
+        let v = _mm_set1_epi32(color as i32);
+        let mut i = 0usize;
+        while i + 4 <= count {
+            _mm_storeu_si128(dst.add(i) as *mut __m128i, v);
+            i += 4;
+        }
+        while i < count {
+            *dst.add(i) = color;
+            i += 1;
+        }
+    }
+
+    /// Alpha-blend one row of `count` pixels using SSE2 (4 pixels / iteration).
+    ///
+    /// Implements Porter-Duff "src over dst" with a `global_alpha` multiplier:
+    ///
+    /// ```text
+    /// eff_a   = src_a * global_alpha / 255
+    /// out_rgb = (src_rgb * eff_a  +  dst_rgb * (255 - eff_a)) / 255
+    /// out_A   = 255  (output is always fully opaque)
+    /// ```
+    ///
+    /// Division by 255 uses the fast approximation
+    /// `(t + 1 + (t >> 8)) >> 8` — accurate within ±1 LSB for all values in
+    /// `[0, 255²]` and matching the scalar `alpha_over_argb` function closely.
+    ///
+    /// `force_opaque_src` treats every source pixel's alpha channel as 0xFF,
+    /// which is correct for `Bgrx8888` sources that carry no meaningful alpha.
+    #[target_feature(enable = "sse2")]
+    pub(crate) unsafe fn alpha_blit_row_sse2(
+        src: *const u32,
+        dst: *mut u32,
+        count: usize,
+        global_alpha: u8,
+        force_opaque_src: bool,
+    ) {
+        let zero = _mm_setzero_si128();
+        // Mask that sets the alpha byte (byte 3) of every 4-byte pixel to 0xFF.
+        // Output alpha is always fully opaque to match alpha_over_argb behaviour.
+        let ff_alpha = _mm_set1_epi32(0xFF000000u32 as i32);
+        let ga = _mm_set1_epi16(global_alpha as i16);
+        let one16 = _mm_set1_epi16(1);
+        let max255 = _mm_set1_epi16(255i16);
+
+        let mut i = 0usize;
+
+        // ── vectorised body: 4 pixels per iteration ─────────────────────────
+        while i + 4 <= count {
+            let mut src4 = _mm_loadu_si128(src.add(i) as *const __m128i);
+
+            // Force all source alpha bytes to 0xFF for opaque-only formats.
+            if force_opaque_src {
+                src4 = _mm_or_si128(src4, ff_alpha);
+            }
+
+            let dst4 = _mm_loadu_si128(dst.add(i) as *const __m128i);
+
+            // Unpack src / dst to 16-bit channels (zero-extend each byte).
+            // Layout after unpacklo (pixels 0 & 1):
+            //   word[0]=B0, word[1]=G0, word[2]=R0, word[3]=A0,
+            //   word[4]=B1, word[5]=G1, word[6]=R1, word[7]=A1
+            let src_lo = _mm_unpacklo_epi8(src4, zero);
+            let src_hi = _mm_unpackhi_epi8(src4, zero);
+            let dst_lo = _mm_unpacklo_epi8(dst4, zero);
+            let dst_hi = _mm_unpackhi_epi8(dst4, zero);
+
+            // Broadcast per-pixel source alpha to all four channel lanes.
+            // Shuffle imm8 = 0xFF = (3<<6)|(3<<4)|(3<<2)|3: selects word[3]
+            // (the alpha lane) for all four positions in each 64-bit half,
+            // producing [A0,A0,A0,A0, A1,A1,A1,A1] after both shuffles.
+            const ALPHA_SHUF: i32 = (3 << 6) | (3 << 4) | (3 << 2) | 3; // = 0xFF
+            let alpha_lo = _mm_shufflehi_epi16(
+                _mm_shufflelo_epi16(src_lo, ALPHA_SHUF),
+                ALPHA_SHUF,
+            );
+            let alpha_hi = _mm_shufflehi_epi16(
+                _mm_shufflelo_epi16(src_hi, ALPHA_SHUF),
+                ALPHA_SHUF,
+            );
+
+            // Effective alpha: eff = (alpha * ga + 1 + (alpha * ga >> 8)) >> 8
+            // This is the fast ×/255 approximation used throughout the codebase.
+            let prod_lo = _mm_mullo_epi16(alpha_lo, ga);
+            let prod_hi = _mm_mullo_epi16(alpha_hi, ga);
+            let eff_lo = _mm_srli_epi16(
+                _mm_add_epi16(
+                    _mm_add_epi16(prod_lo, one16),
+                    _mm_srli_epi16(prod_lo, 8),
+                ),
+                8,
+            );
+            let eff_hi = _mm_srli_epi16(
+                _mm_add_epi16(
+                    _mm_add_epi16(prod_hi, one16),
+                    _mm_srli_epi16(prod_hi, 8),
+                ),
+                8,
+            );
+
+            // Inverse alpha: inv = 255 - eff.
+            let inv_lo = _mm_sub_epi16(max255, eff_lo);
+            let inv_hi = _mm_sub_epi16(max255, eff_hi);
+
+            // Blend: t = src * eff + dst * inv
+            let t_lo = _mm_add_epi16(
+                _mm_mullo_epi16(src_lo, eff_lo),
+                _mm_mullo_epi16(dst_lo, inv_lo),
+            );
+            let t_hi = _mm_add_epi16(
+                _mm_mullo_epi16(src_hi, eff_hi),
+                _mm_mullo_epi16(dst_hi, inv_hi),
+            );
+
+            // result = (t + 1 + (t >> 8)) >> 8
+            let res_lo = _mm_srli_epi16(
+                _mm_add_epi16(
+                    _mm_add_epi16(t_lo, one16),
+                    _mm_srli_epi16(t_lo, 8),
+                ),
+                8,
+            );
+            let res_hi = _mm_srli_epi16(
+                _mm_add_epi16(
+                    _mm_add_epi16(t_hi, one16),
+                    _mm_srli_epi16(t_hi, 8),
+                ),
+                8,
+            );
+
+            // Pack 16-bit results back to 8-bit and force alpha to 0xFF.
+            let result = _mm_or_si128(_mm_packus_epi16(res_lo, res_hi), ff_alpha);
+            _mm_storeu_si128(dst.add(i) as *mut __m128i, result);
+
+            i += 4;
+        }
+
+        // ── scalar tail ──────────────────────────────────────────────────────
+        while i < count {
+            let s_raw = *src.add(i);
+            let s = if force_opaque_src {
+                0xff00_0000 | (s_raw & 0x00ff_ffff)
+            } else {
+                s_raw
+            };
+            let d = *dst.add(i);
+            *dst.add(i) = super::alpha_over_argb(s, d, global_alpha);
+            i += 1;
         }
     }
 }
