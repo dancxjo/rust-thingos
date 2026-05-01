@@ -154,6 +154,19 @@ pub fn write_scenario_readme(
                 artifact_links.push(format!("[💾](./{}/registers.txt)", step_num_str));
             }
         }
+        if let Ok(entries) = fs::read_dir(&step.dir) {
+            let mut extra_pngs: Vec<String> = entries
+                .flatten()
+                .filter_map(|entry| entry.file_name().into_string().ok())
+                .filter(|name| {
+                    name.ends_with(".png") && name != "before.png" && name != "after.png"
+                })
+                .collect();
+            extra_pngs.sort();
+            for name in extra_pngs {
+                artifact_links.push(format!("[{}](./{}/{})", name, step_num_str, name));
+            }
+        }
         let artifacts_str = artifact_links.join(" ");
 
         writeln!(

@@ -112,7 +112,8 @@ pub async fn connect_qmp(
 
     let mut buf = vec![0u8; 4096];
     // Wait for the greeting
-    let _ = tokio::time::timeout(std::time::Duration::from_millis(200), stream.read(&mut buf)).await??;
+    let _ = tokio::time::timeout(std::time::Duration::from_millis(200), stream.read(&mut buf))
+        .await??;
 
     execute_on_stream(&mut stream, "{\"execute\": \"qmp_capabilities\"}").await?;
     Ok(stream)

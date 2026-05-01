@@ -6,7 +6,7 @@ use super::helpers::{
     StepError, capture_failure_diagnostics, color_close, default_timeout_secs,
     verify_cursor_pixels, wait_for_clock_pixels, wait_for_clock_ticks, wait_for_perf_report,
 };
-use crate::world::{ThingOsWorld, strip_ansi};
+use crate::world::{ThingOsWorld, shell_prompt_present, strip_ansi};
 
 // ===== Regex Pattern Matching Steps =====
 
@@ -419,22 +419,14 @@ async fn when_press_key(world: &mut ThingOsWorld) {
 
 #[when("I wait for the shell prompt")]
 async fn when_wait_for_shell_prompt(world: &mut ThingOsWorld) -> Result<(), StepError> {
-    // Wait for the prompt character. We use a delay after this to ensure
-    // that any trailing escape sequences (like showing the cursor) have finished.
-    let found = world.wait_for_serial("] / > ", 60.0).await;
-    if !found {
-        return Err(StepError("Timed out waiting for shell prompt".to_string()));
-    }
-    // The prompt is printed after the shell has returned to its read loop. A
-    // short drain is enough for trailing escape sequences without adding a
-    // fixed multi-second tax to every scenario.
-    tokio::time::sleep(std::time::Duration::from_millis(150)).await;
-    Ok(())
+    world.ensure_serial_console_interactive(60.0).await.map_err(|e| StepError(e.to_string()))
 }
 
 #[when(regex = r#"^I type "(.+)" on the serial console$"#)]
 async fn when_type_on_serial(world: &mut ThingOsWorld, text: String) -> Result<(), StepError> {
     eprintln!("│  │  │      ⌨️ Typing on serial: {}", text);
+
+    world.ensure_serial_console_interactive(60.0).await.map_err(|e| StepError(e.to_string()))?;
 
     world.serial_checkpoint = world.get_serial_log().await.len();
     world.last_typed_command = Some(text.clone());
@@ -461,7 +453,7 @@ async fn when_type_on_serial(world: &mut ThingOsWorld, text: String) -> Result<(
         let log = world.get_serial_log().await;
         let start_offset = world.serial_checkpoint.min(log.len());
         let recent = strip_ansi(&log[start_offset..]);
-        if recent.contains("] ") && recent.contains(" > ") {
+        if shell_prompt_present(&recent) {
             break;
         }
         if start.elapsed() >= timeout {
@@ -491,7 +483,7 @@ async fn when_shell_command_succeeds(
         let log = world.get_serial_log().await;
         let start_offset = world.serial_checkpoint.min(log.len());
         let recent = strip_ansi(&log[start_offset..]);
-        if recent.contains(" > ") {
+        if shell_prompt_present(&recent) {
             break;
         }
         if start.elapsed() >= timeout {
