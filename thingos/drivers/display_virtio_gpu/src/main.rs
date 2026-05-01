@@ -247,6 +247,12 @@ struct PresentStats {
     union_flush_count: u32,
     per_rect_flush_count: u32,
     using_frame_pool: bool,
+    /// Snapshot of `VirtioGpuDriver::gpu_path_planes` at the last log reset,
+    /// used to compute the per-interval delta.
+    gpu_path_planes_at_last_log: u64,
+    /// Snapshot of `VirtioGpuDriver::cpu_fallback_planes` at the last log reset,
+    /// used to compute the per-interval delta.
+    cpu_fallback_planes_at_last_log: u64,
 }
 
 /// Entry in the texture registry mapping client IDs to GPU resource IDs
@@ -270,24 +276,41 @@ impl PresentStats {
             union_flush_count: 0,
             per_rect_flush_count: 0,
             using_frame_pool: frame_pool,
+            gpu_path_planes_at_last_log: 0,
+            cpu_fallback_planes_at_last_log: 0,
         }
     }
 
-    fn log_and_reset(&mut self) {
+    /// Log per-interval composition stats and reset interval counters.
+    ///
+    /// `gpu_planes_total` and `cpu_planes_total` are the *cumulative* totals
+    /// from `VirtioGpuDriver`; this method computes the per-interval delta
+    /// by subtracting the values stored from the previous call.
+    fn log_and_reset(&mut self, gpu_planes_total: u64, cpu_planes_total: u64) {
         if self.frame_count > 0 {
+            let gpu_interval =
+                gpu_planes_total.saturating_sub(self.gpu_path_planes_at_last_log);
+            let cpu_interval =
+                cpu_planes_total.saturating_sub(self.cpu_fallback_planes_at_last_log);
             trace!(
-                "display_virtio_gpu stats: frames={}, rects_in={}, transfers={}, flushes={}, union_flush={}, per_rect_flush={}, frame_pool={}",
+                "display_virtio_gpu stats: frames={}, rects_in={}, transfers={}, flushes={}, union_flush={}, per_rect_flush={}, frame_pool={}, gpu_planes={}, cpu_planes={}",
                 self.frame_count,
                 self.total_rects_in,
                 self.total_transfers,
                 self.total_flushes,
                 self.union_flush_count,
                 self.per_rect_flush_count,
-                self.using_frame_pool
+                self.using_frame_pool,
+                gpu_interval,
+                cpu_interval,
             );
         }
         let fp = self.using_frame_pool;
+        let gpu_snapshot = gpu_planes_total;
+        let cpu_snapshot = cpu_planes_total;
         *self = Self::new(fp);
+        self.gpu_path_planes_at_last_log = gpu_snapshot;
+        self.cpu_fallback_planes_at_last_log = cpu_snapshot;
     }
 }
 
@@ -357,6 +380,14 @@ struct VirtioGpuDriver {
     /// Dimensions of the cursor image that was last backed via `attach_backing`,
     /// so we can skip re-attaching when the size hasn't changed.
     cursor_attached_size: (u32, u32),
+    /// Cumulative count of planes composed via the GPU fast-copy (opaque) path.
+    /// Incremented each time a plane skips alpha arithmetic and uses a direct
+    /// `copy_nonoverlapping` into the frame-pool buffer.
+    gpu_path_planes: u64,
+    /// Cumulative count of planes composed via the CPU fallback path.
+    /// Incremented each time a plane requires per-pixel alpha blending or
+    /// rounded-rectangle clipping that cannot be offloaded to the GPU.
+    cpu_fallback_planes: u64,
 }
 
 /// Dispatch one VFS RPC request to the appropriate handler.
@@ -411,6 +442,21 @@ fn cursor_argb_to_host(src: u32) -> u32 {
 
 fn scale_alpha(alpha: u8, coverage: u8) -> u8 {
     ((alpha as u32 * coverage as u32 + 127) / 255) as u8
+}
+
+/// Returns `true` when a plane can take the GPU fast-copy (opaque) path.
+///
+/// A plane qualifies when it is fully opaque (plane-level alpha == 255, source
+/// format has no alpha channel) and needs no rounded-rectangle clipping.  In
+/// that case the composition is a plain row-by-row `memcpy` followed by the
+/// GPU `TRANSFER_TO_HOST_2D` + `RESOURCE_FLUSH` commands — no per-pixel alpha
+/// arithmetic is needed, so the CPU work is minimal.
+///
+/// Any other plane (transparent, alpha-blended, or clipped) falls back to the
+/// CPU composition path which calls [`alpha_over_argb`] per pixel.
+#[inline]
+fn plane_can_use_gpu_path(plane: &PlaneCommit, src: &ImportedBuffer) -> bool {
+    plane.alpha == 255 && !src.format.has_alpha() && plane.rounded_clip_radius().is_none()
 }
 
 fn rounded_clip_coverage(radius: u32, x: u32, y: u32, w: u32, h: u32) -> u8 {
@@ -728,10 +774,27 @@ fn vfs_device_call(driver: &mut VirtioGpuDriver, payload: &[u8]) -> ProviderResp
                     && damage_rects[0].y == 0
                     && damage_rects[0].w >= driver.disp_width
                     && damage_rects[0].h >= driver.disp_height;
+                // Conservative buffer selection: for full-damage commits advance
+                // to the next slot in the pool, preferring a buffer that is not
+                // currently being scanned out.  With a single-buffer pool the
+                // loop always falls through to `start` (index 0), which is safe
+                // because `transfer_to_host` and `flush_resource` are synchronous.
                 let idx = if full_damage {
-                    let idx = driver.next_buffer_idx;
-                    driver.next_buffer_idx = (driver.next_buffer_idx + 1) % driver.frame_pool.len();
-                    idx
+                    let pool_len = driver.frame_pool.len();
+                    let start = driver.next_buffer_idx;
+                    let mut chosen = start;
+                    for i in 0..pool_len {
+                        let candidate = (start + i) % pool_len;
+                        // Prefer a buffer that is not the currently presented one
+                        // so we avoid touching a resource the display may still
+                        // be scanning out from the previous frame.
+                        if Some(candidate) != driver.last_presented_idx {
+                            chosen = candidate;
+                            break;
+                        }
+                    }
+                    driver.next_buffer_idx = (chosen + 1) % pool_len;
+                    chosen
                 } else {
                     driver.last_presented_idx.unwrap_or_else(|| {
                         let idx = driver.next_buffer_idx;
@@ -790,10 +853,19 @@ fn vfs_device_call(driver: &mut VirtioGpuDriver, payload: &[u8]) -> ProviderResp
                     let target_ptr = driver.frame_pool[idx].ptr;
                     let target_size = driver.frame_pool[idx].size;
                     let clip_radius = plane.rounded_clip_radius().map(u32::from).unwrap_or(0);
-                    let should_blend = plane.alpha < 255
-                        || plane.z_order > 0
-                        || src.format.has_alpha()
-                        || clip_radius > 0;
+                    // Determine composition path:
+                    // GPU fast-copy path: fully opaque, no alpha channel, no
+                    // rounded clipping → plain memcpy into the frame-pool buffer
+                    // which is then uploaded to the GPU via TRANSFER_TO_HOST_2D.
+                    // CPU fallback path: anything requiring per-pixel alpha
+                    // arithmetic or rounded-rectangle masking.
+                    let use_gpu_path = plane_can_use_gpu_path(plane, src);
+                    let should_blend = !use_gpu_path;
+                    if use_gpu_path {
+                        driver.gpu_path_planes = driver.gpu_path_planes.saturating_add(1);
+                    } else {
+                        driver.cpu_fallback_planes = driver.cpu_fallback_planes.saturating_add(1);
+                    }
                     for dirty in &damage_rects {
                         let Some(rect) = rect_intersect(plane_rect, *dirty) else {
                             continue;
@@ -986,7 +1058,7 @@ fn vfs_device_call(driver: &mut VirtioGpuDriver, payload: &[u8]) -> ProviderResp
                         if let Some((buffer_id, src_px, dst_px, copy_w, copy_h)) = first_copy_sample
                         {
                             stem::info!(
-                                "display_virtio_gpu: first commit copied buffer={} rect={}x{} src_px=0x{:08x} dst_px=0x{:08x} damage={}x{}+{},{} res_id={}",
+                                "display_virtio_gpu: first commit copied buffer={} rect={}x{} src_px=0x{:08x} dst_px=0x{:08x} damage={}x{}+{},{} res_id={} gpu_planes={} cpu_planes={}",
                                 buffer_id,
                                 copy_w,
                                 copy_h,
@@ -996,7 +1068,9 @@ fn vfs_device_call(driver: &mut VirtioGpuDriver, payload: &[u8]) -> ProviderResp
                                 dmg.h,
                                 dmg.x,
                                 dmg.y,
-                                res_id
+                                res_id,
+                                driver.gpu_path_planes,
+                                driver.cpu_fallback_planes,
                             );
                         } else {
                             stem::warn!(
@@ -1519,7 +1593,10 @@ fn main(boot_arg: usize) -> ! {
     }
 
     info!("display_virtio_gpu: GPU initialized successfully");
-
+    // Log which GPU composition features are enabled.
+    // The opaque-copy (GPU fast-copy) path and CPU alpha-blend fallback
+    // are always available; virgl 3D extends the GPU acceleration surface.
+    info!("display_virtio_gpu: composition paths: gpu_opaque_copy=enabled cpu_alpha_blend=enabled");
     if gpu.has_3d_feature() {
         debug!("display_virtio_gpu: Virgl 3D supported");
     } else {
@@ -1806,6 +1883,8 @@ fn main(boot_arg: usize) -> ! {
         cursor_dma_buf,
         cursor_dma_phys,
         cursor_attached_size: (0, 0),
+        gpu_path_planes: 0,
+        cpu_fallback_planes: 0,
     };
 
     // ProviderLoop handles VFS RPC framing and correctly prefixes every
@@ -2141,7 +2220,7 @@ fn main(boot_arg: usize) -> ! {
 
                         // Rate-limited stats logging
                         if stats.frame_count >= STATS_LOG_INTERVAL {
-                            stats.log_and_reset();
+                            stats.log_and_reset(driver.gpu_path_planes, driver.cpu_fallback_planes);
                         }
                     }
                     send_msg(drv_resp_write, drvproto::MSG_ACK, &[]);

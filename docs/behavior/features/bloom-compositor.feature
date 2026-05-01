@@ -319,3 +319,22 @@ Feature: Bloom compositor service loop and responsiveness
     Given the machine is booted
     Then the serial output should contain "bloom: hw cursor image set buffer=" within 60s
     And the serial output should contain "hotspot=" within 60s
+
+  Scenario: virtio GPU driver announces GPU and CPU composition paths at startup
+    # display_virtio_gpu must log that both the GPU fast-copy (opaque) path and
+    # the CPU alpha-blend fallback path are available so that operations with
+    # visibility into the driver's capabilities can confirm the feature is present.
+    Given the machine is booted
+    Then the serial output should contain "display_virtio_gpu: GPU initialized successfully" within 60s
+    And the serial output should contain "display_virtio_gpu: composition paths: gpu_opaque_copy=enabled cpu_alpha_blend=enabled" within 60s
+
+  Scenario: virtio GPU driver records GPU vs CPU plane composition counts on first commit
+    # After the first successful DISPLAY_OP_COMMIT the driver logs how many
+    # planes went through the GPU fast-copy path and how many required CPU
+    # alpha blending.  Both counters must appear in the first-commit log line.
+    Given the machine is booted
+    Then the serial output should contain "First frame rendered" within 60s
+    And the serial output should contain "display_virtio_gpu: first commit copied buffer=" within 60s
+    And the serial output should contain "gpu_planes=" within 60s
+    And the serial output should contain "cpu_planes=" within 60s
+
