@@ -67,3 +67,30 @@ Feature: xHCI userspace driver
   @timeout-120s
   Scenario: SET_CONFIGURATION completes successfully
     Then the serial output should contain "usb: set configuration" within 120s
+
+  @smoke
+  @timeout-120s
+  Scenario: USB Mass Storage interface is detected
+    Then the serial output should contain "ums: device attached" within 120s
+
+  @smoke
+  @timeout-120s
+  Scenario: SCSI INQUIRY returns vendor and product strings
+    Then the serial output should contain "ums: vendor=" within 120s
+    And the serial output should contain "product=" within 120s
+
+  @smoke
+  @timeout-120s
+  Scenario: READ CAPACITY(10) reports sector count and sector size
+    Then the serial output should contain "ums: capacity " within 120s
+    And the serial output should contain "sector_size=512" within 120s
+
+  @smoke
+  @timeout-120s
+  Scenario: READ(10) LBA 0 succeeds
+    Then the serial output should contain "ums: READ(10) lba=0 count=1 ok" within 120s
+
+  @smoke
+  @timeout-120s
+  Scenario: REQUEST SENSE is invoked on TEST UNIT READY CHECK CONDITION
+    Then the serial output should contain "ums: REQUEST SENSE key=" within 120s

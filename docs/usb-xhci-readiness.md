@@ -52,7 +52,7 @@ SCSI transparent command set over Bulk-Only Transport.
 | CSW structure | Implemented, not runtime-proven | BOT status wrapper validation path exists. |
 | SCSI INQUIRY | Implemented, not runtime-proven | Vendor/product log site exists. |
 | SCSI TEST UNIT READY | Implemented, not runtime-proven | Command path exists. |
-| SCSI REQUEST SENSE | Not implemented | Required by scope, still missing. |
+| SCSI REQUEST SENSE | Implemented, not runtime-proven | `scsi_request_sense` issues opcode 0x03 via BOT; auto-invoked on CHECK CONDITION. |
 | SCSI READ CAPACITY(10) | Implemented, not runtime-proven | Capacity and sector-size log site exists. |
 | SCSI READ(10) | Implemented, not runtime-proven | LBA read path and first-sector dump log site exist. |
 | QEMU acceptance | Not ready | No `ums:` logs were observed because xHCI did not start. |
@@ -101,7 +101,7 @@ Golden path verdict: **not ready**.
 - xHCI register and DMA bring-up code exists.
 - Root-port enumeration code exists.
 - USB descriptor parsing code exists.
-- USB Mass Storage BOT read-only code mostly exists.
+- USB Mass Storage BOT read-only code is complete (INQUIRY, TEST UNIT READY, REQUEST SENSE, READ CAPACITY(10), READ(10)).
 - A first `/dev/block/usb0` raw provider exists.
 
 ## Not ready yet
@@ -109,7 +109,6 @@ Golden path verdict: **not ready**.
 - QEMU xHCI driver binding/spawning.
 - Runtime proof of root-port reset and descriptor enumeration.
 - Runtime proof of Enable Slot, Address Device, and EP0 control transfers.
-- `REQUEST SENSE`.
 - Runtime proof of Mass Storage BOT commands.
 - `/dev/disk/*` aliases for USB storage.
 - Partition scanner integration for USB storage.
@@ -129,16 +128,13 @@ Golden path verdict: **not ready**.
    Target logs for VID, PID, USB version, configuration count, interface
    descriptors, and endpoint descriptors.
 
-4. Add `REQUEST SENSE`.
-   This closes the remaining required SCSI command in the read-only BOT scope.
-
-5. Prove BOT with QEMU.
+4. Prove BOT with QEMU.
    Target `INQUIRY`, `READ CAPACITY(10)`, and `READ(10)` LBA 0.
 
-6. Wire the raw USB block provider into the existing disk path.
+5. Wire the raw USB block provider into the existing disk path.
    Start with `/dev/block/usb0`, then add `/dev/disk/usb0` and
    `/dev/disk/by-bus/usb0`.
 
-7. Connect partition and filesystem mounting.
+6. Connect partition and filesystem mounting.
    The next meaningful acceptance target is reading LBA 0 through the partition
    scanner, then mounting a FAT partition read-only.

@@ -1180,8 +1180,11 @@ impl UsbMassStorage {
         let inquiry = self.scsi_inquiry(xhci)?;
         let vendor = ascii_field(&inquiry, 8, 8);
         let product = ascii_field(&inquiry, 16, 16);
-        info!("ums: INQUIRY vendor=\"{}\" product=\"{}\"", vendor, product);
-        let _ = self.scsi_test_unit_ready(xhci);
+        info!("ums: vendor=\"{}\" product=\"{}\"", vendor, product);
+        if let Err(e) = self.scsi_test_unit_ready(xhci) {
+            info!("ums: TEST UNIT READY failed ({}), issuing REQUEST SENSE", e);
+            let _ = self.scsi_request_sense(xhci);
+        }
         let (sectors, sector_size) = self.scsi_read_capacity_10(xhci)?;
         self.sector_count = sectors;
         self.sector_size = sector_size;
@@ -1236,6 +1239,43 @@ impl UsbMassStorage {
         self.bot_command(xhci, &cdb, 6, 0, false).map(|_| ())
     }
 
+    /// SCSI REQUEST SENSE (opcode 0x03).
+    ///
+    /// Retrieves up to 18 bytes of sense data from the device and logs the
+    /// sense key, ASC, and ASCQ fields.  Returns `Ok(())` on success; the
+    /// caller does not need to inspect the sense data to continue.
+    fn scsi_request_sense(&mut self, xhci: &mut XhciController) -> Result<(), &'static str> {
+        const SENSE_LEN: usize = 18;
+        // Fixed-format sense data field offsets (SPC-4 Table 28).
+        const SENSE_KEY_OFFSET: usize = 2;
+        const SENSE_ASC_OFFSET: usize = 12;
+        const SENSE_ASCQ_OFFSET: usize = 13;
+        // ASCQ is at offset 13, so we need at least 14 bytes to read it.
+        const MIN_SENSE_DATA_LEN: usize = SENSE_ASCQ_OFFSET + 1;
+        const SCSI_CDB_6_LEN: u8 = 6;
+
+        let mut cdb = [0u8; 16];
+        cdb[0] = 0x03; // REQUEST SENSE
+        cdb[4] = SENSE_LEN as u8;
+        // Use bot_transfer_raw to avoid recursive autosense on sense failure.
+        let (got, _) = self.bot_transfer_raw(xhci, &cdb, SCSI_CDB_6_LEN, SENSE_LEN, true)?;
+        let valid = got.min(SENSE_LEN);
+        if valid < MIN_SENSE_DATA_LEN {
+            warn!("ums: REQUEST SENSE returned only {} bytes", valid);
+            return Ok(());
+        }
+        let mut sense = [0u8; SENSE_LEN];
+        self.data.read_bytes(valid, &mut sense[..valid]);
+        let sense_key = sense[SENSE_KEY_OFFSET] & 0x0f;
+        let asc = sense[SENSE_ASC_OFFSET];
+        let ascq = sense[SENSE_ASCQ_OFFSET];
+        info!(
+            "ums: REQUEST SENSE key=0x{:02x} asc=0x{:02x} ascq=0x{:02x}",
+            sense_key, asc, ascq
+        );
+        Ok(())
+    }
+
     fn scsi_read_capacity_10(
         &mut self,
         xhci: &mut XhciController,
@@ -1261,6 +1301,31 @@ impl UsbMassStorage {
         data_len: usize,
         data_in: bool,
     ) -> Result<usize, &'static str> {
+        let (transferred, csw_status) =
+            self.bot_transfer_raw(xhci, cdb, cdb_len, data_len, data_in)?;
+        if csw_status == 0x01 {
+            // CHECK CONDITION – retrieve sense data before returning the error.
+            let _ = self.scsi_request_sense(xhci);
+            return Err("CSW command failed");
+        }
+        if csw_status != 0x00 {
+            return Err("CSW command failed");
+        }
+        Ok(transferred)
+    }
+
+    /// Raw BOT transfer: CBW → (optional data phase) → CSW.
+    ///
+    /// Returns `(bytes_transferred, csw_status)` where `csw_status` is the
+    /// bCSWStatus field (0=Good, 1=Check Condition, 2=Phase Error).
+    fn bot_transfer_raw(
+        &mut self,
+        xhci: &mut XhciController,
+        cdb: &[u8; 16],
+        cdb_len: u8,
+        data_len: usize,
+        data_in: bool,
+    ) -> Result<(usize, u8), &'static str> {
         let tag = self.next_tag();
         let mut cbw = [0u8; 31];
         cbw[0..4].copy_from_slice(&CBW_SIGNATURE.to_le_bytes());
@@ -1301,10 +1366,7 @@ impl UsbMassStorage {
         if le32(&csw[4..8]) != tag {
             return Err("CSW tag mismatch");
         }
-        if csw[12] != 0 {
-            return Err("CSW command failed");
-        }
-        Ok(transferred)
+        Ok((transferred, csw[12]))
     }
 
     fn next_tag(&mut self) -> u32 {
