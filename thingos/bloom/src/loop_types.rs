@@ -173,6 +173,7 @@ pub struct BloomLoop {
     services: Vec<Box<dyn BloomService>>,
     regs: Vec<Registration>,
     frame_clock: FrameClock,
+    next_display_poll_ns: u64,
     /// Pending one-shot timers, kept in ascending expiry order.
     ///
     /// Using `VecDeque` so that draining the front (soonest timer) is O(1).
@@ -182,11 +183,13 @@ pub struct BloomLoop {
 impl BloomLoop {
     /// Create a new `BloomLoop` with the given frame clock.
     pub fn new(frame_clock: FrameClock) -> Self {
+        let next_display_poll_ns = monotonic_ns().saturating_add(DISPLAY_POLL_INTERVAL_NS);
         Self {
             wait_set: WaitSet::new(),
             services: Vec::new(),
             regs: Vec::new(),
             frame_clock,
+            next_display_poll_ns,
             timers: VecDeque::new(),
         }
     }
@@ -270,21 +273,38 @@ impl BloomLoop {
     ///
     /// All comparisons are done at nanosecond precision to preserve the full
     /// 16.67 ms frame interval without millisecond rounding.
-    fn next_timeout(&self) -> Option<core::time::Duration> {
+    fn next_timeout(&self, world: &BloomWorld) -> Option<core::time::Duration> {
         let frame_ns = self.frame_clock.next_deadline_ns();
         let timer_ns = self.timers.front().map(|t| {
             let now = monotonic_ns();
             t.expiry_ns.saturating_sub(now)
         });
+        let session_ns = world.next_session_fs_sync_delay_ns();
 
-        let poll_ns = DISPLAY_POLL_INTERVAL_NS;
-        let ns = match (frame_ns, timer_ns) {
-            (None, None) => poll_ns,
-            (Some(ns), None) => ns.min(poll_ns),
-            (None, Some(ns)) => ns.min(poll_ns),
-            (Some(fns), Some(tns)) => fns.min(tns).min(poll_ns),
+        let poll_ns = {
+            let now = monotonic_ns();
+            self.next_display_poll_ns.saturating_sub(now)
         };
+        let ns = frame_ns
+            .into_iter()
+            .chain(timer_ns)
+            .chain(session_ns)
+            .fold(poll_ns, |soonest, ns| soonest.min(ns));
         Some(core::time::Duration::from_nanos(ns))
+    }
+
+    fn poll_display_if_due(&mut self, world: &mut BloomWorld) -> bool {
+        let now = monotonic_ns();
+        if now < self.next_display_poll_ns {
+            return false;
+        }
+        self.next_display_poll_ns = now.saturating_add(DISPLAY_POLL_INTERVAL_NS);
+        if world.refresh_display_output() {
+            self.frame_clock.request_immediate_repaint();
+            true
+        } else {
+            false
+        }
     }
 
     /// Apply a `LoopAction` returned by a service dispatch.
@@ -341,13 +361,12 @@ impl BloomLoop {
         let mut wake_requested = false;
         let mut first_frame_rendered = false;
         loop {
-            let mut display_polled = false;
             // ── 1. Wait for the next event ────────────────────────────────
             let timeout = if wake_requested {
                 wake_requested = false;
                 Some(core::time::Duration::ZERO)
             } else {
-                self.next_timeout()
+                self.next_timeout(world)
             };
 
             let events = if self.wait_set.is_empty() {
@@ -377,11 +396,6 @@ impl BloomLoop {
             // ── 2. Dispatch ready FD events ───────────────────────────────
             if events.is_empty() {
                 // Timeout elapsed: could be frame deadline or a timer expiry.
-                if world.refresh_display_output() {
-                    self.frame_clock.request_immediate_repaint();
-                    wake_requested = true;
-                }
-                display_polled = true;
             } else {
                 for ev in events {
                     let svc_idx =
@@ -398,11 +412,6 @@ impl BloomLoop {
             // ── 3. Fire elapsed one-shot timers ───────────────────────────
             let (_fired, timer_wake) = self.fire_due_timers(world);
             wake_requested |= timer_wake;
-
-            if !display_polled && world.refresh_display_output() {
-                self.frame_clock.request_immediate_repaint();
-                wake_requested = true;
-            }
 
             // ── 4. Poll background reload state ───────────────────────────
             if world.visuals.poll_ready_background(&world.display) {
@@ -433,6 +442,16 @@ impl BloomLoop {
                     self.frame_clock.request_repaint();
                 }
             }
+
+            // ── 6. Housekeeping ───────────────────────────────────────────
+            //
+            // These paths can perform synchronous VFS/display RPC.  Keep them
+            // after the repaint phase so input/client events that already made
+            // a frame due are not delayed by diagnostics or output probing.
+            if self.poll_display_if_due(world) {
+                wake_requested = true;
+            }
+            world.publish_wayland_session_fs_if_due();
         }
     }
 }

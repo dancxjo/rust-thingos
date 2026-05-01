@@ -5,9 +5,11 @@
 //! individual references.  The convenience methods on `BloomWorld` handle the
 //! cases where multiple fields must be borrowed simultaneously.
 
+use alloc::string::String;
 use alloc::vec::Vec;
 
 use stem::syscall::port_send_all;
+use stem::time::monotonic_ns;
 
 use crate::cache::ResourceCache;
 use crate::compositor::cull_composition;
@@ -23,6 +25,7 @@ use crate::scene::{CommitResult, CompositionEntry, Scene, SurfaceBuffer};
 use crate::session_fs;
 
 const ENABLE_HARDWARE_CURSOR: bool = false;
+const SESSION_FS_SYNC_INTERVAL_NS: u64 = 1_000_000_000;
 
 /// All mutable compositor state owned by the main loop.
 pub struct BloomWorld {
@@ -47,6 +50,8 @@ pub struct BloomWorld {
     last_active_id: Option<u32>,
     /// Frame counter used to schedule periodic cache-stats logging.
     frame_count: u64,
+    pending_session_event: Option<String>,
+    next_session_sync_ns: u64,
 }
 
 impl BloomWorld {
@@ -79,6 +84,8 @@ impl BloomWorld {
             wayland_evt_write: None,
             last_active_id: None,
             frame_count: 0,
+            pending_session_event: None,
+            next_session_sync_ns: 0,
         }
     }
 
@@ -313,13 +320,34 @@ impl BloomWorld {
         true
     }
 
-    pub fn sync_wayland_session_fs(&self, event: alloc::string::String) {
-        session_fs::sync_scene(&self.scene, &event);
+    pub fn sync_wayland_session_fs(&mut self, event: alloc::string::String) {
+        self.pending_session_event = Some(event);
+        if self.next_session_sync_ns == 0 {
+            self.next_session_sync_ns = monotonic_ns().saturating_add(SESSION_FS_SYNC_INTERVAL_NS);
+        }
     }
 
-    pub fn remove_wayland_session_surface(&self, surface_id: u32, event: alloc::string::String) {
+    pub fn remove_wayland_session_surface(
+        &mut self,
+        surface_id: u32,
+        event: alloc::string::String,
+    ) {
         session_fs::remove_surface(surface_id, &event);
-        session_fs::sync_scene(&self.scene, &event);
+        self.sync_wayland_session_fs(event);
+    }
+
+    pub fn next_session_fs_sync_delay_ns(&self) -> Option<u64> {
+        self.pending_session_event.as_ref()?;
+        Some(self.next_session_sync_ns.saturating_sub(monotonic_ns()))
+    }
+
+    pub fn publish_wayland_session_fs_if_due(&mut self) {
+        if self.pending_session_event.is_none() || monotonic_ns() < self.next_session_sync_ns {
+            return;
+        }
+        let event = self.pending_session_event.take().unwrap_or_default();
+        session_fs::sync_scene_summary(&self.scene, &event);
+        self.next_session_sync_ns = 0;
     }
 
     pub fn apply_surface_visual_damage(

@@ -296,6 +296,7 @@ impl InputState {
                     return true;
                 }
                 self.update_cursor_kind(scene, damage);
+                immediate_repaint = true;
                 // Coalesce: keep only the latest timestamp; focus lookup and
                 // client delivery are deferred to flush_pointer_motion() which
                 // is called once per frame boundary.

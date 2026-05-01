@@ -538,6 +538,10 @@ fn has_frame_count_evidence(log: &str) -> bool {
     })
 }
 
+fn occurrence_count(haystack: &str, needle: &str) -> usize {
+    if needle.is_empty() { 0 } else { haystack.matches(needle).count() }
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -595,6 +599,12 @@ mod tests {
     #[test]
     fn frame_count_evidence_rejects_unrelated_logs() {
         assert!(!has_frame_count_evidence("[INFO] shell ready\n[INFO] vfs mounted"));
+    }
+
+    #[test]
+    fn occurrence_count_counts_non_overlapping_matches() {
+        assert_eq!(occurrence_count("GET_INFO\nGET_INFO\nCOMMIT", "GET_INFO"), 2);
+        assert_eq!(occurrence_count("GET_INFO", ""), 0);
     }
 }
 
@@ -655,6 +665,35 @@ async fn latest_serial_contains(
     Ok(())
 }
 
+#[then(regex = r#"^the latest serial output should contain at most (\d+) occurrences of "(.+)"$"#)]
+async fn latest_serial_contains_at_most_occurrences(
+    world: &mut ThingOsWorld,
+    max_count: usize,
+    expected: String,
+) -> Result<(), StepError> {
+    let log = world.get_serial_log().await;
+    let recent = latest_command_output(world, &log);
+    let clean = strip_ansi(&recent);
+    let count = occurrence_count(&clean, &expected);
+
+    if count > max_count {
+        eprintln!("\n=== Too many occurrences in latest serial output ===");
+        eprintln!("Pattern: {}", expected);
+        eprintln!("Count: {} (max {})", count, max_count);
+        eprintln!("\n=== Recent Serial Output (since last command) ===");
+        for line in clean.lines().rev().take(80).collect::<Vec<_>>().into_iter().rev() {
+            eprintln!(">>> {}", line);
+        }
+        eprintln!("=== End Recent Output ===\n");
+        return Err(StepError(format!(
+            "Expected latest serial output to contain at most {} occurrences of '{}', found {}",
+            max_count, expected, count
+        )));
+    }
+
+    Ok(())
+}
+
 #[then(regex = r#"^the output contains "(.+)"$"#)]
 async fn then_output_contains(world: &mut ThingOsWorld, expected: String) -> Result<(), StepError> {
     latest_serial_contains(world, expected).await
@@ -688,7 +727,8 @@ async fn latest_serial_contains_within(
 
 #[when(regex = r#"^I click at (\d+), (\d+)$"#)]
 async fn when_click_at(world: &mut ThingOsWorld, x: i32, y: i32) -> Result<(), StepError> {
-    let qmp = world.qmp_control.as_ref().ok_or_else(|| StepError("No QMP connection".to_string()))?;
+    let qmp =
+        world.qmp_control.as_ref().ok_or_else(|| StepError("No QMP connection".to_string()))?;
     let mut stream = ThingOsWorld::connect_qmp(qmp).await.map_err(|e| StepError(e.to_string()))?;
 
     // Move to coordinates
@@ -697,18 +737,24 @@ async fn when_click_at(world: &mut ThingOsWorld, x: i32, y: i32) -> Result<(), S
         (x as f64 * 32768.0 / 1920.0) as u32,
         (y as f64 * 32768.0 / 1080.0) as u32
     );
-    crate::artifacts::qmp::execute_on_stream(&mut stream, &move_cmd).await.map_err(|e| StepError(e.to_string()))?;
+    crate::artifacts::qmp::execute_on_stream(&mut stream, &move_cmd)
+        .await
+        .map_err(|e| StepError(e.to_string()))?;
 
     // Press left button
     let down_cmd = r#"{"execute": "input-send-event", "arguments": {"events": [{"type": "btn", "data": {"down": true, "button": "left"}}]}}"#;
-    crate::artifacts::qmp::execute_on_stream(&mut stream, &down_cmd).await.map_err(|e| StepError(e.to_string()))?;
+    crate::artifacts::qmp::execute_on_stream(&mut stream, &down_cmd)
+        .await
+        .map_err(|e| StepError(e.to_string()))?;
 
     // Wait a bit
     tokio::time::sleep(std::time::Duration::from_millis(100)).await;
 
     // Release left button
     let up_cmd = r#"{"execute": "input-send-event", "arguments": {"events": [{"type": "btn", "data": {"down": false, "button": "left"}}]}}"#;
-    crate::artifacts::qmp::execute_on_stream(&mut stream, &up_cmd).await.map_err(|e| StepError(e.to_string()))?;
+    crate::artifacts::qmp::execute_on_stream(&mut stream, &up_cmd)
+        .await
+        .map_err(|e| StepError(e.to_string()))?;
 
     Ok(())
 }
@@ -822,6 +868,24 @@ async fn when_move_mouse(world: &mut ThingOsWorld) {
     } else {
         eprintln!("│  │  │      ⚠️ No QMP connection for mouse input");
     }
+}
+
+#[when(regex = r#"^I move the mouse (\d+) times$"#)]
+async fn when_move_mouse_times(world: &mut ThingOsWorld, count: u32) -> Result<(), StepError> {
+    if world.qmp_control.is_none() {
+        return Err(StepError("No QMP connection for mouse input".to_string()));
+    }
+
+    for _ in 0..count {
+        let cmd = r#"{"execute": "input-send-event", "arguments": {"events": [{"type": "rel", "data": {"axis": "x", "value": 8}}, {"type": "rel", "data": {"axis": "y", "value": 3}}]}}"#;
+        world
+            .execute_qmp_control(cmd)
+            .await
+            .map_err(|e| StepError(format!("QMP mouse movement failed: {}", e)))?;
+        tokio::time::sleep(std::time::Duration::from_millis(10)).await;
+    }
+    tokio::time::sleep(std::time::Duration::from_millis(200)).await;
+    Ok(())
 }
 
 #[then(regex = r#"^the serial log should contain '(.+)'$"#)]

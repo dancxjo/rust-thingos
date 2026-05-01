@@ -48,6 +48,15 @@ pub fn sync_scene(scene: &Scene, event: &str) {
     }
 }
 
+pub fn sync_scene_summary(scene: &Scene, event: &str) {
+    init();
+
+    let snapshots = scene.surface_snapshots();
+    write_file("/session/wayland/surfaces/index", surface_index(&snapshots).as_bytes());
+    write_file("/session/wayland/windows/index", window_index(&snapshots).as_bytes());
+    write_file("/session/wayland/events/latest", event.as_bytes());
+}
+
 pub fn remove_surface(surface_id: u32, event: &str) {
     remove_tree(SURFACES, surface_id, &["info", "geometry", "state", "title"]);
     remove_window(surface_id);
