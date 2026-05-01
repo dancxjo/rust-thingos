@@ -14,3 +14,15 @@ Feature: xHCI userspace driver
     And the serial output should contain "CAMBIUM: matched driver '/drivers/xhci' for xHCI PCI device" within 60s
     And the serial output should contain "xhci: starting userspace xHCI driver" within 60s
     And the serial output should contain "xhci: BAR0 mapped" within 60s
+
+  @smoke
+  @timeout-90s
+  Scenario: xHCI command and event ring path completes No-Op command
+    Then the serial output should contain "xhci: controller running" within 90s
+    And the serial output should contain "xhci: command completion type=NO_OP success" within 90s
+
+  @smoke
+  @timeout-90s
+  Scenario: xHCI Enable Slot command returns a valid slot ID
+    Then the serial output should contain "xhci: controller running" within 90s
+    And the serial output should contain "xhci: enable slot -> slot_id=" within 90s

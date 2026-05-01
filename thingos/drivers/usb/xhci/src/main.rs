@@ -190,6 +190,7 @@ const TRB_TYPE_SETUP_STAGE: u32 = 2;
 const TRB_TYPE_DATA_STAGE: u32 = 3;
 const TRB_TYPE_STATUS_STAGE: u32 = 4;
 const TRB_TYPE_LINK: u32 = 6;
+const TRB_TYPE_NO_OP: u32 = 23;
 const TRB_TYPE_ENABLE_SLOT: u32 = 9;
 const TRB_TYPE_ADDRESS_DEVICE: u32 = 11;
 const TRB_TYPE_CONFIGURE_ENDPOINT: u32 = 12;
@@ -518,6 +519,7 @@ impl XhciController {
         controller.program_controller()?;
         controller.try_enable_irq();
         controller.run()?;
+        controller.send_no_op()?;
         Ok(controller)
     }
 
@@ -854,6 +856,18 @@ impl XhciController {
         Ok(Some(storage))
     }
 
+    fn send_no_op(&mut self) -> Result<(), &'static str> {
+        let ptr = self.command_ring.push(Trb {
+            parameter: 0,
+            status: 0,
+            control: trb_type(TRB_TYPE_NO_OP),
+        });
+        doorbell(self.regs.doorbells, 0, 0);
+        self.wait_command_completion(ptr)?;
+        info!("xhci: command completion type=NO_OP success");
+        Ok(())
+    }
+
     fn enable_slot(&mut self) -> Result<u8, &'static str> {
         let ptr = self.command_ring.push(Trb {
             parameter: 0,
@@ -862,7 +876,9 @@ impl XhciController {
         });
         doorbell(self.regs.doorbells, 0, 0);
         let ev = self.wait_command_completion(ptr)?;
-        Ok(((ev.control >> TRB_SLOT_SHIFT) & 0xff) as u8)
+        let slot_id = ((ev.control >> TRB_SLOT_SHIFT) & 0xff) as u8;
+        info!("xhci: enable slot -> slot_id={}", slot_id);
+        Ok(slot_id)
     }
 
     fn address_device(&mut self, slot_id: u8, input_phys: u64) -> Result<(), &'static str> {
