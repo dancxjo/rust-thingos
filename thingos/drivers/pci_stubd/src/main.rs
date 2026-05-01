@@ -1,7 +1,5 @@
 #![no_std]
 #![no_main]
-use alloc::string::ToString;
-use core::default::Default;
 extern crate alloc;
 
 use alloc::string::String;
@@ -94,14 +92,11 @@ const MAX_TRACKED: usize = 128;
 
 const CLASS_DISPLAY: u8 = 0x03;
 const CLASS_NETWORK: u8 = 0x02;
-const CLASS_SERIAL_BUS: u8 = 0x0c;
 const CLASS_STORAGE: u8 = 0x01;
 
 const SUBCLASS_NETWORK_OTHER: u8 = 0x80;
-const SUBCLASS_USB: u8 = 0x03;
 const SUBCLASS_NVME: u8 = 0x08;
 
-const PROGIF_XHCI: u8 = 0x30;
 const PROGIF_NVME: u8 = 0x02;
 
 #[derive(Copy, Clone)]
@@ -112,10 +107,9 @@ struct PciRule {
     class_code: u8,
     subclass: Option<u8>,
     prog_if: Option<u8>,
-    role_kind: &'static str,
 }
 
-const RULES: [PciRule; 9] = [
+const RULES: [PciRule; 6] = [
     // Discrete NVIDIA mobile GPUs (exact GA107M id + class fallback for this vendor/class)
     PciRule {
         name: "nvidia-ga107m-gpu",
@@ -124,7 +118,6 @@ const RULES: [PciRule; 9] = [
         class_code: CLASS_DISPLAY,
         subclass: None,
         prog_if: None,
-        role_kind: "drv.display.nvidia",
     },
     PciRule {
         name: "nvidia-display-fallback",
@@ -133,7 +126,6 @@ const RULES: [PciRule; 9] = [
         class_code: CLASS_DISPLAY,
         subclass: None,
         prog_if: None,
-        role_kind: "drv.display.nvidia",
     },
     // AMD iGPU (Rembrandt class)
     PciRule {
@@ -143,35 +135,6 @@ const RULES: [PciRule; 9] = [
         class_code: CLASS_DISPLAY,
         subclass: None,
         prog_if: None,
-        role_kind: "drv.display.amd",
-    },
-    // AMD Rembrandt USB4 XHCI families (known IDs + class fallback)
-    PciRule {
-        name: "amd-rembrandt-xhci-161d",
-        vendor_id: 0x1022,
-        device_id: Some(0x161d),
-        class_code: CLASS_SERIAL_BUS,
-        subclass: Some(SUBCLASS_USB),
-        prog_if: Some(PROGIF_XHCI),
-        role_kind: "drv.usb.xhci.amd",
-    },
-    PciRule {
-        name: "amd-rembrandt-xhci-161e",
-        vendor_id: 0x1022,
-        device_id: Some(0x161e),
-        class_code: CLASS_SERIAL_BUS,
-        subclass: Some(SUBCLASS_USB),
-        prog_if: Some(PROGIF_XHCI),
-        role_kind: "drv.usb.xhci.amd",
-    },
-    PciRule {
-        name: "amd-rembrandt-xhci-fallback",
-        vendor_id: 0x1022,
-        device_id: None,
-        class_code: CLASS_SERIAL_BUS,
-        subclass: Some(SUBCLASS_USB),
-        prog_if: Some(PROGIF_XHCI),
-        role_kind: "drv.usb.xhci.amd",
     },
     PciRule {
         name: "realtek-rtl8852be",
@@ -180,7 +143,6 @@ const RULES: [PciRule; 9] = [
         class_code: CLASS_NETWORK,
         subclass: Some(SUBCLASS_NETWORK_OTHER),
         prog_if: None,
-        role_kind: "drv.net.rtl8852be",
     },
     // WD/SanDisk NVMe families from your lspci tree
     PciRule {
@@ -190,7 +152,6 @@ const RULES: [PciRule; 9] = [
         class_code: CLASS_STORAGE,
         subclass: Some(SUBCLASS_NVME),
         prog_if: Some(PROGIF_NVME),
-        role_kind: "drv.storage.nvme.wd",
     },
     PciRule {
         name: "wd-nvme-fallback",
@@ -199,7 +160,6 @@ const RULES: [PciRule; 9] = [
         class_code: CLASS_STORAGE,
         subclass: Some(SUBCLASS_NVME),
         prog_if: Some(PROGIF_NVME),
-        role_kind: "drv.storage.nvme.wd",
     },
 ];
 

@@ -280,6 +280,7 @@ pub fn default_programs() -> Vec<ProgramConfig> {
         ProgramConfig { name: "virtio_sound", is_init: false, boot_module: true, features: vec![] },
         ProgramConfig { name: "hdaudio", is_init: false, boot_module: true, features: vec![] },
         ProgramConfig { name: "pci_stubd", is_init: false, boot_module: true, features: vec![] },
+        ProgramConfig { name: "xhci", is_init: false, boot_module: true, features: vec![] },
         ProgramConfig { name: "chime", is_init: false, boot_module: true, features: vec![] },
         ProgramConfig { name: "vfs_hello", is_init: false, boot_module: true, features: vec![] },
         ProgramConfig { name: "show_args", is_init: false, boot_module: true, features: vec![] },
@@ -394,14 +395,17 @@ fn generate_limine_config(
     conf.push_str("menu_hidden: yes\n\n");
 
     let all_graphics_modules =
-        limine_modules(programs, assets, include_busybox, include_default_shell, false);
+        limine_modules(programs, assets, include_busybox, include_default_shell, false, false);
     let bootfb_only_modules =
-        limine_modules(programs, assets, include_busybox, include_default_shell, true);
+        limine_modules(programs, assets, include_busybox, include_default_shell, true, false);
+    let safe_shell_modules =
+        limine_modules(programs, assets, include_busybox, include_default_shell, true, true);
 
     struct LimineEntry {
         title: String,
         kernel_cmdline: String,
         bootfb_only: bool,
+        safe_shell_only: bool,
     }
 
     let default_loglevel = loglevel.unwrap_or("info");
@@ -410,21 +414,34 @@ fn generate_limine_config(
             title: "ThingOS".to_string(),
             kernel_cmdline: format!("loglevel={}", default_loglevel),
             bootfb_only: false,
+            safe_shell_only: false,
         },
         LimineEntry {
             title: "ThingOS (BootFB Fallback)".to_string(),
             kernel_cmdline: format!("loglevel={} display=bootfb", default_loglevel),
             bootfb_only: true,
+            safe_shell_only: false,
+        },
+        LimineEntry {
+            title: "ThingOS (Safe Shell)".to_string(),
+            kernel_cmdline: format!(
+                "loglevel={} display=bootfb sprout.safe=sh sprout.active_ui=terminal",
+                default_loglevel
+            ),
+            bootfb_only: true,
+            safe_shell_only: true,
         },
         LimineEntry {
             title: "ThingOS (Debug)".to_string(),
             kernel_cmdline: "loglevel=4".to_string(),
             bootfb_only: false,
+            safe_shell_only: false,
         },
         LimineEntry {
             title: "ThingOS (Trace)".to_string(),
             kernel_cmdline: "loglevel=5".to_string(),
             bootfb_only: false,
+            safe_shell_only: false,
         },
     ];
 
@@ -436,6 +453,7 @@ fn generate_limine_config(
                     title: "ThingOS (Custom)".to_string(),
                     kernel_cmdline: format!("loglevel={l}"),
                     bootfb_only: false,
+                    safe_shell_only: false,
                 },
             );
         }
@@ -457,7 +475,9 @@ fn generate_limine_config(
         conf.push_str(&format!("    resolution: {res}\n"));
         conf.push_str("    kernel_path: boot():/boot/kernel\n");
         conf.push_str(&format!("    kernel_cmdline: {}\n", entry.kernel_cmdline));
-        if entry.bootfb_only {
+        if entry.safe_shell_only {
+            conf.push_str(&safe_shell_modules);
+        } else if entry.bootfb_only {
             conf.push_str(&bootfb_only_modules);
         } else {
             conf.push_str(&all_graphics_modules);
@@ -473,10 +493,14 @@ fn limine_modules(
     include_busybox: bool,
     include_default_shell: bool,
     bootfb_only: bool,
+    safe_shell_only: bool,
 ) -> String {
     let mut modules = String::new();
     for prog in programs {
         if !prog.boot_module {
+            continue;
+        }
+        if safe_shell_only && !is_safe_shell_program(prog.name) {
             continue;
         }
         // The BootFB fallback must not expose alternate display drivers:
@@ -496,43 +520,51 @@ fn limine_modules(
                 modules.push_str(&format!("    module_path: boot():/bin/{alias}\n"));
             }
         }
-        if prog.is_init {
+        let is_init_module = if safe_shell_only { prog.name == "sprout" } else { prog.is_init };
+        if is_init_module {
             modules.push_str("    module_cmdline: init\n");
         }
     }
 
-    for lib in default_shared_libraries() {
-        modules.push_str(&format!("    module_path: boot():/lib/{}\n", lib.file_name));
-    }
-
-    for asset in assets {
-        let path_str = asset.to_string_lossy();
-        let clean_path = path_str.replace('\\', "/");
-
-        let allowed = (clean_path.starts_with("assets/fonts/") && clean_path.ends_with(".ttf"))
-            || is_future_cursor_asset(&clean_path)
-            || (clean_path.starts_with("assets/icons/lucide/") && clean_path.ends_with(".svg"))
-            || clean_path.ends_with("wallpapers/flower.bmp")
-            || clean_path.ends_with("wallpapers/flower.png")
-            || clean_path.ends_with("wallpapers/clouds.bmp")
-            || clean_path.ends_with("wallpapers/leather.bmp")
-            || clean_path.ends_with("wallpapers/linen.bmp")
-            || clean_path.ends_with("themes/solarized_warm.toml")
-            || clean_path.ends_with("themes/genie_circles.wasm")
-            || clean_path.ends_with("unifont.hex");
-
-        if allowed && !clean_path.ends_with("unifont.hex") && !clean_path.ends_with("locale.conf") {
-            let iso_path = clean_path.replace("assets/", "share/");
-            modules.push_str(&format!("    module_path: boot():/{iso_path}\n"));
+    if !safe_shell_only {
+        for lib in default_shared_libraries() {
+            modules.push_str(&format!("    module_path: boot():/lib/{}\n", lib.file_name));
         }
     }
 
-    for wallpaper in DEFAULT_WALLPAPERS {
-        if !asset_list_contains_wallpaper(assets, wallpaper.file_name) {
-            modules.push_str(&format!(
-                "    module_path: boot():/share/wallpapers/{}\n",
-                wallpaper.file_name
-            ));
+    if !safe_shell_only {
+        for asset in assets {
+            let path_str = asset.to_string_lossy();
+            let clean_path = path_str.replace('\\', "/");
+
+            let allowed = (clean_path.starts_with("assets/fonts/") && clean_path.ends_with(".ttf"))
+                || is_future_cursor_asset(&clean_path)
+                || (clean_path.starts_with("assets/icons/lucide/") && clean_path.ends_with(".svg"))
+                || clean_path.ends_with("wallpapers/flower.bmp")
+                || clean_path.ends_with("wallpapers/flower.png")
+                || clean_path.ends_with("wallpapers/clouds.bmp")
+                || clean_path.ends_with("wallpapers/leather.bmp")
+                || clean_path.ends_with("wallpapers/linen.bmp")
+                || clean_path.ends_with("themes/solarized_warm.toml")
+                || clean_path.ends_with("themes/genie_circles.wasm")
+                || clean_path.ends_with("unifont.hex");
+
+            if allowed
+                && !clean_path.ends_with("unifont.hex")
+                && !clean_path.ends_with("locale.conf")
+            {
+                let iso_path = clean_path.replace("assets/", "share/");
+                modules.push_str(&format!("    module_path: boot():/{iso_path}\n"));
+            }
+        }
+
+        for wallpaper in DEFAULT_WALLPAPERS {
+            if !asset_list_contains_wallpaper(assets, wallpaper.file_name) {
+                modules.push_str(&format!(
+                    "    module_path: boot():/share/wallpapers/{}\n",
+                    wallpaper.file_name
+                ));
+            }
         }
     }
 
@@ -542,10 +574,10 @@ fn limine_modules(
     modules.push_str("    module_path: boot():/etc/motd\n");
     modules.push_str("    module_path: boot():/etc/fstab\n");
     modules.push_str("    module_path: boot():/etc/hostname\n");
-    if include_default_shell {
+    if include_default_shell && !safe_shell_only {
         modules.push_str("    module_path: boot():/etc/default/shell\n");
     }
-    if include_busybox {
+    if include_busybox && !safe_shell_only {
         modules.push_str("    module_path: boot():/bin/busybox\n");
         modules.push_str("    module_path: boot():/bin/ash\n");
     }
@@ -1179,12 +1211,17 @@ fn is_driver(name: &str) -> bool {
         "virtio_gpu",
         "virtio_netd",
         "virtio_sound",
+        "xhci",
     ];
     drivers.contains(&name)
 }
 
 fn is_non_bootfb_graphics_driver(name: &str) -> bool {
     (name.starts_with("display_") && name != "display_bootfb") || name == "virtio_gpu"
+}
+
+fn is_safe_shell_program(name: &str) -> bool {
+    matches!(name, "sprout" | "sh" | "terminal")
 }
 
 fn userspace_aliases(name: &str) -> &'static [&'static str] {
@@ -1242,6 +1279,42 @@ mod tests {
         assert!(!bootfb_entry.contains("module_path: boot():/drivers/display_fake"));
         assert!(!bootfb_entry.contains("module_path: boot():/drivers/virtio_gpu"));
         assert!(bootfb_entry.contains("module_path: boot():/bin/bloom"));
+    }
+
+    #[test]
+    fn safe_shell_entry_loads_only_sprout_sh_and_terminal() {
+        let sh = Shell::new().expect("shell");
+        let mut sprout = test_program("sprout");
+        sprout.is_init = true;
+        let mut shell = test_program("sh");
+        shell.is_init = true;
+        let programs = [
+            sprout,
+            shell,
+            test_program("terminal"),
+            test_program("bloom"),
+            test_program("bristle"),
+            test_program("display_bootfb"),
+            test_program("display_virtio_gpu"),
+        ];
+
+        let conf = generate_limine_config(&sh, &programs, &[], None, None, false, true, true);
+        let safe_entry = limine_entry(&conf, "ThingOS (Safe Shell)");
+
+        assert!(safe_entry.contains(
+            "kernel_cmdline: loglevel=info display=bootfb sprout.safe=sh sprout.active_ui=terminal"
+        ));
+        assert!(safe_entry.contains("module_path: boot():/bin/sprout"));
+        assert!(safe_entry.contains("module_path: boot():/bin/sh"));
+        assert!(safe_entry.contains("module_path: boot():/bin/terminal"));
+        assert!(!safe_entry.contains("module_path: boot():/bin/bloom"));
+        assert!(!safe_entry.contains("module_path: boot():/bin/bristle"));
+        assert!(!safe_entry.contains("module_path: boot():/bin/busybox"));
+        assert!(!safe_entry.contains("module_path: boot():/bin/ash"));
+        assert!(!safe_entry.contains("module_path: boot():/etc/default/shell"));
+        assert!(!safe_entry.contains("module_path: boot():/drivers/display_bootfb"));
+        assert!(!safe_entry.contains("module_path: boot():/drivers/display_virtio_gpu"));
+        assert_eq!(safe_entry.matches("module_cmdline: init").count(), 1);
     }
 
     #[test]

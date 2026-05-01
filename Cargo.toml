@@ -22,6 +22,7 @@ members = [
   "thingos/drivers/ps2_mouse",
   "thingos/drivers/rtc_cmos",
   "thingos/drivers/rtl8168d",
+  "thingos/drivers/usb/xhci",
   "thingos/drivers/virtio",
   "thingos/drivers/virtio_gpu",
   "thingos/drivers/virtio_netd",

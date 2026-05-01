@@ -53,6 +53,8 @@ const PROBE_FAILURE: u8 = 3;
 
 pub struct Config {
     pub force_bootfb: bool,
+    pub safe_shell_only: bool,
+    pub open_terminal: bool,
 }
 
 pub struct Supervisor {
@@ -85,6 +87,8 @@ pub struct Supervisor {
     display_card_ready: bool,
     /// Whether the display driver has been spawned.
     display_spawned: bool,
+    /// Whether the safe-mode graphical terminal has been spawned.
+    terminal_spawned: bool,
     /// Atomic status of the background netd liveness probe.
     netd_probe_status: Arc<AtomicU8>,
 }
@@ -113,12 +117,15 @@ impl Supervisor {
             display_service_ready: false,
             display_card_ready: false,
             display_spawned: false,
+            terminal_spawned: false,
             netd_probe_status: Arc::new(AtomicU8::new(PROBE_IDLE)),
         }
     }
 
     fn parse_cmdline() -> Config {
         let mut force_bootfb = false;
+        let mut safe_shell_only = false;
+        let mut open_terminal = false;
         let mut buf = [0u8; 1024];
 
         let mut cmdline_str: Option<alloc::string::String> = None;
@@ -153,11 +160,18 @@ impl Supervisor {
                 if part == "display=bootfb" {
                     force_bootfb = true;
                     stem::debug!("SPROUT: Detected 'display=bootfb' command line argument");
+                } else if part == "sprout.safe=sh" {
+                    safe_shell_only = true;
+                    open_terminal = true;
+                    stem::debug!("SPROUT: Detected safe shell mode");
+                } else if part == "sprout.active_ui=terminal" {
+                    open_terminal = true;
+                    stem::debug!("SPROUT: Detected terminal-first UI request");
                 }
             }
         }
 
-        Config { force_bootfb }
+        Config { force_bootfb, safe_shell_only, open_terminal }
     }
 
     pub fn run_forever(&mut self) -> ! {
@@ -175,6 +189,22 @@ impl Supervisor {
         );
         stem::sleep_ms(SERIAL_SHELL_HEADSTART_MS);
         stem::info!("SPROUT: Continuing supervisor startup");
+
+        if self.config.safe_shell_only {
+            stem::info!("SPROUT: Safe shell mode active; launching only serial sh and terminal");
+            self.spawn_safe_terminal_if_needed();
+            stem::info!("SPROUT: Entering safe shell supervisor loop");
+            match ServiceLoop::new(INBOX_MAX_PAYLOAD) {
+                Ok(svc) => self.run_service_loop(svc),
+                Err(err) => {
+                    warn!(
+                        "SPROUT: failed to construct ServiceLoop ({:?}); falling back to legacy supervisor loop",
+                        err
+                    );
+                    self.run_legacy_supervisor_loop();
+                }
+            }
+        }
 
         // Stage 2: Start cambium for driver discovery.
         stem::info!("SPROUT: Spawning cambium for driver discovery...");
@@ -454,6 +484,10 @@ impl Supervisor {
     /// inside the hand-rolled `loop { ...; sleep_ms(100); }` body.
     fn tick_supervisor(&mut self) {
         trace!("SPROUT: Supervisor tick...");
+        if self.config.safe_shell_only {
+            self.spawn_safe_terminal_if_needed();
+            return;
+        }
         if !DISPLAY_INPUT_ISOLATION {
             stem::trace!("SPROUT: Loop iteration: spawn_netd_if_ready");
             self.spawn_netd_if_ready();
@@ -501,6 +535,33 @@ impl Supervisor {
             self.display_spawned = true;
         } else {
             warn!("SPROUT: Display pipeline setup did not complete");
+        }
+    }
+
+    fn spawn_safe_terminal_if_needed(&mut self) {
+        if self.terminal_spawned || !self.config.open_terminal {
+            return;
+        }
+
+        write_active_ui("terminal");
+        let path = "/bin/terminal";
+        self.terminal_spawned = true;
+        match stem::syscall::spawn_process(path, 0) {
+            Ok(pid) => {
+                info!("SPROUT: Spawned safe-mode terminal (PID={})", pid);
+                let _ = stem::thread::set_priority(pid, 2);
+                let mut tasks = self.tasks.lock();
+                tasks.push(ManagedTask {
+                    name: "terminal".to_string(),
+                    kind: TaskKind::App,
+                    module_path: path.to_string(),
+                    pid: Some(pid),
+                    ..Default::default()
+                });
+            }
+            Err(e) => {
+                warn!("SPROUT: Failed to spawn safe-mode terminal: {:?}", e);
+            }
         }
     }
 
@@ -790,6 +851,17 @@ impl Supervisor {
 
 fn path_exists(path: &str) -> bool {
     stem::syscall::vfs::vfs_lstat(path).is_ok()
+}
+
+fn write_active_ui(target: &str) {
+    use abi::syscall::vfs_flags::{O_CREAT, O_RDWR, O_TRUNC};
+
+    let _ = stem::syscall::vfs::vfs_mkdir("/session");
+    if let Ok(fd) = stem::syscall::vfs::vfs_open("/session/active_ui", O_RDWR | O_CREAT | O_TRUNC) {
+        let _ = stem::syscall::vfs::vfs_write(fd, target.as_bytes());
+        let _ = stem::syscall::vfs::vfs_close(fd);
+        trace!("SPROUT: active_ui set to '{}'", target);
+    }
 }
 
 fn spawn_cambium_task(tasks: Arc<Mutex<Vec<ManagedTask>>>) {
