@@ -14,6 +14,168 @@ use crate::world::{DESKTOP_READY_SIGNALS, ThingOsWorld, missing_required_signals
 
 pub type HunterResult<T> = Result<T, Box<dyn std::error::Error + Send + Sync>>;
 
+// ---------------------------------------------------------------------------
+// Boot-phase state machine
+// ---------------------------------------------------------------------------
+
+/// Serial-log substrings that confirm the Thing-OS kernel is executing.
+/// Any one match is sufficient.
+const KERNEL_MARKERS: &[&str] = &[
+    "thing-os kernel",
+    "Initializing SIMD",
+    "Frame allocator initialized",
+    "Initializing tasking",
+    "Scheduler initialized",
+    "Entering scheduler loop",
+];
+
+/// Serial-log substrings that confirm at least one userspace process is running.
+const USERSPACE_MARKERS: &[&str] = &[
+    "SPROUT:",
+    "CAMBIUM:",
+    "sprout: service",
+    "BOOT: heartbeat",
+    "BOOT: ready",
+];
+
+/// Serial-log substrings that confirm the graphical desktop is up.
+const DESKTOP_MARKERS: &[&str] = &[
+    "bloom: service loop started",
+    "bloom: output0",
+    "bloom: cursor ready",
+    "First frame rendered",
+    "wayland-server: listening on /run/wayland-0",
+    "bloom: registered bristle pointer sink",
+];
+
+/// The ordered set of guest execution phases the hunter tracks.
+#[derive(Clone, Copy, Debug, PartialEq, Eq, PartialOrd, Ord)]
+pub enum BootPhase {
+    /// QEMU process started; no serial output analysed yet.
+    QemuStarted,
+    /// A kernel-identifying line appeared in the serial log.
+    KernelSeen,
+    /// At least one userspace process is running.
+    UserspaceSeen,
+    /// The graphical desktop (Bloom/Wayland) is up.
+    DesktopSeen,
+    /// Serial output went silent after the kernel was confirmed running.
+    StalledAfterKernel,
+}
+
+impl std::fmt::Display for BootPhase {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        match self {
+            BootPhase::QemuStarted => write!(f, "qemu_started"),
+            BootPhase::KernelSeen => write!(f, "kernel_seen"),
+            BootPhase::UserspaceSeen => write!(f, "userspace_seen"),
+            BootPhase::DesktopSeen => write!(f, "desktop_seen"),
+            BootPhase::StalledAfterKernel => write!(f, "stalled_after_kernel"),
+        }
+    }
+}
+
+/// Lightweight tracker that infers the boot phase from the accumulated serial log.
+#[derive(Debug, Default)]
+struct BootPhaseTracker {
+    pub phase: BootPhase,
+    pub kernel_seen: bool,
+    pub userspace_seen: bool,
+    pub desktop_seen: bool,
+}
+
+impl Default for BootPhase {
+    fn default() -> Self {
+        BootPhase::QemuStarted
+    }
+}
+
+impl BootPhaseTracker {
+    fn new() -> Self {
+        Self { phase: BootPhase::QemuStarted, kernel_seen: false, userspace_seen: false, desktop_seen: false }
+    }
+
+    /// Update internal state from the current serial log and return `true` if
+    /// the phase advanced.
+    fn update(&mut self, log: &str) -> bool {
+        let lower = log.to_lowercase();
+        let old_phase = self.phase;
+
+        if !self.kernel_seen {
+            if KERNEL_MARKERS.iter().any(|m| lower.contains(&m.to_lowercase())) {
+                self.kernel_seen = true;
+            }
+        }
+        if self.kernel_seen && !self.userspace_seen {
+            if USERSPACE_MARKERS.iter().any(|m| lower.contains(&m.to_lowercase())) {
+                self.userspace_seen = true;
+            }
+        }
+        if self.kernel_seen && !self.desktop_seen {
+            if DESKTOP_MARKERS.iter().any(|m| lower.contains(&m.to_lowercase())) {
+                self.desktop_seen = true;
+            }
+        }
+
+        self.phase = if self.desktop_seen {
+            BootPhase::DesktopSeen
+        } else if self.userspace_seen {
+            BootPhase::UserspaceSeen
+        } else if self.kernel_seen {
+            BootPhase::KernelSeen
+        } else {
+            BootPhase::QemuStarted
+        };
+
+        self.phase != old_phase
+    }
+
+    /// Classify a freeze/stall event.  Returns a string tag used in log output.
+    fn classify_freeze(&self) -> &'static str {
+        if !self.kernel_seen {
+            "pre_kernel_hunter_false_positive"
+        } else {
+            "os_freeze"
+        }
+    }
+
+    /// Mark the current run as stalled.  If the kernel was previously observed
+    /// the phase advances to `StalledAfterKernel`; otherwise the phase stays at
+    /// `QemuStarted` (the stall is pre-kernel and classified as a false positive).
+    fn mark_stalled(&mut self) {
+        if self.kernel_seen {
+            self.phase = BootPhase::StalledAfterKernel;
+        }
+    }
+}
+
+/// A snapshot of hunt state written to the log at every freeze/timeout event.
+struct FreezeSummary<'a> {
+    last_serial_timestamp: Instant,
+    silence_duration: Duration,
+    tracker: &'a BootPhaseTracker,
+    classification: &'a str,
+}
+
+impl<'a> FreezeSummary<'a> {
+    fn write(&self, file: &mut File) -> std::io::Result<()> {
+        writeln!(file)?;
+        writeln!(file, "[freeze_summary]")?;
+        writeln!(file, "  last_serial_ago_secs: {:.1}", self.silence_duration.as_secs_f64())?;
+        writeln!(file, "  kernel_marker_observed: {}", self.tracker.kernel_seen)?;
+        writeln!(file, "  userspace_observed: {}", self.tracker.userspace_seen)?;
+        writeln!(file, "  desktop_observed: {}", self.tracker.desktop_seen)?;
+        writeln!(file, "  guest_phase_at_capture: {}", self.tracker.phase)?;
+        writeln!(file, "  classification: {}", self.classification)?;
+        writeln!(
+            file,
+            "  last_serial_wall_elapsed_secs: {:.1}",
+            self.last_serial_timestamp.elapsed().as_secs_f64()
+        )?;
+        file.flush()
+    }
+}
+
 #[derive(Clone, Debug)]
 pub struct FreezeHunterConfig {
     pub arch: String,
@@ -100,6 +262,7 @@ async fn run_session(
         return Err(err.into());
     }
 
+    let mut tracker = BootPhaseTracker::new();
     let mut last_len = 0usize;
     let mut last_output = Instant::now();
     if !wait_for_desktop_readiness(
@@ -109,6 +272,7 @@ async fn run_session(
         &mut log_file,
         &mut last_len,
         &mut last_output,
+        &mut tracker,
     )
     .await?
     {
@@ -123,23 +287,43 @@ async fn run_session(
         tokio::time::sleep(Duration::from_millis(100)).await;
 
         let log = world.get_serial_log().await;
+        if tracker.update(&log) {
+            write_hunter_event(
+                &mut log_file,
+                format_args!("boot phase advanced: {}", tracker.phase),
+            )?;
+        }
         if append_serial_delta(&mut log_file, &log, &mut last_len)? {
             last_output = Instant::now();
         }
 
         if last_output.elapsed() > config.timeout {
+            let silence = last_output.elapsed();
+            tracker.mark_stalled();
+            let classification = tracker.classify_freeze();
             let message = format!(
-                "[hunter] silence detected after {:.1}s in session {session_id:04}",
-                last_output.elapsed().as_secs_f64()
+                "[hunter] serial output stalled after {:.1}s in session {session_id:04}; phase={} classification={classification}",
+                silence.as_secs_f64(),
+                tracker.phase,
             );
             eprintln!("{message}");
             write_hunter_event(&mut log_file, format_args!("{message}"))?;
-            capture_freeze_artifacts(&mut world, config, session_id).await;
+            let summary = FreezeSummary {
+                last_serial_timestamp: last_output,
+                silence_duration: silence,
+                tracker: &tracker,
+                classification,
+            };
+            summary.write(&mut log_file)?;
+            capture_freeze_artifacts(&mut world, config, session_id, &tracker).await;
             world.shutdown().await;
             return Ok(());
         }
 
-        if Instant::now() >= next_action {
+        // Only fire random actions once the kernel has been confirmed running.
+        // This prevents accidental Limine/UEFI menu navigation that produces
+        // false-positive freeze captures.
+        if tracker.kernel_seen && Instant::now() >= next_action {
             write_hunter_event(&mut log_file, format_args!("running random action"))?;
             if let Err(err) = run_random_action(&mut world, rng).await {
                 eprintln!("[hunter] action failed: {err}");
@@ -168,6 +352,7 @@ async fn wait_for_desktop_readiness(
     log_file: &mut File,
     last_len: &mut usize,
     last_output: &mut Instant,
+    tracker: &mut BootPhaseTracker,
 ) -> HunterResult<bool> {
     write_hunter_event(
         log_file,
@@ -188,6 +373,12 @@ async fn wait_for_desktop_readiness(
         tokio::time::sleep(Duration::from_millis(100)).await;
 
         let log = world.get_serial_log().await;
+        if tracker.update(&log) {
+            write_hunter_event(
+                log_file,
+                format_args!("boot phase advanced: {}", tracker.phase),
+            )?;
+        }
         if append_serial_delta(log_file, &log, last_len)? {
             *last_output = Instant::now();
         }
@@ -204,30 +395,54 @@ async fn wait_for_desktop_readiness(
         if last_status.elapsed() >= Duration::from_secs(5) {
             write_hunter_event(
                 log_file,
-                format_args!("desktop readiness pending; missing={missing:?}"),
+                format_args!(
+                    "desktop readiness pending; phase={} missing={missing:?}",
+                    tracker.phase
+                ),
             )?;
             last_status = Instant::now();
         }
 
         if last_output.elapsed() > config.timeout {
+            let silence = last_output.elapsed();
+            tracker.mark_stalled();
+            let classification = tracker.classify_freeze();
             let message = format!(
-                "[hunter] pre-desktop silence detected after {:.1}s in session {session_id:04}; missing={missing:?}",
-                last_output.elapsed().as_secs_f64()
+                "[hunter] serial output stalled after {:.1}s in session {session_id:04}; phase={} classification={classification} missing={missing:?}",
+                silence.as_secs_f64(),
+                tracker.phase,
             );
             eprintln!("{message}");
             write_hunter_event(log_file, format_args!("{message}"))?;
-            capture_freeze_artifacts(world, config, session_id).await;
+            let summary = FreezeSummary {
+                last_serial_timestamp: *last_output,
+                silence_duration: silence,
+                tracker,
+                classification,
+            };
+            summary.write(log_file)?;
+            capture_freeze_artifacts(world, config, session_id, tracker).await;
             return Ok(false);
         }
 
         if Instant::now() >= deadline {
+            tracker.mark_stalled();
+            let classification = tracker.classify_freeze();
             let message = format!(
-                "[hunter] desktop readiness timed out after {:.1}s in session {session_id:04}; missing={missing:?}",
-                config.desktop_ready_timeout.as_secs_f64()
+                "[hunter] desktop readiness timed out after {:.1}s in session {session_id:04}; phase={} classification={classification} missing={missing:?}",
+                config.desktop_ready_timeout.as_secs_f64(),
+                tracker.phase,
             );
             eprintln!("{message}");
             write_hunter_event(log_file, format_args!("{message}"))?;
-            capture_freeze_artifacts(world, config, session_id).await;
+            let summary = FreezeSummary {
+                last_serial_timestamp: *last_output,
+                silence_duration: last_output.elapsed(),
+                tracker,
+                classification,
+            };
+            summary.write(log_file)?;
+            capture_freeze_artifacts(world, config, session_id, tracker).await;
             return Ok(false);
         }
 
@@ -237,7 +452,8 @@ async fn wait_for_desktop_readiness(
             write_hunter_event(
                 log_file,
                 format_args!(
-                    "qemu exited while waiting for desktop readiness; missing={missing:?}"
+                    "qemu exited while waiting for desktop readiness; phase={} missing={missing:?}",
+                    tracker.phase,
                 ),
             )?;
             return Ok(false);
@@ -268,8 +484,16 @@ async fn capture_freeze_artifacts(
     world: &mut ThingOsWorld,
     config: &FreezeHunterConfig,
     session_id: u64,
+    tracker: &BootPhaseTracker,
 ) {
-    let screenshot_path = config.log_dir.join(format!("rust_run_{session_id:04}_freeze"));
+    let classification = tracker.classify_freeze();
+    let screenshot_path = config
+        .log_dir
+        .join(format!("rust_run_{session_id:04}_freeze_{classification}"));
+    eprintln!(
+        "[hunter] classification={classification} phase={}",
+        tracker.phase
+    );
     match world.take_screenshot(&screenshot_path).await {
         Ok(path) => eprintln!("[hunter] screenshot={}", path.display()),
         Err(err) => eprintln!("[hunter] screenshot failed: {err}"),
@@ -444,4 +668,102 @@ fn random_key(rng: &mut StdRng) -> &'static str {
         "tab",
     ];
     KEYS[rng.gen_range(0..KEYS.len())]
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn boot_phase_starts_at_qemu_started() {
+        let tracker = BootPhaseTracker::new();
+        assert_eq!(tracker.phase, BootPhase::QemuStarted);
+        assert!(!tracker.kernel_seen);
+        assert!(!tracker.userspace_seen);
+        assert!(!tracker.desktop_seen);
+    }
+
+    #[test]
+    fn kernel_marker_advances_phase() {
+        let mut tracker = BootPhaseTracker::new();
+        let changed = tracker.update("thing-os kernel v1.0");
+        assert!(changed);
+        assert_eq!(tracker.phase, BootPhase::KernelSeen);
+        assert!(tracker.kernel_seen);
+        assert!(!tracker.userspace_seen);
+    }
+
+    #[test]
+    fn userspace_marker_advances_phase_after_kernel() {
+        let mut tracker = BootPhaseTracker::new();
+        tracker.update("thing-os kernel v1.0");
+        let changed = tracker.update("thing-os kernel v1.0\nSPROUT: service starting");
+        assert!(changed);
+        assert_eq!(tracker.phase, BootPhase::UserspaceSeen);
+        assert!(tracker.userspace_seen);
+    }
+
+    #[test]
+    fn desktop_marker_advances_phase_after_kernel() {
+        let mut tracker = BootPhaseTracker::new();
+        tracker.update("thing-os kernel v1.0");
+        let changed = tracker.update("thing-os kernel v1.0\nFirst frame rendered");
+        assert!(changed);
+        assert_eq!(tracker.phase, BootPhase::DesktopSeen);
+        assert!(tracker.desktop_seen);
+    }
+
+    #[test]
+    fn no_kernel_marker_stays_at_qemu_started() {
+        let mut tracker = BootPhaseTracker::new();
+        let changed = tracker.update("Limine bootloader menu");
+        assert!(!changed);
+        assert_eq!(tracker.phase, BootPhase::QemuStarted);
+    }
+
+    #[test]
+    fn classify_freeze_without_kernel_is_false_positive() {
+        let tracker = BootPhaseTracker::new();
+        assert_eq!(tracker.classify_freeze(), "pre_kernel_hunter_false_positive");
+    }
+
+    #[test]
+    fn classify_freeze_with_kernel_is_os_freeze() {
+        let mut tracker = BootPhaseTracker::new();
+        tracker.update("thing-os kernel v1.0");
+        assert_eq!(tracker.classify_freeze(), "os_freeze");
+    }
+
+    #[test]
+    fn update_is_idempotent_once_phase_reached() {
+        let mut tracker = BootPhaseTracker::new();
+        tracker.update("thing-os kernel v1.0");
+        let changed = tracker.update("thing-os kernel v1.0");
+        assert!(!changed, "phase should not re-advance on same log");
+        assert_eq!(tracker.phase, BootPhase::KernelSeen);
+    }
+
+    #[test]
+    fn mark_stalled_sets_phase_when_kernel_seen() {
+        let mut tracker = BootPhaseTracker::new();
+        tracker.update("thing-os kernel v1.0");
+        tracker.mark_stalled();
+        assert_eq!(tracker.phase, BootPhase::StalledAfterKernel);
+    }
+
+    #[test]
+    fn mark_stalled_does_not_advance_phase_pre_kernel() {
+        let mut tracker = BootPhaseTracker::new();
+        tracker.mark_stalled();
+        assert_eq!(tracker.phase, BootPhase::QemuStarted);
+    }
+
+    #[test]
+    fn boot_phase_display() {
+        assert_eq!(BootPhase::QemuStarted.to_string(), "qemu_started");
+        assert_eq!(BootPhase::KernelSeen.to_string(), "kernel_seen");
+        assert_eq!(BootPhase::UserspaceSeen.to_string(), "userspace_seen");
+        assert_eq!(BootPhase::DesktopSeen.to_string(), "desktop_seen");
+        assert_eq!(BootPhase::StalledAfterKernel.to_string(), "stalled_after_kernel");
+    }
 }
