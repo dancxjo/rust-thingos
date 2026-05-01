@@ -28,6 +28,7 @@ members = [
   "thingos/drivers/virtio_netd",
   "thingos/drivers/virtio_sound",
   "thingos/kernel",
+  "thingos/libs/accel2d_cpu",
   "thingos/libs/fb_common",
   "thingos/libs/ipc_helpers",
   "thingos/libs/llm",
