@@ -105,6 +105,12 @@ pub struct AttachBufferRequest {
     pub stride: u32,
     pub format: PixelFormat,
     pub modifier: u64,
+    /// Monotonic generation counter for this logical buffer.
+    ///
+    /// Must be incremented by the client each time new pixel content is written
+    /// to the backing storage before re-submitting the same handle.  Bloom
+    /// forwards this to the resource cache so stale imports are evicted.
+    pub generation: u64,
 }
 
 #[repr(C, packed)]

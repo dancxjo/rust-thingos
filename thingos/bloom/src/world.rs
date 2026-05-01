@@ -159,6 +159,7 @@ impl BloomWorld {
                     req.format,
                     0,
                     req.modifier,
+                    req.generation,
                 ) else {
                     send_ack(req.reply_port, 2, 0, 0);
                     return false;

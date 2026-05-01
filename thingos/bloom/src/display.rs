@@ -262,7 +262,18 @@ impl DisplayBackend {
             stem::warn!("bloom: rejecting unsupported display buffer modifier {}", modifier);
             return None;
         }
-        let bh = BufferHandle { handle: thing, width, height, stride, format, offset, modifier };
+        // generation is not forwarded to the driver; it is a compositor-level
+        // cache hint only.  The driver always imports a fresh copy on each call.
+        let bh = BufferHandle {
+            handle: thing,
+            width,
+            height,
+            stride,
+            format,
+            offset,
+            modifier,
+            generation: 0,
+        };
         let mut id = 0u32;
         match device_call(self.fd, DISPLAY_OP_IMPORT_BUFFER, &bh, Some(&mut id)) {
             Some(_) => {
