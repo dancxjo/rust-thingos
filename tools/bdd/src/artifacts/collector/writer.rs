@@ -110,41 +110,76 @@ pub fn write_scenario_readme(
 
     writeln!(file, "## Steps")?;
     writeln!(file)?;
-    writeln!(file, "| # | Step | Result | Duration | Artifacts |")?;
-    writeln!(file, "|---|------|--------|----------|-----------|")?;
+    writeln!(file, "| # | Step | Result | Duration | Before | After | Artifacts |")?;
+    writeln!(file, "|---|------|--------|----------|--------|-------|-----------|")?;
 
     for (i, step) in scenario.steps.iter().enumerate() {
-        let step_dir = format!("{:02}", i + 1);
-        let screenshot_link = if step.screenshot_after.is_some() {
-            format!(
-                "<a href=\"./{}/after.png\"><img src=\"./{}/after.png\" width=\"150\" /></a>",
-                step_dir, step_dir
-            )
+        let step_num = i + 1;
+        let step_num_str = format!("{:02}", step_num);
+
+        let before_img = if let Some(path) = &step.screenshot_before {
+            if path.exists() {
+                format!(
+                    "<a href=\"./{}/before.png\"><img src=\"./{}/before.png\" width=\"120\" /></a>",
+                    step_num_str, step_num_str
+                )
+            } else {
+                "-".to_string()
+            }
         } else {
             "-".to_string()
         };
-        let log_link = if step.serial_log.is_some() {
-            format!("[📜](./{}/serial.log)", step_dir)
+
+        let after_img = if let Some(path) = &step.screenshot_after {
+            if path.exists() {
+                format!(
+                    "<a href=\"./{}/after.png\"><img src=\"./{}/after.png\" width=\"120\" /></a>",
+                    step_num_str, step_num_str
+                )
+            } else {
+                "-".to_string()
+            }
         } else {
             "-".to_string()
         };
-        let reg_link = if step.registers.is_some() {
-            format!("[💾](./{}/registers.txt)", step_dir)
-        } else {
-            "-".to_string()
-        };
+
+        let mut artifact_links = Vec::new();
+        if let Some(path) = &step.serial_log {
+            if path.exists() {
+                artifact_links.push(format!("[📜](./{}/serial.log)", step_num_str));
+            }
+        }
+        if let Some(path) = &step.registers {
+            if path.exists() {
+                artifact_links.push(format!("[💾](./{}/registers.txt)", step_num_str));
+            }
+        }
+        if let Ok(entries) = fs::read_dir(&step.dir) {
+            let mut extra_pngs: Vec<String> = entries
+                .flatten()
+                .filter_map(|entry| entry.file_name().into_string().ok())
+                .filter(|name| {
+                    name.ends_with(".png") && name != "before.png" && name != "after.png"
+                })
+                .collect();
+            extra_pngs.sort();
+            for name in extra_pngs {
+                artifact_links.push(format!("[{}](./{}/{})", name, step_num_str, name));
+            }
+        }
+        let artifacts_str = artifact_links.join(" ");
 
         writeln!(
             file,
-            "| {} | {} {} | {} | {}ms | {} {} {} |",
-            i + 1,
+            "| {} | {} {} | {} | {}ms | {} | {} | {} |",
+            step_num,
             step.keyword,
             step.name,
             step.result.emoji(),
             step.duration_ms,
-            screenshot_link,
-            log_link,
-            reg_link
+            before_img,
+            after_img,
+            artifacts_str
         )?;
     }
     writeln!(file)?;

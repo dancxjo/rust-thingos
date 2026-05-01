@@ -301,12 +301,38 @@ impl ArtifactCollector {
             if let Some(scenario) = feature.scenarios.last_mut() {
                 if let Some(step) = scenario.steps.last_mut() {
                     step.result = result;
-                    step.screenshot_before = screenshot_before;
-                    step.screenshot_after = screenshot_after;
+                    if screenshot_before.is_some() {
+                        step.screenshot_before = screenshot_before;
+                    }
+                    if screenshot_after.is_some() {
+                        step.screenshot_after = screenshot_after;
+                    }
                     step.registers = registers;
                     step.serial_log = if log_path.exists() { Some(log_path.clone()) } else { None };
                     step.serial_excerpt = log_content;
                     step.duration_ms = duration_ms;
+                }
+            }
+        }
+    }
+
+    /// Set the "before" screenshot path for the current step.
+    pub fn set_current_step_screenshot_before(&mut self, path: PathBuf) {
+        if let Some(feature) = self.features.last_mut() {
+            if let Some(scenario) = feature.scenarios.last_mut() {
+                if let Some(step) = scenario.steps.last_mut() {
+                    step.screenshot_before = Some(path);
+                }
+            }
+        }
+    }
+
+    /// Set the "after" screenshot path for the current step.
+    pub fn set_current_step_screenshot_after(&mut self, path: PathBuf) {
+        if let Some(feature) = self.features.last_mut() {
+            if let Some(scenario) = feature.scenarios.last_mut() {
+                if let Some(step) = scenario.steps.last_mut() {
+                    step.screenshot_after = Some(path);
                 }
             }
         }

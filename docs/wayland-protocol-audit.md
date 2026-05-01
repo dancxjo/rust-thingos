@@ -113,13 +113,13 @@ Remaining open items are in the **known gaps** section below.
 
 | Event           | Status | Notes                                              |
 |-----------------|--------|----------------------------------------------------|
-| `enter`         | ✅      | Routed from `WEVT_POINTER_ENTER`                   |
-| `leave`         | ✅      | Routed from `WEVT_POINTER_LEAVE`                   |
-| `motion`        | ✅      | Coalesced; routed from `WEVT_POINTER_MOTION`       |
-| `button`        | ✅      | Routed from `WEVT_POINTER_BUTTON`; evdev mapping   |
-| `axis`          | ❌      | Scroll wheel not yet implemented                   |
-| `frame`         | ❌      | Not yet sent after pointer event batches           |
-| `axis_source`   | ❌      | Not yet implemented                                |
+| `enter`         | ✅      | Routed from `WEVT_POINTER_ENTER`; followed by `frame` |
+| `leave`         | ✅      | Routed from `WEVT_POINTER_LEAVE`; followed by `frame` |
+| `motion`        | ✅      | Coalesced; routed from `WEVT_POINTER_MOTION`; followed by `frame` |
+| `button`        | ✅      | Routed from `WEVT_POINTER_BUTTON`; evdev mapping; followed by `frame` |
+| `axis`          | ✅      | Routed from `WEVT_POINTER_SCROLL`; vertical and horizontal |
+| `frame`         | ✅      | Sent after every pointer event group (v5+)         |
+| `axis_source`   | ✅      | Emitted as `wheel` before axis events              |
 | `set_cursor`    | ⚠️ no-op| Accepted; bloom manages cursor internally          |
 | `release`       | ✅      | Destroys the pointer object                        |
 
@@ -164,10 +164,11 @@ Remaining open items are in the **known gaps** section below.
 | `create_data_source`  | ✅       |                                                    |
 | `get_data_device`     | ✅       |                                                    |
 | `set_selection`       | ✅       | Broadcasts `wl_data_offer` to all other clients    |
-| `data_offer.receive`  | ✅       | Routes write-fd to source client                   |
+| `data_offer.receive`  | ✅       | Routes write-fd to source client (clipboard + DnD) |
 | `selection` (event)   | ✅       | Null selection on owner disconnect                 |
-| `start_drag`          | ⚠️ no-op| Drag-and-drop not yet implemented                  |
-| `wl_data_offer.finish`| ⚠️ no-op| DnD only                                           |
+| `start_drag`          | ✅       | Tracks drag source; sends enter/leave/motion/drop  |
+| `wl_data_offer.accept`| ✅       | Forwards `wl_data_source.target` to source         |
+| `wl_data_offer.finish`| ✅       | Sends `wl_data_source.dnd_finished` to source      |
 
 ---
 
@@ -268,18 +269,18 @@ Remaining open items are in the **known gaps** section below.
 
 | Item                                  | Priority | Notes                                               |
 |---------------------------------------|----------|-----------------------------------------------------|
-| `wl_pointer.axis` / `axis_source` / `frame` | Medium | Scroll-wheel events not yet forwarded         |
 | `wl_touch`                            | Low      | Touch input not yet connected                       |
 | `xdg_popup.popup_done`                | Medium   | Compositor should dismiss popups on click outside   |
 | `zwp_linux_dmabuf_feedback_v1`        | Low      | DMABuf format/modifier feedback for v4+             |
 | `wl_pointer.frame` grouping           | Low      | Batching pointer events into frame groups           |
-| `wl_data_device` drag-and-drop        | Low      | `start_drag` is a no-op                             |
+| `wl_data_device` drag-and-drop        | ✅ Done  | `start_drag` implemented; enter/leave/motion/drop events sent |
 | `xdg_positioner` (full)               | Low      | Gravity, constraint adjustment not honoured         |
 | `wp_fractional_scale_v1`              | Low      | HiDPI fractional scaling                           |
 | `xdg_activation_v1`                  | Low      | Focus-stealing prevention                          |
 | `ext_session_lock_v1`                 | Low      | Session lock protocol                              |
 | Server-side decorations (`zxdg_decoration_manager_v1`) | Low | Chrome entirely compositor-drawn |
 | `wl_surface.set_opaque_region` (real) | Low      | Currently a no-op; could optimise composition      |
+| `wl_pointer.axis_discrete` / `axis_value120` | Low | High-resolution scroll (v8+) not yet emitted |
 
 ---
 

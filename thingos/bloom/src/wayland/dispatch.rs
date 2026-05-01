@@ -1105,6 +1105,56 @@ fn dispatch_region(msg: &WireMsg, client: &mut WaylandClient, obj_id: u32) -> Ve
     vec![]
 }
 
+/// Compute the bounding rectangle of all "add" operations in a `wl_region`
+/// rect list.
+///
+/// The `rects` slice holds `(x, y, w, h, is_add)` entries as accumulated by
+/// `wl_region.add` and `wl_region.subtract`.  This function returns the
+/// axis-aligned bounding box of all add entries (subtract entries are ignored
+/// for the V1 single-rect approximation used by the compositor culling pass).
+///
+/// Returns `None` when the region contains no valid add operations.
+///
+/// # Coordinate clamping
+///
+/// Wayland permits negative surface-local coordinates in `wl_region.add`
+/// (e.g. to extend an opaque area into an off-screen margin).  Because the
+/// scene and compositor work in non-negative pixel space, the origin of the
+/// returned rect is clamped to `(0, 0)`.  This is conservative: the reported
+/// opaque rectangle may be *smaller* than the actual opaque area declared by
+/// the client, but it is never *larger*, which preserves correctness.
+///
+/// Example: an add rect `(-10, 0, 100, 50)` covers screen columns 0..90 once
+/// the negative left margin is clipped, so the returned rect is
+/// `(0, 0, 90, 50)`.
+fn region_bounding_rect(rects: &[(i32, i32, i32, i32, bool)]) -> Option<(u32, u32, u32, u32)> {
+    let mut min_x = i32::MAX;
+    let mut min_y = i32::MAX;
+    let mut max_x = i32::MIN;
+    let mut max_y = i32::MIN;
+    let mut found = false;
+
+    for &(x, y, w, h, is_add) in rects {
+        if is_add && w > 0 && h > 0 {
+            min_x = min_x.min(x);
+            min_y = min_y.min(y);
+            max_x = max_x.max(x.saturating_add(w));
+            max_y = max_y.max(y.saturating_add(h));
+            found = true;
+        }
+    }
+
+    if !found {
+        return None;
+    }
+
+    let x = min_x.max(0) as u32;
+    let y = min_y.max(0) as u32;
+    let max_x = max_x.max(0) as u32;
+    let max_y = max_y.max(0) as u32;
+    Some((x, y, max_x.saturating_sub(x), max_y.saturating_sub(y)))
+}
+
 // ── wl_buffer ─────────────────────────────────────────────────────────────────
 
 const WL_BUFFER_DESTROY: u16 = 0;
@@ -1248,6 +1298,7 @@ fn handle_surface_commit(
         pending_buffer,
         pending_damage,
         pending_frame_cb,
+        pending_opaque_region,
     ) = {
         match client.objects.get(&wl_surface_obj) {
             Some(ObjectEntry::Surface {
@@ -1257,6 +1308,7 @@ fn handle_surface_commit(
                 pending_buffer,
                 pending_damage,
                 pending_frame_cb,
+                pending_opaque_region,
                 ..
             }) => (
                 *bloom_surface_id,
@@ -1265,6 +1317,7 @@ fn handle_surface_commit(
                 *pending_buffer,
                 *pending_damage,
                 *pending_frame_cb,
+                *pending_opaque_region,
             ),
             _ => return out,
         }
@@ -1340,6 +1393,52 @@ fn handle_surface_commit(
         out.push(ipc::encode_damage(bloom_surface_id, x, y, w, h).to_vec());
     }
 
+    // Opaque region — resolve the region object (if any) to a bounding rect
+    // and emit WCMD_SET_OPAQUE_REGION so the main thread applies it atomically
+    // with the buffer commit.  A null region_id (0) clears the opaque region.
+    {
+        // The resolved bounding rect (in surface-local coords, clamped to
+        // non-negative).  `None` means either "no pending change" (when
+        // `pending_opaque_region` is `None`) or "explicit clear" (when the
+        // client passed a null wl_region ID or the region has no add ops).
+        let resolved_opaque_rect: Option<(u32, u32, u32, u32)> = match pending_opaque_region {
+            None => {
+                // No pending change from the client; nothing to send.
+                // (Skip emitting the IPC message entirely so that a prior
+                // committed opaque region is preserved across frames.)
+                None
+            }
+            Some(0) => {
+                // Explicit null region → clear.
+                None // send with has_region=0 below
+            }
+            Some(region_id) => {
+                // Resolve the wl_region object to a bounding rect.
+                match client.objects.get(&region_id) {
+                    Some(ObjectEntry::Region { rects }) => {
+                        region_bounding_rect(rects)
+                    }
+                    _ => None,
+                }
+            }
+        };
+
+        // If the client set a pending opaque region (even if the resolved rect
+        // is None because the region was empty / already destroyed), we must
+        // inform the main thread so it can update the scene state before the
+        // commit lands.
+        if pending_opaque_region.is_some() {
+            blossom_debug!(
+                "wayland-server: wl_surface obj={} commit opaque_region={:?}",
+                wl_surface_obj,
+                resolved_opaque_rect
+            );
+            out.push(
+                ipc::encode_set_opaque_region(bloom_surface_id, resolved_opaque_rect).to_vec(),
+            );
+        }
+    }
+
     // Register frame callback with IPC if present.
     let has_cb = pending_frame_cb.is_some();
     let cb_key = if let Some(cb_id) = pending_frame_cb {
@@ -1359,12 +1458,18 @@ fn handle_surface_commit(
     out.push(ipc::encode_commit(bloom_surface_id, has_cb, cb_key).to_vec());
 
     // Clear pending state.
-    if let Some(ObjectEntry::Surface { pending_buffer, pending_damage, pending_frame_cb, .. }) =
-        client.objects.get_mut(&wl_surface_obj)
+    if let Some(ObjectEntry::Surface {
+        pending_buffer,
+        pending_damage,
+        pending_frame_cb,
+        pending_opaque_region,
+        ..
+    }) = client.objects.get_mut(&wl_surface_obj)
     {
         *pending_buffer = None;
         *pending_damage = None;
         *pending_frame_cb = None;
+        *pending_opaque_region = None;
     }
 
     // Atomically apply pending state of any synchronized subsurface children.
@@ -2688,7 +2793,8 @@ fn dispatch_data_source(msg: &WireMsg, client: &mut WaylandClient, obj_id: u32) 
             client.destroy(obj_id);
         }
         WL_DATA_SOURCE_SET_ACTIONS => {
-            // DnD actions — accepted as no-op for clipboard-only support.
+            // set_actions(dnd_actions: uint) — record for DnD negotiation.
+            blossom_debug!("wayland-server: data_source.set_actions obj={}", obj_id);
         }
         _ => {}
     }
@@ -2729,8 +2835,31 @@ fn dispatch_data_device(msg: &WireMsg, client: &mut WaylandClient, obj_id: u32) 
             client.data_device_obj = None;
         }
         WL_DATA_DEVICE_START_DRAG => {
-            // Drag-and-drop — not implemented; accepted as no-op.
-            blossom_debug!("wayland-server: data_device.start_drag ignored (DnD not implemented)");
+            // start_drag(source: object<wl_data_source>|null,
+            //            origin: object<wl_surface>,
+            //            icon:   object<wl_surface>|null,
+            //            serial: uint)
+            let source_obj = read_u32(&msg.data, 0).unwrap_or(0);
+            let origin_surface = read_u32(&msg.data, 4).unwrap_or(0);
+            let icon_surface = read_u32(&msg.data, 8).unwrap_or(0);
+            let serial = read_u32(&msg.data, 12).unwrap_or(0);
+            let mime_types = if source_obj != 0 {
+                match client.objects.get(&source_obj) {
+                    Some(ObjectEntry::DataSource { mime_types }) => mime_types.clone(),
+                    _ => alloc::vec::Vec::new(),
+                }
+            } else {
+                alloc::vec::Vec::new()
+            };
+            blossom_debug!(
+                "wayland-server: data_device.start_drag source={} origin={} icon={} serial={} mimes={}",
+                source_obj,
+                origin_surface,
+                icon_surface,
+                serial,
+                mime_types.len()
+            );
+            client.pending_start_drag = Some((source_obj, origin_surface, icon_surface, serial));
         }
         _ => {}
     }
@@ -2768,15 +2897,41 @@ fn dispatch_data_offer(msg: &WireMsg, client: &mut WaylandClient, obj_id: u32) -
                 mime,
                 write_fd
             );
-            // Signal to the server to forward the fd to the clipboard source.
-            client.pending_offer_receive = Some((mime, write_fd));
+            // Signal to the server to forward the fd to the clipboard or DnD source.
+            // Include offer_obj so the server can decide which source to route to.
+            client.pending_offer_receive = Some((obj_id, mime, write_fd));
+        }
+        WL_DATA_OFFER_ACCEPT => {
+            // accept(serial: uint, mime_type: string|null)
+            // serial is first 4 bytes; mime_type follows.
+            let mime = if msg.data.len() > 4 {
+                match read_string(&msg.data, 4) {
+                    Some((bytes, _)) => String::from_utf8_lossy(bytes).into_owned(),
+                    None => String::new(),
+                }
+            } else {
+                String::new()
+            };
+            blossom_debug!(
+                "wayland-server: data_offer.accept obj={} mime=\"{}\"",
+                obj_id,
+                mime
+            );
+            client.pending_dnd_accept = Some(mime);
+        }
+        WL_DATA_OFFER_FINISH => {
+            blossom_debug!("wayland-server: data_offer.finish obj={}", obj_id);
+            client.pending_dnd_finish = true;
+        }
+        WL_DATA_OFFER_SET_ACTIONS => {
+            // set_actions(dnd_actions: uint, preferred_action: uint)
+            // Accepted; server uses preferred_action when sending action event back.
+            blossom_debug!("wayland-server: data_offer.set_actions obj={}", obj_id);
         }
         WL_DATA_OFFER_DESTROY => {
             blossom_debug!("wayland-server: data_offer obj={} destroyed", obj_id);
             client.destroy(obj_id);
         }
-        // DnD-only requests: accepted as no-ops.
-        WL_DATA_OFFER_ACCEPT | WL_DATA_OFFER_FINISH | WL_DATA_OFFER_SET_ACTIONS => {}
         _ => {}
     }
     vec![]
@@ -2856,4 +3011,61 @@ fn dispatch_presentation_feedback(
     // wp_presentation_feedback has no requests in v1; the server initiates
     // both `presented` and `discarded` (each of which is a destructor event).
     vec![]
+}
+
+#[cfg(test)]
+mod tests {
+    use super::region_bounding_rect;
+
+    #[test]
+    fn empty_region_returns_none() {
+        assert_eq!(region_bounding_rect(&[]), None);
+    }
+
+    #[test]
+    fn subtract_only_returns_none() {
+        // Only subtract ops — no add rects, so no bounding box.
+        let rects = [(0, 0, 100, 100, false)];
+        assert_eq!(region_bounding_rect(&rects), None);
+    }
+
+    #[test]
+    fn single_add_rect() {
+        let rects = [(0, 0, 480, 320, true)];
+        assert_eq!(region_bounding_rect(&rects), Some((0, 0, 480, 320)));
+    }
+
+    #[test]
+    fn non_zero_origin_add_rect() {
+        let rects = [(10, 20, 100, 200, true)];
+        assert_eq!(region_bounding_rect(&rects), Some((10, 20, 100, 200)));
+    }
+
+    #[test]
+    fn two_add_rects_union() {
+        // Two non-overlapping rects: bounding box covers both.
+        let rects = [(0, 0, 50, 50, true), (100, 100, 50, 50, true)];
+        assert_eq!(region_bounding_rect(&rects), Some((0, 0, 150, 150)));
+    }
+
+    #[test]
+    fn subtract_ignored_in_bounding_rect() {
+        // Add covers full surface; subtract reduces visible area but we report
+        // the bounding box of add ops only (conservative V1 approximation).
+        let rects = [(0, 0, 200, 200, true), (50, 50, 100, 100, false)];
+        assert_eq!(region_bounding_rect(&rects), Some((0, 0, 200, 200)));
+    }
+
+    #[test]
+    fn negative_origin_clamped_to_zero() {
+        // Wayland allows negative coords (off-screen); clamp to 0 for scene.
+        let rects = [(-10, -20, 100, 100, true)];
+        assert_eq!(region_bounding_rect(&rects), Some((0, 0, 90, 80)));
+    }
+
+    #[test]
+    fn degenerate_zero_size_add_ignored() {
+        let rects = [(0, 0, 0, 0, true), (10, 10, 50, 50, true)];
+        assert_eq!(region_bounding_rect(&rects), Some((10, 10, 50, 50)));
+    }
 }

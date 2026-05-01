@@ -1,30 +1,42 @@
+use std::net::SocketAddr;
 use std::path::PathBuf;
 use std::sync::OnceLock;
 
 use tokio::io::{AsyncRead, AsyncReadExt, AsyncWrite, AsyncWriteExt};
-use tokio::net::UnixStream;
+use tokio::net::{TcpStream, UnixStream};
 use tokio::sync::Mutex;
 
+#[derive(Debug, Clone)]
+pub(crate) enum QmpEndpoint {
+    Unix(PathBuf),
+    Tcp(SocketAddr),
+}
+
 /// Global QMP stream (for reporter access to screenshots).
-/// Kept as a path, connections are opened on-demand to avoid QEMU deadlocks from buffer overflows.
-pub(crate) static QMP_STREAM: OnceLock<Mutex<Option<PathBuf>>> = OnceLock::new();
+/// Kept as an endpoint, connections are opened on-demand to avoid QEMU deadlocks from buffer overflows.
+pub(crate) static QMP_STREAM: OnceLock<Mutex<Option<QmpEndpoint>>> = OnceLock::new();
 
 /// Set the global QMP stream (called from world after init).
-pub async fn set_qmp_stream(path: Option<PathBuf>) {
+pub async fn set_qmp_endpoint(endpoint: Option<QmpEndpoint>) {
     if let Some(cache) = QMP_STREAM.get() {
         let mut guard = cache.lock().await;
-        *guard = path;
+        *guard = endpoint;
     }
+}
+
+/// Deprecated alias for set_qmp_endpoint.
+pub async fn set_qmp_stream(path: Option<PathBuf>) {
+    set_qmp_endpoint(path.map(QmpEndpoint::Unix)).await;
 }
 
 /// Execute a QMP command on a specific stream.
 pub async fn execute_on_stream(
-    stream: &mut (impl AsyncRead + AsyncWrite + Unpin),
+    stream: &mut (impl AsyncRead + AsyncWrite + Unpin + ?Sized),
     command: &str,
 ) -> Result<String, Box<dyn std::error::Error + Send + Sync>> {
     // Helper to read a QMP line with a total timeout
     async fn read_line(
-        stream: &mut (impl AsyncRead + Unpin),
+        stream: &mut (impl AsyncRead + Unpin + ?Sized),
         deadline: tokio::time::Instant,
     ) -> std::io::Result<String> {
         let mut buf = [0u8; 1];
@@ -91,29 +103,86 @@ pub async fn execute_on_stream(
 }
 
 pub async fn connect_qmp(
-    socket_path: &std::path::Path,
-) -> Result<UnixStream, Box<dyn std::error::Error + Send + Sync>> {
-    let mut stream = UnixStream::connect(socket_path).await?;
+    endpoint: &QmpEndpoint,
+) -> Result<QmpStream, Box<dyn std::error::Error + Send + Sync>> {
+    let mut stream = match endpoint {
+        QmpEndpoint::Unix(path) => QmpStream::Unix(UnixStream::connect(path).await?),
+        QmpEndpoint::Tcp(addr) => QmpStream::Tcp(TcpStream::connect(addr).await?),
+    };
+
     let mut buf = vec![0u8; 4096];
-    let _ = stream.readable().await;
-    let _ = tokio::io::AsyncReadExt::read(&mut stream, &mut buf).await?;
-    stream.write_all(b"{\"execute\": \"qmp_capabilities\"}\n").await?;
-    let _ = stream.readable().await;
-    let _ = tokio::io::AsyncReadExt::read(&mut stream, &mut buf).await?;
+    // Wait for the greeting
+    let _ = tokio::time::timeout(std::time::Duration::from_millis(200), stream.read(&mut buf))
+        .await??;
+
+    execute_on_stream(&mut stream, "{\"execute\": \"qmp_capabilities\"}").await?;
     Ok(stream)
 }
+
+pub enum QmpStream {
+    Unix(UnixStream),
+    Tcp(TcpStream),
+}
+
+impl AsyncRead for QmpStream {
+    fn poll_read(
+        self: std::pin::Pin<&mut Self>,
+        cx: &mut std::task::Context<'_>,
+        buf: &mut tokio::io::ReadBuf<'_>,
+    ) -> std::task::Poll<std::io::Result<()>> {
+        match self.get_mut() {
+            Self::Unix(s) => std::pin::Pin::new(s).poll_read(cx, buf),
+            Self::Tcp(s) => std::pin::Pin::new(s).poll_read(cx, buf),
+        }
+    }
+}
+
+impl AsyncWrite for QmpStream {
+    fn poll_write(
+        self: std::pin::Pin<&mut Self>,
+        cx: &mut std::task::Context<'_>,
+        buf: &[u8],
+    ) -> std::task::Poll<std::io::Result<usize>> {
+        match self.get_mut() {
+            Self::Unix(s) => std::pin::Pin::new(s).poll_write(cx, buf),
+            Self::Tcp(s) => std::pin::Pin::new(s).poll_write(cx, buf),
+        }
+    }
+
+    fn poll_flush(
+        self: std::pin::Pin<&mut Self>,
+        cx: &mut std::task::Context<'_>,
+    ) -> std::task::Poll<std::io::Result<()>> {
+        match self.get_mut() {
+            Self::Unix(s) => std::pin::Pin::new(s).poll_flush(cx),
+            Self::Tcp(s) => std::pin::Pin::new(s).poll_flush(cx),
+        }
+    }
+
+    fn poll_shutdown(
+        self: std::pin::Pin<&mut Self>,
+        cx: &mut std::task::Context<'_>,
+    ) -> std::task::Poll<std::io::Result<()>> {
+        match self.get_mut() {
+            Self::Unix(s) => std::pin::Pin::new(s).poll_shutdown(cx),
+            Self::Tcp(s) => std::pin::Pin::new(s).poll_shutdown(cx),
+        }
+    }
+}
+
+impl Unpin for QmpStream {}
 
 async fn qmp_execute(command: &str) -> Result<String, Box<dyn std::error::Error + Send + Sync>> {
     let mutex = QMP_STREAM.get().ok_or("Artifacts system not initialized")?;
     let guard = mutex.lock().await;
 
-    let path = match guard.as_ref() {
-        Some(p) => p.clone(),
+    let endpoint = match guard.as_ref() {
+        Some(e) => e.clone(),
         None => return Err("No QMP connection active".into()),
     };
     drop(guard); // Free lock during I/O
 
-    let mut stream = connect_qmp(&path).await?;
+    let mut stream = connect_qmp(&endpoint).await?;
     execute_on_stream(&mut stream, command).await
 }
 
@@ -146,7 +215,7 @@ pub async fn take_screenshot_global(
                     break;
                 }
                 eprintln!("[bdd-debug] QMP returned error: {}", resp);
-                tokio::time::sleep(std::time::Duration::from_millis(200)).await;
+                tokio::time::sleep(std::time::Duration::from_millis(50)).await;
             }
             Err(e) => {
                 let msg = e.to_string();
@@ -156,8 +225,8 @@ pub async fn take_screenshot_global(
                 {
                     return Err(e); // Fatal connection loss
                 }
-                eprintln!("[bdd-debug] QMP execute failed: {}", msg);
-                tokio::time::sleep(std::time::Duration::from_millis(200)).await;
+                // eprintln!("[bdd-debug] QMP execute failed: {}", msg); // Too noisy during boot
+                tokio::time::sleep(std::time::Duration::from_millis(50)).await;
             }
         }
     }
@@ -183,6 +252,12 @@ pub async fn take_screenshot_global(
     // Convert PPM to PNG
     let png_path = output_path.with_extension("png");
     let img = image::open(&ppm_path)?;
+    // Ensure parent directory exists
+    if let Some(parent) = png_path.parent() {
+        let _ = std::fs::create_dir_all(parent);
+    }
+
+    // Write the PNG file
     img.save(&png_path)?;
     let _ = std::fs::remove_file(&ppm_path);
 

@@ -50,6 +50,9 @@ pub struct ThingOsWorld {
     /// input from command-output assertions).
     #[world(skip)]
     pub last_typed_command: Option<String>,
+    /// True after the harness has proved the serial shell accepts commands.
+    #[world(skip)]
+    pub serial_console_interactive: bool,
     /// Scenario-wide default timeout derived from feature/scenario tags.
     #[world(skip)]
     pub scenario_timeout_secs: Option<f64>,
@@ -253,6 +256,9 @@ impl ThingOsWorld {
             log.clear();
         }
         crate::artifacts::clear_latest_serial().await;
+        self.serial_checkpoint = 0;
+        self.last_typed_command = None;
+        self.serial_console_interactive = false;
 
         let nanos = std::time::SystemTime::now()
             .duration_since(std::time::UNIX_EPOCH)
@@ -399,10 +405,7 @@ impl ThingOsWorld {
                             ),
                         ]);
                     } else {
-                        cmd.args([
-                            "-blockdev",
-                            "driver=null-co,node-name=usbdisk,size=1073741824",
-                        ]);
+                        cmd.args(["-blockdev", "driver=null-co,node-name=usbdisk,size=1073741824"]);
                     }
                     cmd.args(["-device", "usb-storage,bus=xhci.0,drive=usbdisk"]);
                 }
@@ -563,7 +566,13 @@ impl ThingOsWorld {
 
         self.qemu = Some(child);
 
-        crate::artifacts::set_qmp_stream(None).await;
+        if let Some(endpoint) = self.qmp_control.clone() {
+            let global_endpoint = match endpoint {
+                QmpEndpoint::Unix(p) => crate::artifacts::qmp::QmpEndpoint::Unix(p),
+                QmpEndpoint::Tcp(a) => crate::artifacts::qmp::QmpEndpoint::Tcp(a),
+            };
+            crate::artifacts::set_qmp_endpoint(Some(global_endpoint)).await;
+        }
 
         Ok(())
     }
@@ -687,6 +696,106 @@ impl ThingOsWorld {
             if start.elapsed() > timeout {
                 eprintln!("│  │  │      debug: timed out waiting for {}", needle);
                 return false;
+            }
+
+            tokio::time::sleep(std::time::Duration::from_millis(100)).await;
+        }
+    }
+
+    /// Prove the serial shell is interactive before any step sends scenario commands.
+    ///
+    /// Scheduler entry only proves the kernel is running. The serial shell is spawned later by
+    /// Sprout, so command-driving steps must wait for a prompt and a successful echo round trip.
+    pub async fn ensure_serial_console_interactive(
+        &mut self,
+        timeout_secs: f64,
+    ) -> Result<(), Box<dyn std::error::Error + Send + Sync>> {
+        if self.serial_console_interactive {
+            return Ok(());
+        }
+
+        let start = std::time::Instant::now();
+        let timeout = std::time::Duration::from_secs_f64(timeout_secs);
+        let mut last_print = std::time::Instant::now();
+
+        loop {
+            {
+                let log = self.serial_log.lock().await;
+                let clean = strip_ansi(&log);
+                if shell_prompt_present(&clean) || clean.contains("SPROUT: Spawned serial shell") {
+                    break;
+                }
+
+                if last_print.elapsed() > std::time::Duration::from_secs(5) {
+                    eprintln!(
+                        "│  │  │      debug: waiting for serial shell before command input. current log len: {}",
+                        log.len()
+                    );
+                    let tail = if clean.len() > DEBUG_TAIL_LENGTH {
+                        &clean[clean.len() - DEBUG_TAIL_LENGTH..]
+                    } else {
+                        &clean[..]
+                    };
+                    eprintln!("│  │  │      debug: tail: {:?}", tail);
+                    last_print = std::time::Instant::now();
+                }
+            }
+
+            if start.elapsed() > timeout {
+                return Err("Timed out waiting for serial shell prompt".into());
+            }
+
+            tokio::time::sleep(std::time::Duration::from_millis(100)).await;
+        }
+
+        tokio::time::sleep(std::time::Duration::from_millis(150)).await;
+
+        let nanos = std::time::SystemTime::now()
+            .duration_since(std::time::UNIX_EPOCH)
+            .unwrap_or_default()
+            .as_nanos();
+        let marker = format!("BDD_CONSOLE_READY_{}_{}", std::process::id(), nanos);
+        let command = format!("echo {}\n", marker);
+        let checkpoint = self.get_serial_log().await.len();
+
+        for b in command.bytes() {
+            self.serial_write(&[b]).await?;
+            tokio::time::sleep(std::time::Duration::from_millis(10)).await;
+        }
+
+        loop {
+            let log = self.get_serial_log().await;
+            let start_offset = checkpoint.min(log.len());
+            let recent = strip_ansi(&log[start_offset..]);
+            if recent.lines().any(|line| line.trim() == marker) {
+                let mut collector = crate::artifacts::global().lock().await;
+                collector.set_step_assertion_buffer("Console Readiness", &recent);
+                drop(collector);
+
+                self.serial_console_interactive = true;
+                eprintln!("│  │  │      ✅ Serial console accepted readiness probe");
+
+                let screenshot_path = {
+                    crate::artifacts::global().lock().await.screenshot_path("console_interactive")
+                };
+                match self.take_screenshot(&screenshot_path).await {
+                    Ok(path) => eprintln!(
+                        "│  │  │      📸 Console readiness screenshot: {}",
+                        path.display()
+                    ),
+                    Err(e) => {
+                        eprintln!("│  │  │      ⚠️ Console readiness screenshot failed: {}", e)
+                    }
+                }
+                return Ok(());
+            }
+
+            if start.elapsed() > timeout {
+                return Err(format!(
+                    "Timed out waiting for serial shell readiness probe '{}'",
+                    marker
+                )
+                .into());
             }
 
             tokio::time::sleep(std::time::Duration::from_millis(100)).await;
@@ -892,9 +1001,7 @@ impl ThingOsWorld {
 
         // Try using mkdosfs + mtools if available
         if std::process::Command::new("mkdosfs").arg("--help").output().is_ok() {
-            if let Ok(()) =
-                Self::create_usb_fat_image_with_tools(path, IMG_SIZE, PART_START_LBA)
-            {
+            if let Ok(()) = Self::create_usb_fat_image_with_tools(path, IMG_SIZE, PART_START_LBA) {
                 return Ok(());
             }
         }
@@ -923,9 +1030,7 @@ impl ThingOsWorld {
             ])
             .output()?;
         if !out.status.success() {
-            return Err(
-                format!("dd failed: {}", String::from_utf8_lossy(&out.stderr)).into(),
-            );
+            return Err(format!("dd failed: {}", String::from_utf8_lossy(&out.stderr)).into());
         }
 
         // Write MBR with one partition entry
@@ -936,8 +1041,12 @@ impl ThingOsWorld {
             let p = &mut mbr[446..462];
             p[4] = 0x06; // FAT16 >= 32 MiB
             // CHS start/end: set to maximum (0xFE/0xFF) for LBA-only addressing
-            p[1] = 0xFE; p[2] = 0xFF; p[3] = 0xFF;
-            p[5] = 0xFE; p[6] = 0xFF; p[7] = 0xFF;
+            p[1] = 0xFE;
+            p[2] = 0xFF;
+            p[3] = 0xFF;
+            p[5] = 0xFE;
+            p[6] = 0xFF;
+            p[7] = 0xFF;
             let start = part_start_lba as u32;
             let size = (part_size_bytes / SECTOR_SIZE) as u32;
             p[8..12].copy_from_slice(&start.to_le_bytes());
@@ -973,10 +1082,7 @@ impl ThingOsWorld {
         }
         let mcopy_out = child.wait_with_output()?;
         if !mcopy_out.status.success() {
-            eprintln!(
-                "[bdd] mcopy warning: {}",
-                String::from_utf8_lossy(&mcopy_out.stderr)
-            );
+            eprintln!("[bdd] mcopy warning: {}", String::from_utf8_lossy(&mcopy_out.stderr));
         }
 
         Ok(())
@@ -1003,13 +1109,12 @@ impl ThingOsWorld {
             (ROOT_ENTRY_COUNT * 32 + sector_size as u32 - 1) / sector_size as u32;
         // Rough FAT size estimate
         let fat_size: u32 = {
-            let data_sectors = part_sectors
-                .saturating_sub(RESERVED_SECTORS + NUM_FATS * 8 + root_dir_sectors);
+            let data_sectors =
+                part_sectors.saturating_sub(RESERVED_SECTORS + NUM_FATS * 8 + root_dir_sectors);
             let n_clusters = data_sectors / SECTORS_PER_CLUSTER;
             (n_clusters * 2 + sector_size as u32 - 1) / sector_size as u32
         };
-        let data_start_lba =
-            RESERVED_SECTORS + NUM_FATS * fat_size + root_dir_sectors;
+        let data_start_lba = RESERVED_SECTORS + NUM_FATS * fat_size + root_dir_sectors;
 
         let mut img = vec![0u8; img_size as usize];
 
@@ -1018,8 +1123,12 @@ impl ThingOsWorld {
             let p = &mut img[446..462];
             p[4] = 0x06; // FAT16 >= 32 MiB partition type
             // CHS start/end: set to maximum (0xFE/0xFF) for LBA-only addressing
-            p[1] = 0xFE; p[2] = 0xFF; p[3] = 0xFF;
-            p[5] = 0xFE; p[6] = 0xFF; p[7] = 0xFF;
+            p[1] = 0xFE;
+            p[2] = 0xFF;
+            p[3] = 0xFF;
+            p[5] = 0xFE;
+            p[6] = 0xFF;
+            p[7] = 0xFF;
             p[8..12].copy_from_slice(&(part_start_lba as u32).to_le_bytes());
             p[12..16].copy_from_slice(&part_sectors.to_le_bytes());
         }
@@ -1030,7 +1139,9 @@ impl ThingOsWorld {
         let bs = part_start_lba as usize * sector_size as usize;
         {
             let s = &mut img[bs..bs + sector_size as usize];
-            s[0] = 0xEB; s[1] = 0x58; s[2] = 0x90;
+            s[0] = 0xEB;
+            s[1] = 0x58;
+            s[2] = 0x90;
             s[3..11].copy_from_slice(b"MSWIN4.1");
             s[11..13].copy_from_slice(&(sector_size as u16).to_le_bytes());
             s[13] = SECTORS_PER_CLUSTER as u8;
@@ -1059,19 +1170,21 @@ impl ThingOsWorld {
 
         // FAT1
         let fat1 = (part_start_lba as u32 + RESERVED_SECTORS) as usize * sector_size as usize;
-        img[fat1] = MEDIA_BYTE; img[fat1 + 1] = 0xFF;
-        img[fat1 + 2] = 0xFF; img[fat1 + 3] = 0xFF;
+        img[fat1] = MEDIA_BYTE;
+        img[fat1 + 1] = 0xFF;
+        img[fat1 + 2] = 0xFF;
+        img[fat1 + 3] = 0xFF;
         // Cluster 2: end-of-chain
-        img[fat1 + 4] = 0xFF; img[fat1 + 5] = 0xFF;
+        img[fat1 + 4] = 0xFF;
+        img[fat1 + 5] = 0xFF;
 
         // FAT2 mirror
         let fat2 = fat1 + fat_size as usize * sector_size as usize;
         img.copy_within(fat1..fat1 + fat_size as usize * sector_size as usize, fat2);
 
         // Root directory
-        let root =
-            (part_start_lba as u32 + RESERVED_SECTORS + NUM_FATS * fat_size) as usize
-                * sector_size as usize;
+        let root = (part_start_lba as u32 + RESERVED_SECTORS + NUM_FATS * fat_size) as usize
+            * sector_size as usize;
         // Volume label entry
         img[root..root + 11].copy_from_slice(b"USBVOL     ");
         img[root + 11] = 0x08;
@@ -1107,15 +1220,30 @@ pub fn strip_ansi(s: &str) -> String {
     re.replace_all(s, "").replace('\r', "")
 }
 
+/// Returns true when the cleaned serial stream contains a Thing-OS shell prompt.
+pub fn shell_prompt_present(clean: &str) -> bool {
+    let Some(prompt_start) = clean.rfind("THING-OS [") else {
+        return false;
+    };
+    let prompt = &clean[prompt_start..];
+    prompt.contains("] ") && prompt.contains(" > ")
+}
+
 #[cfg(test)]
 mod tests {
-    use super::ThingOsWorld;
+    use super::{ThingOsWorld, shell_prompt_present, strip_ansi};
 
     #[test]
     fn parses_supported_timeout_tags() {
         assert_eq!(ThingOsWorld::parse_timeout_tag("timeout.30s"), Some(30.0));
         assert_eq!(ThingOsWorld::parse_timeout_tag("timeout=45"), Some(45.0));
         assert_eq!(ThingOsWorld::parse_timeout_tag("@timeout-7.5s"), Some(7.5));
+    }
+
+    #[test]
+    fn detects_colored_shell_prompt() {
+        let raw = "\x1B[1;95mTHING\x1B[0m\x1B[1;96m-OS\x1B[0m \x1B[2;94m[\x1B[0m\x1B[1;92mOK\x1B[0m\x1B[2;94m]\x1B[0m \x1B[1;93m/\x1B[0m \x1B[1;96m>\x1B[0m ";
+        assert!(shell_prompt_present(&strip_ansi(raw)));
     }
 
     #[test]
@@ -1137,8 +1265,8 @@ mod tests {
         ThingOsWorld::create_usb_fat_image_minimal(
             &path,
             16 * 1024 * 1024, // 16 MiB
-            2048,              // partition LBA
-            512,               // sector size
+            2048,             // partition LBA
+            512,              // sector size
         )
         .expect("create_usb_fat_image_minimal should succeed");
 
@@ -1150,8 +1278,7 @@ mod tests {
         assert_eq!(img[511], 0xAA);
 
         // Partition entry 0 should point to LBA 2048
-        let start_lba =
-            u32::from_le_bytes(img[446 + 8..446 + 12].try_into().unwrap());
+        let start_lba = u32::from_le_bytes(img[446 + 8..446 + 12].try_into().unwrap());
         assert_eq!(start_lba, 2048);
 
         // Boot sector of the partition
@@ -1178,11 +1305,9 @@ mod tests {
         assert!(found_hello, "HELLO.TXT entry not found in root directory");
 
         // File content
-        let root_entry_count =
-            u16::from_le_bytes([img[bs + 17], img[bs + 18]]) as usize;
+        let root_entry_count = u16::from_le_bytes([img[bs + 17], img[bs + 18]]) as usize;
         let root_dir_sectors_count = root_entry_count * 32 / 512;
-        let cluster2_sector =
-            2048 + reserved + num_fats * fat_size + root_dir_sectors_count;
+        let cluster2_sector = 2048 + reserved + num_fats * fat_size + root_dir_sectors_count;
         let file_data_off = cluster2_sector * 512;
         assert_eq!(&img[file_data_off..file_data_off + 15], b"hello from USB\n");
     }

@@ -18,6 +18,7 @@
 //! | `WCMD_SET_TITLE`     | Update compositor-owned shell chrome title    |
 //! | `WCMD_SET_SUBSURFACE`| Update parent/position/stacking for a subsurface |
 //! | `WCMD_SET_LAYER_SURFACE`| Update wlr-layer-shell state for a surface |
+//! | `WCMD_SET_OPAQUE_REGION`| Update the committed opaque region for a surface |
 //!
 //! # Main → Wayland (events)
 //!
@@ -30,6 +31,7 @@
 //! | `WEVT_POINTER_*` | Focused pointer events from Bristle/Bloom    |
 //! | `WEVT_KEYBOARD_*` | Focused keyboard events from Bristle/Bloom  |
 //! | `WEVT_CLOSE_LAYER_SURFACE` | Compositor closes a layer surface       |
+//! | `WEVT_POINTER_SCROLL` | Scroll-wheel event for the focused surface |
 
 // ── Discriminants ────────────────────────────────────────────────────────────
 
@@ -42,6 +44,7 @@ pub const WCMD_SET_CHROME: u8 = 6;
 pub const WCMD_SET_TITLE: u8 = 7;
 pub const WCMD_SET_SUBSURFACE: u8 = 8;
 pub const WCMD_SET_LAYER_SURFACE: u8 = 9;
+pub const WCMD_SET_OPAQUE_REGION: u8 = 10;
 pub const MAX_TITLE_BYTES: usize = 64;
 
 pub const WEVT_BUFFER_RELEASE: u8 = 1;
@@ -57,6 +60,7 @@ pub const WEVT_KEYBOARD_LEAVE: u8 = 10;
 pub const WEVT_KEYBOARD_KEY: u8 = 11;
 pub const WEVT_OUTPUT_INFO: u8 = 12;
 pub const WEVT_CLOSE_LAYER_SURFACE: u8 = 13;
+pub const WEVT_POINTER_SCROLL: u8 = 92;
 
 pub const TOPLEVEL_ACTION_CLOSE: u8 = 1;
 pub const TOPLEVEL_ACTION_MINIMIZE: u8 = 2;
@@ -204,6 +208,32 @@ pub struct WCmdSetLayerSurface {
     pub height: u32,
 }
 
+/// [`WCMD_SET_OPAQUE_REGION`] — update the committed opaque region for a surface.
+///
+/// Sent before [`WCMD_COMMIT`] within the same commit batch so the main thread
+/// can apply the region atomically with the buffer attach.  When `has_region`
+/// is `0` the region is cleared (the surface has no declared opaque area);
+/// when `has_region` is `1` the rect `(x, y, w, h)` describes the opaque
+/// rectangle in surface-local coordinates.
+///
+/// All coordinate fields are `u32`: negative Wayland region coordinates are
+/// clamped to `0` by the Wayland server thread before encoding (see
+/// `region_bounding_rect`).  This is intentionally conservative — the reported
+/// rectangle never exceeds the actual opaque area.
+#[repr(C, packed)]
+#[derive(Clone, Copy)]
+pub struct WCmdSetOpaqueRegion {
+    pub msg_type: u8, // = WCMD_SET_OPAQUE_REGION
+    /// `1` if a region rect follows; `0` to clear the opaque region.
+    pub has_region: u8,
+    pub _pad: [u8; 2],
+    pub bloom_surface_id: u32,
+    pub x: u32,
+    pub y: u32,
+    pub w: u32,
+    pub h: u32,
+}
+
 /// [`WEVT_BUFFER_RELEASE`] — the compositor no longer references a buffer.
 #[repr(C, packed)]
 #[derive(Clone, Copy)]
@@ -284,6 +314,22 @@ pub struct WEvtPointerButton {
     pub pressed: u8,
     pub _pad: u8,
     pub bloom_surface_id: u32,
+    pub timestamp_ms: u32,
+}
+
+/// [`WEVT_POINTER_SCROLL`] — scroll-wheel event for the pointer-focused surface.
+///
+/// `dx` and `dy` are in the same device units emitted by the input driver's
+/// `ScrollPayload` (typically ±1 per wheel detent).  The Wayland server maps
+/// these to `wl_pointer.axis` values scaled to surface-local pixels.
+#[repr(C, packed)]
+#[derive(Clone, Copy)]
+pub struct WEvtPointerScroll {
+    pub msg_type: u8, // = WEVT_POINTER_SCROLL
+    pub _pad: [u8; 3],
+    pub bloom_surface_id: u32,
+    pub dx: i16,
+    pub dy: i16,
     pub timestamp_ms: u32,
 }
 
@@ -604,6 +650,25 @@ pub fn encode_pointer_button(
     out
 }
 
+pub fn encode_pointer_scroll(
+    bloom_surface_id: u32,
+    dx: i16,
+    dy: i16,
+    timestamp_ns: u64,
+) -> [u8; 16] {
+    let msg = WEvtPointerScroll {
+        msg_type: WEVT_POINTER_SCROLL,
+        _pad: [0; 3],
+        bloom_surface_id,
+        dx,
+        dy,
+        timestamp_ms: (timestamp_ns / 1_000_000) as u32,
+    };
+    let mut out = [0u8; 16];
+    out.copy_from_slice(as_bytes!(msg, WEvtPointerScroll));
+    out
+}
+
 pub fn encode_keyboard_enter(bloom_surface_id: u32, modifiers: u8) -> [u8; 8] {
     let msg = WEvtKeyboardEnter {
         msg_type: WEVT_KEYBOARD_ENTER,
@@ -666,6 +731,32 @@ pub fn encode_close_layer_surface(bloom_surface_id: u32) -> [u8; 8] {
         bloom_surface_id,
     };
     let mut out = [0u8; 8];
-    out.copy_from_slice(as_bytes!(msg, WEvtCloseLayerSurface));
+    out.copy_from_slice(as_bytes!(msg, WEvtCloseLayerSurface));  
+}
+
+/// Encode a [`WCMD_SET_OPAQUE_REGION`] command.
+///
+/// Pass `rect = Some((x, y, w, h))` to set the opaque region, or `None` to
+/// clear it (no opaque region on the surface).
+pub fn encode_set_opaque_region(
+    bloom_surface_id: u32,
+    rect: Option<(u32, u32, u32, u32)>,
+) -> [u8; 24] {
+    let (has_region, x, y, w, h) = match rect {
+        Some((x, y, w, h)) => (1u8, x, y, w, h),
+        None => (0u8, 0, 0, 0, 0),
+    };
+    let msg = WCmdSetOpaqueRegion {
+        msg_type: WCMD_SET_OPAQUE_REGION,
+        has_region,
+        _pad: [0; 2],
+        bloom_surface_id,
+        x,
+        y,
+        w,
+        h,
+    };
+    let mut out = [0u8; 24];
+    out.copy_from_slice(as_bytes!(msg, WCmdSetOpaqueRegion));
     out
 }

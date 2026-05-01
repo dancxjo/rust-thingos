@@ -367,9 +367,7 @@ async fn machine_is_booted_with_qemu_xhci(world: &mut ThingOsWorld) -> Result<()
 }
 
 #[given("the machine is booted with a USB FAT image")]
-async fn machine_is_booted_with_usb_fat_image(
-    world: &mut ThingOsWorld,
-) -> Result<(), StepError> {
+async fn machine_is_booted_with_usb_fat_image(world: &mut ThingOsWorld) -> Result<(), StepError> {
     let arch = std::env::var("BDD_ARCH").unwrap_or_else(|_| "x86_64".to_string());
     world
         .boot_with_usb_fat_image(&arch)
