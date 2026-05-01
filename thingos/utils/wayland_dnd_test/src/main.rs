@@ -161,9 +161,13 @@ fn read_wayland_string<'a>(buf: &'a [u8], offset: usize) -> Option<(&'a [u8], us
         return None;
     }
     let len = read_u32(buf, offset) as usize;
+    // A zero-length field encodes a null string in Wayland.
+    if len == 0 {
+        return Some((&buf[0..0], 4));
+    }
     let start = offset + 4;
     let end = start + len;
-    if end > buf.len() || len == 0 {
+    if end > buf.len() {
         return None;
     }
     let padded = (len + 3) & !3;

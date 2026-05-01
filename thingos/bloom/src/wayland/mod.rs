@@ -478,7 +478,7 @@ impl WaylandServer {
 
         // Process data_offer.receive fd routing.
         if let Some((offer_obj, mime_type, write_fd)) = pending_recv {
-            self.handle_offer_receive(offer_obj, write_fd, mime_type);
+            self.handle_offer_receive(offer_obj, mime_type, write_fd);
         }
 
         // Process start_drag.
@@ -1156,7 +1156,7 @@ impl WaylandServer {
     /// Handle `wl_data_offer.receive`:
     /// forward the write end of the pipe to the clipboard or DnD source client
     /// so it can write the requested data.
-    fn handle_offer_receive(&mut self, offer_obj: u32, write_fd: u32, mime_type: String) {
+    fn handle_offer_receive(&mut self, offer_obj: u32, mime_type: String, write_fd: u32) {
         use crate::wayland::wire::encode_string;
 
         // If a drag is active and this offer is the DnD offer, route to DnD source.
@@ -1468,14 +1468,12 @@ impl WaylandServer {
                     use crate::wayland::wire::encode_string;
                     // wl_data_source.target(mime_type: string|null) — opcode 0
                     // Empty mime means null (no accepted type).
-                    let payload = if mime.is_empty() {
-                        // Null string: 4-byte length 0 with no string data (no NUL).
-                        // The Wayland protocol encodes null strings as a 0-length field.
-                        0u32.to_ne_bytes().to_vec()
+                    // Wayland null strings are encoded as a single 0-uint (no NUL byte).
+                    if mime.is_empty() {
+                        client.send(self.dnd_source_obj, 0, &0u32.to_ne_bytes());
                     } else {
-                        encode_string(&mime)
-                    };
-                    client.send(self.dnd_source_obj, 0, &payload);
+                        client.send(self.dnd_source_obj, 0, &encode_string(&mime));
+                    }
                 }
             }
         }
