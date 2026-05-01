@@ -4,10 +4,15 @@ use alloc::string::ToString;
 extern crate alloc;
 
 use abi::display::{
-    BufferHandle, BufferId, CommitFlags, CommitRequest, DEFAULT_REFRESH_MHZ, DISPLAY_OP_COMMIT,
-    DISPLAY_OP_GET_INFO, DISPLAY_OP_IMPORT_BUFFER, DISPLAY_OP_MOVE_CURSOR,
+    BufferHandle, BufferId, CommitFlags, CommitRequest, DEFAULT_REFRESH_MHZ, DISPLAY_OP_ACCEL2D,
+    DISPLAY_OP_COMMIT, DISPLAY_OP_GET_INFO, DISPLAY_OP_IMPORT_BUFFER, DISPLAY_OP_MOVE_CURSOR,
     DISPLAY_OP_RELEASE_BUFFER, DISPLAY_OP_SET_CURSOR, DisplayCaps, DisplayInfo, DisplayMode,
     MoveCursorRequest, PlaneCommit, SetCursorRequest,
+    accel2d::{
+        Accel2dBatch, Accel2dCommand, ACCEL2D_COMMAND_SIZE, ACCEL2D_CMD_ALPHA_BLIT,
+        ACCEL2D_CMD_CLEAR_RECT, ACCEL2D_CMD_COPY_RECT, ACCEL2D_CMD_FLUSH_DAMAGE,
+        ACCEL2D_CMD_MASKED_BLIT, ACCEL2D_CMD_ROUNDED_CLIP_BLIT, ACCEL2D_CMD_STRETCH_BLIT,
+    },
 };
 use abi::display_driver_protocol as drvproto;
 use abi::driver_frame::FrameReader;
@@ -28,6 +33,12 @@ const THINGOS_DRIVER_NAME: &[u8] = b"display_virtio_gpu";
 const DISPLAY_PROVIDER_POLL_ISOLATION: bool = true;
 const DISPLAY_BPP: u32 = 4;
 const FRAME_POOL_COUNT: usize = 1;
+/// Bytes per pixel for the frame pool buffers (always BGRX8888 / BGRA8888).
+const FRAME_POOL_BPP: usize = DISPLAY_BPP as usize;
+/// Maximum number of `Accel2dCommand` entries accepted in a single
+/// `DISPLAY_OP_ACCEL2D` batch.  Limits CPU time and prevents DoS from
+/// malformed large batches.
+const MAX_ACCEL2D_BATCH_CMDS: usize = 4096;
 
 /// Maximum cursor image side length (pixels). Allocating DMA pages up-front
 /// for this many pixels × 4 bytes ensures the cursor pixel buffer is
@@ -584,7 +595,14 @@ fn vfs_device_call(driver: &mut VirtioGpuDriver, payload: &[u8]) -> ProviderResp
                 | DisplayCaps::GPU_BLIT
                 | DisplayCaps::DIRECT_SCANOUT
                 | DisplayCaps::PARTIAL_FLUSH
-                | DisplayCaps::RESOURCE_CACHE;
+                | DisplayCaps::RESOURCE_CACHE
+                | DisplayCaps::ACCEL2D_CLEAR
+                | DisplayCaps::ACCEL2D_COPY
+                | DisplayCaps::ACCEL2D_STRETCH
+                | DisplayCaps::ACCEL2D_ALPHA_BLIT
+                | DisplayCaps::ACCEL2D_MASKED_BLIT
+                | DisplayCaps::ACCEL2D_ROUNDED_CLIP_BLIT
+                | DisplayCaps::ACCEL2D_FLUSH_DAMAGE;
             // Only advertise hardware cursor if the cursor queue is available
             // AND the DMA pixel buffer was successfully allocated at init time.
             if driver.gpu.has_cursorq() && driver.cursor_dma_buf != 0 && driver.cursor_dma_phys != 0
@@ -1366,8 +1384,604 @@ fn vfs_device_call(driver: &mut VirtioGpuDriver, payload: &[u8]) -> ProviderResp
             );
             ProviderResponse::ok_device_call(0, &[])
         }
+        DISPLAY_OP_ACCEL2D => {
+            execute_accel2d(driver, call_payload)
+        }
         _ => ProviderResponse::err(Errno::ENOSYS),
     }
+}
+
+// ============================================================================
+// DISPLAY_OP_ACCEL2D — 2D acceleration command batch handler
+// ============================================================================
+
+/// Parse and execute a batch of 2D acceleration commands sent via
+/// `DISPLAY_OP_ACCEL2D`.  Drawing commands operate on the current frame-pool
+/// buffer in CPU space; `ACCEL2D_CMD_FLUSH_DAMAGE` transfers the declared dirty
+/// regions to the virtio-GPU resource and flushes them to the display.
+fn execute_accel2d(driver: &mut VirtioGpuDriver, call_payload: &[u8]) -> ProviderResponse {
+    let batch_size = core::mem::size_of::<Accel2dBatch>();
+    if call_payload.len() < batch_size {
+        return ProviderResponse::err(Errno::EINVAL);
+    }
+    let header: Accel2dBatch =
+        unsafe { core::ptr::read_unaligned(call_payload.as_ptr() as *const _) };
+    let cmd_count = header.cmd_count as usize;
+    // Reject unreasonably large batches before arithmetic to prevent
+    // malformed requests from exhausting memory.
+    if cmd_count > MAX_ACCEL2D_BATCH_CMDS {
+        return ProviderResponse::err(Errno::EINVAL);
+    }
+    let needed = batch_size.saturating_add(cmd_count.saturating_mul(ACCEL2D_COMMAND_SIZE));
+    if call_payload.len() < needed {
+        return ProviderResponse::err(Errno::EINVAL);
+    }
+
+    // Work on the currently displayed frame-pool buffer so incremental updates
+    // are visible on top of the last committed scene.
+    let idx = driver.last_presented_idx.unwrap_or(0);
+    if driver.frame_pool.is_empty() {
+        return ProviderResponse::err(Errno::ENXIO);
+    }
+
+    for i in 0..cmd_count {
+        let off = batch_size + i * ACCEL2D_COMMAND_SIZE;
+        let cmd: Accel2dCommand = unsafe {
+            core::ptr::read_unaligned(
+                call_payload[off..off + ACCEL2D_COMMAND_SIZE].as_ptr() as *const _,
+            )
+        };
+        if let Err(e) = execute_accel2d_cmd(driver, idx, &cmd) {
+            return ProviderResponse::err(e);
+        }
+    }
+
+    ProviderResponse::ok_device_call(0, &[])
+}
+
+/// Execute a single 2D acceleration command against `driver.frame_pool[idx]`.
+fn execute_accel2d_cmd(
+    driver: &mut VirtioGpuDriver,
+    idx: usize,
+    cmd: &Accel2dCommand,
+) -> abi::errors::SysResult<()> {
+    match cmd.kind {
+        ACCEL2D_CMD_CLEAR_RECT => {
+            let c = unsafe { cmd.body.clear_rect };
+            accel2d_clear_rect(driver, idx, c.dst_buffer, c.rect, c.color)
+        }
+        ACCEL2D_CMD_COPY_RECT => {
+            let c = unsafe { cmd.body.copy_rect };
+            accel2d_copy_rect(driver, idx, c.src_buffer, c.dst_buffer, c.src_rect, c.dst_rect)
+        }
+        ACCEL2D_CMD_STRETCH_BLIT => {
+            let c = unsafe { cmd.body.stretch_blit };
+            accel2d_stretch_blit(driver, idx, c.src_buffer, c.dst_buffer, c.src_rect, c.dst_rect)
+        }
+        ACCEL2D_CMD_ALPHA_BLIT => {
+            let c = unsafe { cmd.body.alpha_blit };
+            accel2d_alpha_blit(
+                driver,
+                idx,
+                c.src_buffer,
+                c.dst_buffer,
+                c.src_rect,
+                c.dst_rect,
+                c.global_alpha,
+            )
+        }
+        ACCEL2D_CMD_MASKED_BLIT => {
+            let c = unsafe { cmd.body.masked_blit };
+            accel2d_masked_blit(
+                driver,
+                idx,
+                c.src_buffer,
+                c.mask_buffer,
+                c.dst_buffer,
+                c.src_rect,
+                c.mask_rect,
+                c.dst_rect,
+            )
+        }
+        ACCEL2D_CMD_ROUNDED_CLIP_BLIT => {
+            let c = unsafe { cmd.body.rounded_clip_blit };
+            accel2d_rounded_clip_blit(
+                driver,
+                idx,
+                c.src_buffer,
+                c.dst_buffer,
+                c.src_rect,
+                c.dst_rect,
+                c.radius,
+            )
+        }
+        ACCEL2D_CMD_FLUSH_DAMAGE => {
+            let c = unsafe { cmd.body.flush_damage };
+            accel2d_flush_damage(driver, idx, &c)
+        }
+        _ => Err(Errno::ENOSYS),
+    }
+}
+
+/// Fill a rectangle in the frame-pool buffer with a solid colour.
+///
+/// Only `BufferId(0)` (the driver framebuffer) is supported as destination.
+fn accel2d_clear_rect(
+    driver: &mut VirtioGpuDriver,
+    idx: usize,
+    dst_buffer: BufferId,
+    rect: abi::display_protocol::Rect,
+    color: u32,
+) -> abi::errors::SysResult<()> {
+    if dst_buffer != BufferId(0) {
+        return Err(Errno::ENOSYS);
+    }
+    let target_ptr = driver.frame_pool[idx].ptr;
+    let target_size = driver.frame_pool[idx].size;
+    let stride = driver.disp_stride as usize;
+    let bpp = FRAME_POOL_BPP;
+    if stride == 0 || target_size == 0 {
+        return Ok(());
+    }
+    if rect.x >= driver.disp_width || rect.y >= driver.disp_height {
+        return Ok(());
+    }
+    let x = rect.x as usize;
+    let y = rect.y as usize;
+    let w = rect.w.min(driver.disp_width.saturating_sub(rect.x)) as usize;
+    let h = rect.h.min(driver.disp_height.saturating_sub(rect.y)) as usize;
+    if w == 0 || h == 0 {
+        return Ok(());
+    }
+    for row in 0..h {
+        for col in 0..w {
+            let off = (y + row).saturating_mul(stride) + (x + col).saturating_mul(bpp);
+            if off + bpp > target_size {
+                break;
+            }
+            unsafe {
+                core::ptr::write_unaligned(target_ptr.add(off) as *mut u32, color);
+            }
+        }
+    }
+    Ok(())
+}
+
+/// Copy pixels from an imported buffer into the frame-pool buffer.
+///
+/// Only `BufferId(0)` as destination is supported.
+fn accel2d_copy_rect(
+    driver: &mut VirtioGpuDriver,
+    idx: usize,
+    src_buffer: BufferId,
+    dst_buffer: BufferId,
+    src_rect: abi::display_protocol::Rect,
+    dst_rect: abi::display_protocol::Rect,
+) -> abi::errors::SysResult<()> {
+    if dst_buffer != BufferId(0) {
+        return Err(Errno::ENOSYS);
+    }
+    let src = driver.imported_buffers.get(&src_buffer).ok_or(Errno::ENOENT)?;
+    let bpp = src.format.bytes_per_pixel();
+    let fb_bpp = FRAME_POOL_BPP;
+    if bpp != fb_bpp || bpp == 0 {
+        return Err(Errno::ENOSYS);
+    }
+    let copy_w = src_rect
+        .w
+        .min(dst_rect.w)
+        .min(src.width.saturating_sub(src_rect.x))
+        .min(driver.disp_width.saturating_sub(dst_rect.x)) as usize;
+    let copy_h = src_rect
+        .h
+        .min(dst_rect.h)
+        .min(src.height.saturating_sub(src_rect.y))
+        .min(driver.disp_height.saturating_sub(dst_rect.y)) as usize;
+    let row_bytes = copy_w * bpp;
+    if row_bytes == 0 || copy_h == 0 {
+        return Ok(());
+    }
+    let src_x = src_rect.x as usize;
+    let src_y = src_rect.y as usize;
+    let dst_x = dst_rect.x as usize;
+    let dst_y = dst_rect.y as usize;
+    let src_ptr = src.ptr;
+    let src_stride = src.stride as usize;
+    let src_size = src.size;
+    let target_ptr = driver.frame_pool[idx].ptr;
+    let target_size = driver.frame_pool[idx].size;
+    let fb_stride = driver.disp_stride as usize;
+    for row in 0..copy_h {
+        let src_off = (src_y + row).saturating_mul(src_stride) + src_x.saturating_mul(bpp);
+        let dst_off = (dst_y + row).saturating_mul(fb_stride) + dst_x.saturating_mul(fb_bpp);
+        if src_off + row_bytes > src_size || dst_off + row_bytes > target_size {
+            break;
+        }
+        unsafe {
+            core::ptr::copy_nonoverlapping(
+                src_ptr.add(src_off),
+                target_ptr.add(dst_off),
+                row_bytes,
+            );
+        }
+    }
+    Ok(())
+}
+
+/// Scale-copy from an imported buffer to the frame-pool buffer using
+/// nearest-neighbour sampling.
+///
+/// Only `BufferId(0)` as destination is supported.
+fn accel2d_stretch_blit(
+    driver: &mut VirtioGpuDriver,
+    idx: usize,
+    src_buffer: BufferId,
+    dst_buffer: BufferId,
+    src_rect: abi::display_protocol::Rect,
+    dst_rect: abi::display_protocol::Rect,
+) -> abi::errors::SysResult<()> {
+    if dst_buffer != BufferId(0) {
+        return Err(Errno::ENOSYS);
+    }
+    let src = driver.imported_buffers.get(&src_buffer).ok_or(Errno::ENOENT)?;
+    let bpp = src.format.bytes_per_pixel();
+    if bpp != 4 {
+        return Err(Errno::ENOSYS);
+    }
+    if src_rect.w == 0 || src_rect.h == 0 || dst_rect.w == 0 || dst_rect.h == 0 {
+        return Ok(());
+    }
+    let dst_w = dst_rect.w.min(driver.disp_width.saturating_sub(dst_rect.x)) as usize;
+    let dst_h = dst_rect.h.min(driver.disp_height.saturating_sub(dst_rect.y)) as usize;
+    if dst_w == 0 || dst_h == 0 {
+        return Ok(());
+    }
+    let src_w = src_rect.w as usize;
+    let src_h = src_rect.h as usize;
+    let src_x0 = src_rect.x as usize;
+    let src_y0 = src_rect.y as usize;
+    let dst_x0 = dst_rect.x as usize;
+    let dst_y0 = dst_rect.y as usize;
+    let src_ptr = src.ptr;
+    let src_stride = src.stride as usize;
+    let src_size = src.size;
+    let target_ptr = driver.frame_pool[idx].ptr;
+    let target_size = driver.frame_pool[idx].size;
+    let fb_stride = driver.disp_stride as usize;
+    // Pre-compute scale ratios to avoid repeated integer division in the inner
+    // loop.  Using fixed-point 16.16 to stay no_std (no float).
+    let scale_x = if dst_w > 0 { (src_w << 16) / dst_w } else { 0 };
+    let scale_y = if dst_h > 0 { (src_h << 16) / dst_h } else { 0 };
+    for dy in 0..dst_h {
+        let sy = ((dy * scale_y) >> 16).min(src_h.saturating_sub(1));
+        for dx in 0..dst_w {
+            let sx = ((dx * scale_x) >> 16).min(src_w.saturating_sub(1));
+            let src_off =
+                (src_y0 + sy).saturating_mul(src_stride) + (src_x0 + sx).saturating_mul(bpp);
+            let dst_off =
+                (dst_y0 + dy).saturating_mul(fb_stride) + (dst_x0 + dx).saturating_mul(bpp);
+            if src_off + bpp > src_size || dst_off + bpp > target_size {
+                continue;
+            }
+            unsafe {
+                let px = core::ptr::read_unaligned(src_ptr.add(src_off) as *const u32);
+                core::ptr::write_unaligned(target_ptr.add(dst_off) as *mut u32, px);
+            }
+        }
+    }
+    Ok(())
+}
+
+/// Alpha-blend an imported buffer over the frame-pool buffer.
+///
+/// Only `BufferId(0)` as destination is supported.
+fn accel2d_alpha_blit(
+    driver: &mut VirtioGpuDriver,
+    idx: usize,
+    src_buffer: BufferId,
+    dst_buffer: BufferId,
+    src_rect: abi::display_protocol::Rect,
+    dst_rect: abi::display_protocol::Rect,
+    global_alpha: u8,
+) -> abi::errors::SysResult<()> {
+    if dst_buffer != BufferId(0) {
+        return Err(Errno::ENOSYS);
+    }
+    let src = driver.imported_buffers.get(&src_buffer).ok_or(Errno::ENOENT)?;
+    let bpp = src.format.bytes_per_pixel();
+    if bpp != 4 {
+        return Err(Errno::ENOSYS);
+    }
+    let copy_w = src_rect
+        .w
+        .min(dst_rect.w)
+        .min(src.width.saturating_sub(src_rect.x))
+        .min(driver.disp_width.saturating_sub(dst_rect.x)) as usize;
+    let copy_h = src_rect
+        .h
+        .min(dst_rect.h)
+        .min(src.height.saturating_sub(src_rect.y))
+        .min(driver.disp_height.saturating_sub(dst_rect.y)) as usize;
+    if copy_w == 0 || copy_h == 0 {
+        return Ok(());
+    }
+    let src_x = src_rect.x as usize;
+    let src_y = src_rect.y as usize;
+    let dst_x = dst_rect.x as usize;
+    let dst_y = dst_rect.y as usize;
+    let src_ptr = src.ptr;
+    let src_stride = src.stride as usize;
+    let src_size = src.size;
+    let src_format = src.format;
+    let target_ptr = driver.frame_pool[idx].ptr;
+    let target_size = driver.frame_pool[idx].size;
+    let fb_stride = driver.disp_stride as usize;
+    for row in 0..copy_h {
+        for col in 0..copy_w {
+            let src_off =
+                (src_y + row).saturating_mul(src_stride) + (src_x + col).saturating_mul(bpp);
+            let dst_off =
+                (dst_y + row).saturating_mul(fb_stride) + (dst_x + col).saturating_mul(bpp);
+            if src_off + bpp > src_size || dst_off + bpp > target_size {
+                continue;
+            }
+            unsafe {
+                let s_px = source_argb_for_blend(
+                    core::ptr::read_unaligned(src_ptr.add(src_off) as *const u32),
+                    src_format,
+                );
+                let d_ptr = target_ptr.add(dst_off) as *mut u32;
+                let dst_px = core::ptr::read_unaligned(d_ptr);
+                core::ptr::write_unaligned(d_ptr, alpha_over_argb(s_px, dst_px, global_alpha));
+            }
+        }
+    }
+    Ok(())
+}
+
+/// Blend an imported buffer over the frame-pool buffer using a mask buffer as
+/// per-pixel alpha coverage.
+///
+/// Only `BufferId(0)` as destination is supported.
+#[allow(clippy::too_many_arguments)]
+fn accel2d_masked_blit(
+    driver: &mut VirtioGpuDriver,
+    idx: usize,
+    src_buffer: BufferId,
+    mask_buffer: BufferId,
+    dst_buffer: BufferId,
+    src_rect: abi::display_protocol::Rect,
+    mask_rect: abi::display_protocol::Rect,
+    dst_rect: abi::display_protocol::Rect,
+) -> abi::errors::SysResult<()> {
+    if dst_buffer != BufferId(0) {
+        return Err(Errno::ENOSYS);
+    }
+    // Extract source buffer metadata before borrowing driver for the frame pool.
+    let (src_ptr, src_stride, src_size, src_bpp, src_format, src_w, src_h) = {
+        let src = driver.imported_buffers.get(&src_buffer).ok_or(Errno::ENOENT)?;
+        let bpp = src.format.bytes_per_pixel();
+        if bpp != 4 {
+            return Err(Errno::ENOSYS);
+        }
+        (src.ptr, src.stride as usize, src.size, bpp, src.format, src.width, src.height)
+    };
+    let (msk_ptr, msk_stride, msk_size, msk_bpp, msk_format, msk_w, msk_h) = {
+        let msk = driver.imported_buffers.get(&mask_buffer).ok_or(Errno::ENOENT)?;
+        let bpp = msk.format.bytes_per_pixel();
+        if bpp != 4 {
+            return Err(Errno::ENOSYS);
+        }
+        (msk.ptr, msk.stride as usize, msk.size, bpp, msk.format, msk.width, msk.height)
+    };
+    let copy_w = src_rect
+        .w
+        .min(mask_rect.w)
+        .min(dst_rect.w)
+        .min(src_w.saturating_sub(src_rect.x))
+        .min(msk_w.saturating_sub(mask_rect.x))
+        .min(driver.disp_width.saturating_sub(dst_rect.x)) as usize;
+    let copy_h = src_rect
+        .h
+        .min(mask_rect.h)
+        .min(dst_rect.h)
+        .min(src_h.saturating_sub(src_rect.y))
+        .min(msk_h.saturating_sub(mask_rect.y))
+        .min(driver.disp_height.saturating_sub(dst_rect.y)) as usize;
+    if copy_w == 0 || copy_h == 0 {
+        return Ok(());
+    }
+    let sx0 = src_rect.x as usize;
+    let sy0 = src_rect.y as usize;
+    let mx0 = mask_rect.x as usize;
+    let my0 = mask_rect.y as usize;
+    let dx0 = dst_rect.x as usize;
+    let dy0 = dst_rect.y as usize;
+    let target_ptr = driver.frame_pool[idx].ptr;
+    let target_size = driver.frame_pool[idx].size;
+    let fb_stride = driver.disp_stride as usize;
+    for row in 0..copy_h {
+        for col in 0..copy_w {
+            let src_off =
+                (sy0 + row).saturating_mul(src_stride) + (sx0 + col).saturating_mul(src_bpp);
+            let msk_off =
+                (my0 + row).saturating_mul(msk_stride) + (mx0 + col).saturating_mul(msk_bpp);
+            let dst_off =
+                (dy0 + row).saturating_mul(fb_stride) + (dx0 + col).saturating_mul(src_bpp);
+            if src_off + src_bpp > src_size
+                || msk_off + msk_bpp > msk_size
+                || dst_off + src_bpp > target_size
+            {
+                continue;
+            }
+            unsafe {
+                let s_px = source_argb_for_blend(
+                    core::ptr::read_unaligned(src_ptr.add(src_off) as *const u32),
+                    src_format,
+                );
+                let m_raw = core::ptr::read_unaligned(msk_ptr.add(msk_off) as *const u32);
+                let mask_a = if msk_format.has_alpha() {
+                    ((m_raw >> 24) & 0xff) as u8
+                } else {
+                    let r = (m_raw >> 16) & 0xff;
+                    let g = (m_raw >> 8) & 0xff;
+                    let b = m_raw & 0xff;
+                    // ITU-R BT.601 luma approximation: Y = 0.299R + 0.587G + 0.114B
+                    // Coefficients scaled to integers that sum to 256 (≈ 77 + 150 + 29).
+                    ((r * 77 + g * 150 + b * 29) >> 8) as u8
+                };
+                let d_ptr = target_ptr.add(dst_off) as *mut u32;
+                let dst_px = core::ptr::read_unaligned(d_ptr);
+                let blended_alpha = scale_alpha((s_px >> 24) as u8, mask_a);
+                let src_with_mask = (s_px & 0x00ff_ffff) | ((blended_alpha as u32) << 24);
+                core::ptr::write_unaligned(d_ptr, alpha_over_argb(src_with_mask, dst_px, 255));
+            }
+        }
+    }
+    Ok(())
+}
+
+/// Blit an imported buffer into the frame-pool buffer, clipped to a rounded
+/// rectangle.
+///
+/// Only `BufferId(0)` as destination is supported.
+fn accel2d_rounded_clip_blit(
+    driver: &mut VirtioGpuDriver,
+    idx: usize,
+    src_buffer: BufferId,
+    dst_buffer: BufferId,
+    src_rect: abi::display_protocol::Rect,
+    dst_rect: abi::display_protocol::Rect,
+    radius: u8,
+) -> abi::errors::SysResult<()> {
+    if dst_buffer != BufferId(0) {
+        return Err(Errno::ENOSYS);
+    }
+    let src = driver.imported_buffers.get(&src_buffer).ok_or(Errno::ENOENT)?;
+    let bpp = src.format.bytes_per_pixel();
+    if bpp != 4 {
+        return Err(Errno::ENOSYS);
+    }
+    let copy_w = src_rect
+        .w
+        .min(dst_rect.w)
+        .min(src.width.saturating_sub(src_rect.x))
+        .min(driver.disp_width.saturating_sub(dst_rect.x)) as usize;
+    let copy_h = src_rect
+        .h
+        .min(dst_rect.h)
+        .min(src.height.saturating_sub(src_rect.y))
+        .min(driver.disp_height.saturating_sub(dst_rect.y)) as usize;
+    if copy_w == 0 || copy_h == 0 {
+        return Ok(());
+    }
+    let sx0 = src_rect.x as usize;
+    let sy0 = src_rect.y as usize;
+    let dx0 = dst_rect.x as usize;
+    let dy0 = dst_rect.y as usize;
+    let radius_u32 = radius as u32;
+    let src_ptr = src.ptr;
+    let src_stride = src.stride as usize;
+    let src_size = src.size;
+    let src_format = src.format;
+    let target_ptr = driver.frame_pool[idx].ptr;
+    let target_size = driver.frame_pool[idx].size;
+    let fb_stride = driver.disp_stride as usize;
+    for row in 0..copy_h {
+        for col in 0..copy_w {
+            let coverage = rounded_clip_coverage(
+                radius_u32,
+                col as u32,
+                row as u32,
+                dst_rect.w,
+                dst_rect.h,
+            );
+            if coverage == 0 {
+                continue;
+            }
+            let src_off =
+                (sy0 + row).saturating_mul(src_stride) + (sx0 + col).saturating_mul(bpp);
+            let dst_off =
+                (dy0 + row).saturating_mul(fb_stride) + (dx0 + col).saturating_mul(bpp);
+            if src_off + bpp > src_size || dst_off + bpp > target_size {
+                continue;
+            }
+            unsafe {
+                let s_px = source_argb_for_blend(
+                    core::ptr::read_unaligned(src_ptr.add(src_off) as *const u32),
+                    src_format,
+                );
+                let d_ptr = target_ptr.add(dst_off) as *mut u32;
+                let dst_px = core::ptr::read_unaligned(d_ptr);
+                core::ptr::write_unaligned(d_ptr, alpha_over_argb(s_px, dst_px, coverage));
+            }
+        }
+    }
+    Ok(())
+}
+
+/// Transfer declared damage rectangles to the GPU resource and flush them to
+/// the display.  A `rect_count` of 0 means the entire output surface is dirty.
+fn accel2d_flush_damage(
+    driver: &mut VirtioGpuDriver,
+    idx: usize,
+    cmd: &abi::display::accel2d::FlushDamageCmd,
+) -> abi::errors::SysResult<()> {
+    if driver.frame_pool.is_empty() {
+        return Err(Errno::ENXIO);
+    }
+    let res_id = driver.frame_pool[idx].res_id;
+
+    // Build the list of damage rects to flush.
+    let mut damage_rects: alloc::vec::Vec<Rect> = alloc::vec::Vec::new();
+    if cmd.rect_count == 0 {
+        // Full-surface flush.
+        damage_rects.push(Rect { x: 0, y: 0, w: driver.disp_width, h: driver.disp_height });
+    } else {
+        let count =
+            (cmd.rect_count as usize).min(abi::display::accel2d::ACCEL2D_MAX_DAMAGE_RECTS);
+        for i in 0..count {
+            let r = cmd.rects[i];
+            let clamped = rect_clamp_to_bounds(
+                Rect { x: r.x, y: r.y, w: r.w, h: r.h },
+                driver.disp_width,
+                driver.disp_height,
+            );
+            if !rect_is_empty(clamped) {
+                damage_rects.push(clamped);
+            }
+        }
+        if damage_rects.is_empty() {
+            // All rects were outside the screen; nothing to flush.
+            return Ok(());
+        }
+    }
+
+    // Transfer each damaged region to the GPU resource, then flush.
+    let stride = driver.disp_stride;
+    for dmg in &damage_rects {
+        if let Err(e) = driver.gpu.transfer_to_host_with_stride(res_id, *dmg, stride) {
+            stem::warn!("ACCEL2D: transfer_to_host failed: {}", e);
+            return Err(Errno::EIO);
+        }
+        if let Err(e) = driver.gpu.flush_resource(res_id, *dmg) {
+            stem::warn!("ACCEL2D: flush_resource failed: {}", e);
+            return Err(Errno::EIO);
+        }
+    }
+
+    // Ensure the scanout is pointed at the correct resource.
+    if driver.current_res_id != res_id {
+        if let Err(e) = driver.gpu.set_scanout(res_id, driver.disp_width, driver.disp_height) {
+            stem::warn!("ACCEL2D: set_scanout failed: {}", e);
+            return Err(Errno::EIO);
+        }
+        driver.current_res_id = res_id;
+    }
+
+    driver.last_presented_idx = Some(idx);
+    driver.present_seq = driver.present_seq.saturating_add(1);
+    Ok(())
 }
 
 #[unsafe(link_section = ".thing_manifest")]
