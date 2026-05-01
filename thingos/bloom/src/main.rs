@@ -3,6 +3,7 @@
 
 extern crate alloc;
 
+mod accel2d_batch;
 mod cache;
 mod compositor;
 mod damage;

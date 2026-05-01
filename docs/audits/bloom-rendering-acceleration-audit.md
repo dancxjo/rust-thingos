@@ -108,10 +108,11 @@ Legend: ✅ done · ⚠️ partial / in progress · 🔲 not started
 | `DISPLAY_OP_ACCEL2D` ioctl constant | ✅ | `abi/src/display/ioctl.rs` |
 | `Accel2dBatch` header + `Accel2dCommand` union wire types | ✅ | Complete |
 | Boot-fb CPU fallback for all 7 commands | ✅ | `display_bootfb/src/driver.rs::execute_accel2d` + `execute_accel2d_cmd` |
-| Virtio GPU implementation of `DISPLAY_OP_ACCEL2D` | 🔲 | Not handled in `vfs_device_call`; the switch statement does not include this opcode |
-| Bloom issuing Accel2d commands | 🔲 | Bloom still uses only the plane-commit (`DISPLAY_OP_COMMIT`) path |
+| Virtio GPU implementation of `DISPLAY_OP_ACCEL2D` | ✅ | `display_virtio_gpu/src/main.rs::execute_accel2d`; all 7 commands implemented; all ACCEL2D capability bits advertised in `DISPLAY_OP_GET_INFO` |
+| Bloom `Accel2dBatchBuilder` | ✅ | `bloom/src/accel2d_batch.rs`; zero-alloc fixed-capacity batch builder with `copy_rect`, `stretch_blit`, `alpha_blit`, `rounded_clip_blit`, `clear_rect`, `flush_damage` |
+| Bloom issuing Accel2d commands | ✅ | `bloom/src/display.rs::present_accel2d`; all plane types translated to ACCEL2D commands; `ENABLE_ACCEL2D` feature flag; `DisplayBackend::supports_accel2d()` capability check |
 
-**Summary:** The ABI is fully specified and boot-fb has CPU fallbacks for every command. The integration work – virtio GPU handler and Bloom call sites – is the remaining gap.
+**Summary:** All ABI, driver, and Bloom integration work is complete. Bloom routes through `present_accel2d` when the driver advertises `ACCEL2D_COPY | ACCEL2D_ALPHA_BLIT | ACCEL2D_FLUSH_DAMAGE`. The legacy `DISPLAY_OP_COMMIT` path remains as fallback (and can be forced by setting `ENABLE_ACCEL2D = false`).
 
 ---
 
@@ -163,23 +164,20 @@ All first-milestone items are shipped and passing their unit tests.
 
 ## What's left (priority order)
 
-1. **Stage 5 – Virtio GPU `DISPLAY_OP_ACCEL2D` handler.**  
-   Boot-fb CPU fallbacks exist; wiring the opcode into `display_virtio_gpu::vfs_device_call` and advertising the matching `ACCEL2D_*` capability bits is the immediate next step.
-
-2. **Stage 6 – True GPU alpha blend in virtio GPU.**  
+1. **Stage 6 – True GPU alpha blend in virtio GPU.**  
    `GPU_ALPHA_BLEND` is defined and the query helper exists, but the driver still does per-pixel CPU blending. This requires either a Virgl 3D context for GPU-side blending or a software-accelerated path that avoids touching every pixel on the CPU.
 
-3. **Stage 4 – Buffer generation counter.**  
+2. **Stage 4 – Buffer generation counter.**  
    Add a monotonic generation field to the buffer import ABI so that a re-attached buffer with new pixel content (same handle) can be detected without relying solely on release-then-reattach ordering.
 
-4. **Stage 4 – Chrome and rounded-mask cache slots.**  
+3. **Stage 4 – Chrome and rounded-mask cache slots.**  
    The `ResourceCache` has comment placeholders; populate them once the compositor-owned overlay and mask buffers stabilise.
 
-5. **Stage 7 – Shadow-atlas GPU import.**  
+4. **Stage 7 – Shadow-atlas GPU import.**  
    Upload the pistil nine-slice patch as a display buffer once and blit it per frame via `ACCEL2D_ALPHA_BLIT` instead of CPU-blending it into the chrome overlay buffer every frame.
 
-6. **Stage 7 – Glyph atlas full implementation.**  
+5. **Stage 7 – Glyph atlas full implementation.**  
    The API stub is in place; needs a font rasteriser integration.
 
-7. **Stage 3 – Bloom branching on `GPU_BLIT` / `DIRECT_SCANOUT`.**  
+6. **Stage 3 – Bloom branching on `GPU_BLIT` / `DIRECT_SCANOUT`.**  
    The capability bits are advertised by the driver but Bloom does not yet take separate code paths based on them (other than `HARDWARE_CURSOR`). Direct-scanout for a fullscreen opaque client (already detected) would be the first concrete use of `DIRECT_SCANOUT`.
