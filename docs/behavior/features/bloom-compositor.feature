@@ -263,6 +263,8 @@ Feature: Bloom compositor service loop and responsiveness
     Given the machine is booted
     Then the serial output should contain "virtio_gpu: cursor queue (queue 1) configured" within 60s
     And the serial output should contain "bloom: hw cursor image set buffer=" within 60s
+    And the serial output should contain "hw_size=64x64" within 60s
+    And the bloom cursor should be visible
 
   Scenario: cursor-only motion does not trigger full scene recomposition
     # Moving the pointer when no window content has changed must skip the full

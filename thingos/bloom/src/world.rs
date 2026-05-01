@@ -365,6 +365,11 @@ impl BloomWorld {
                             c.hotspot_y,
                         );
                         self.hw_cursor_buffer = Some(c.buffer_id);
+                        if !self.display.move_cursor(pointer_x, pointer_y, true) {
+                            stem::warn!(
+                                "bloom: hw cursor initial move failed after image upload"
+                            );
+                        }
                     }
                 }
             }

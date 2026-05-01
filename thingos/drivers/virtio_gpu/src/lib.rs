@@ -241,6 +241,15 @@ impl VirtioGpu {
 
     /// Create a 2D resource with current dimensions
     pub fn create_resource_2d(&mut self, resource_id: u32) -> Result<(), &'static str> {
+        self.create_resource_2d_with_format(resource_id, VIRTIO_GPU_FORMAT_B8G8R8X8_UNORM)
+    }
+
+    /// Create a 2D resource with current dimensions and an explicit virtio-gpu format.
+    pub fn create_resource_2d_with_format(
+        &mut self,
+        resource_id: u32,
+        format: u32,
+    ) -> Result<(), &'static str> {
         let cmd = VirtioGpuResourceCreate2d {
             hdr: VirtioGpuCtrlHdr {
                 type_: VIRTIO_GPU_CMD_RESOURCE_CREATE_2D,
@@ -250,7 +259,7 @@ impl VirtioGpu {
                 padding: 0,
             },
             resource_id,
-            format: VIRTIO_GPU_FORMAT_B8G8R8X8_UNORM, // XRGB8888
+            format,
             width: self.display_width,
             height: self.display_height,
         };
@@ -345,10 +354,20 @@ impl VirtioGpu {
 
     /// Transfer a rectangle from backing memory to host
     pub fn transfer_to_host(&mut self, resource_id: u32, rect: Rect) -> Result<(), &'static str> {
+        self.transfer_to_host_with_stride(resource_id, rect, self.fb_stride)
+    }
+
+    /// Transfer a rectangle from backing memory to host using the backing stride for this resource.
+    pub fn transfer_to_host_with_stride(
+        &mut self,
+        resource_id: u32,
+        rect: Rect,
+        stride: u32,
+    ) -> Result<(), &'static str> {
         // Calculate byte offset into backing memory for this rectangle
         // Format is BGRA32 (4 bytes per pixel)
         const BPP: u32 = 4;
-        let offset = (rect.y as u64) * (self.fb_stride as u64) + (rect.x as u64) * (BPP as u64);
+        let offset = (rect.y as u64) * (stride as u64) + (rect.x as u64) * (BPP as u64);
 
         let cmd = VirtioGpuTransferToHost2d {
             hdr: VirtioGpuCtrlHdr {

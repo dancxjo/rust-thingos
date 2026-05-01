@@ -36,7 +36,10 @@ const DISPLAY_PROVIDER_POLL_ISOLATION: bool = true;
 const MAX_CURSOR_SIDE: u32 = 128;
 /// Bytes per pixel for the ARGB32 cursor image format.
 const CURSOR_BPP: usize = 4;
-const MAX_CURSOR_BYTES: usize = (MAX_CURSOR_SIDE as usize) * (MAX_CURSOR_SIDE as usize) * CURSOR_BPP;
+/// Virtio-gpu hardware cursor resources are fixed-size 64x64 ARGB images.
+const HW_CURSOR_SIDE: u32 = 64;
+const MAX_CURSOR_BYTES: usize =
+    (MAX_CURSOR_SIDE as usize) * (MAX_CURSOR_SIDE as usize) * CURSOR_BPP;
 const MAX_CURSOR_PAGES: usize = (MAX_CURSOR_BYTES + 4095) / 4096; // = 16
 
 #[cfg(target_arch = "x86_64")]
@@ -212,6 +215,28 @@ fn bounded_copy_extent(
     let dst_rows = 1 + (dst_size - dst_first_end) / dst_stride;
     let max_h = height.min(src_rows).min(dst_rows);
     if max_h == 0 { None } else { Some((max_w, max_h)) }
+}
+
+#[inline]
+fn cursor_hw_coord(dst: u32, src_len: u32) -> u32 {
+    if src_len <= HW_CURSOR_SIDE {
+        dst
+    } else {
+        ((dst as u64 * src_len as u64) / HW_CURSOR_SIDE as u64)
+            .min(src_len.saturating_sub(1) as u64) as u32
+    }
+}
+
+#[inline]
+fn cursor_hw_hotspot(hotspot: u32, src_len: u32) -> u32 {
+    if src_len == 0 {
+        0
+    } else if src_len <= HW_CURSOR_SIDE {
+        hotspot.min(HW_CURSOR_SIDE.saturating_sub(1))
+    } else {
+        ((hotspot.min(src_len.saturating_sub(1)) as u64 * HW_CURSOR_SIDE as u64) / src_len as u64)
+            .min(HW_CURSOR_SIDE.saturating_sub(1) as u64) as u32
+    }
 }
 
 struct PresentStats {
@@ -890,7 +915,9 @@ fn vfs_device_call(driver: &mut VirtioGpuDriver, payload: &[u8]) -> ProviderResp
                         dmg.x,
                         dmg.y
                     );
-                    if let Err(e) = driver.gpu.transfer_to_host(res_id, dmg) {
+                    if let Err(e) =
+                        driver.gpu.transfer_to_host_with_stride(res_id, dmg, driver.disp_stride)
+                    {
                         stem::error!("DISP: transfer_to_host failed: {}", e);
                         command_ok = false;
                     }
@@ -1024,13 +1051,16 @@ fn vfs_device_call(driver: &mut VirtioGpuDriver, payload: &[u8]) -> ProviderResp
             }
 
             // Look up the imported buffer backing the cursor image.
-            let (src_ptr, src_stride, src_width, src_height) = {
+            let (src_ptr, src_stride, src_width, src_height, src_format) = {
                 let src = match driver.imported_buffers.get(&req.buffer_id) {
                     Some(s) => s,
                     None => return ProviderResponse::err(Errno::ENOENT),
                 };
-                (src.ptr, src.stride, src.width, src.height)
+                (src.ptr, src.stride, src.width, src.height, src.format)
             };
+            if !src_format.has_alpha() {
+                return ProviderResponse::err(Errno::EINVAL);
+            }
 
             // Copy cursor pixels from the imported (client-mapped) buffer into
             // the pre-allocated DMA buffer so the GPU reads from physically
@@ -1038,11 +1068,11 @@ fn vfs_device_call(driver: &mut VirtioGpuDriver, payload: &[u8]) -> ProviderResp
             let bpp = CURSOR_BPP;
             // Use checked arithmetic so malformed dimensions cannot cause
             // integer overflow and a subsequent out-of-bounds write.
-            let dst_stride = match (req.width as usize).checked_mul(bpp) {
+            let dst_stride = match (HW_CURSOR_SIDE as usize).checked_mul(bpp) {
                 Some(s) => s,
                 None => return ProviderResponse::err(Errno::EINVAL),
             };
-            let dma_size = match (req.height as usize).checked_mul(dst_stride) {
+            let dma_size = match (HW_CURSOR_SIDE as usize).checked_mul(dst_stride) {
                 Some(s) => s,
                 None => return ProviderResponse::err(Errno::EINVAL),
             };
@@ -1050,36 +1080,49 @@ fn vfs_device_call(driver: &mut VirtioGpuDriver, payload: &[u8]) -> ProviderResp
             if dma_size > MAX_CURSOR_BYTES {
                 return ProviderResponse::err(Errno::EINVAL);
             }
-            let copy_w = req.width.min(src_width) as usize;
-            let copy_h = req.height.min(src_height) as usize;
+            let src_w = req.width.min(src_width);
+            let src_h = req.height.min(src_height);
+            if src_w == 0 || src_h == 0 {
+                return ProviderResponse::err(Errno::EINVAL);
+            }
 
-            // Zero the DMA buffer first (handles transparent padding rows).
+            // Zero the fixed-size hardware cursor resource first; transparent
+            // padding is required when the requested cursor is smaller than
+            // the virtio-mandated 64x64 image.
             unsafe {
                 core::ptr::write_bytes(driver.cursor_dma_buf as *mut u8, 0, dma_size);
             }
-            // Row-by-row copy from the imported buffer.
-            for row in 0..copy_h {
-                let src_row = unsafe {
-                    core::slice::from_raw_parts(
-                        src_ptr.add(row.saturating_mul(src_stride as usize)),
-                        copy_w.saturating_mul(bpp),
-                    )
-                };
-                let dst_row_ptr = (driver.cursor_dma_buf as *mut u8)
-                    .wrapping_add(row.saturating_mul(dst_stride));
-                unsafe {
-                    core::ptr::copy_nonoverlapping(
-                        src_row.as_ptr(),
-                        dst_row_ptr,
-                        copy_w.saturating_mul(bpp),
-                    );
+            for dst_y in 0..HW_CURSOR_SIDE {
+                if src_h <= HW_CURSOR_SIDE && dst_y >= src_h {
+                    continue;
+                }
+                let src_y = cursor_hw_coord(dst_y, src_h) as usize;
+                for dst_x in 0..HW_CURSOR_SIDE {
+                    if src_w <= HW_CURSOR_SIDE && dst_x >= src_w {
+                        continue;
+                    }
+                    let src_x = cursor_hw_coord(dst_x, src_w) as usize;
+                    unsafe {
+                        let src_px = core::ptr::read_unaligned(src_ptr.add(
+                            src_y.saturating_mul(src_stride as usize) + src_x.saturating_mul(bpp),
+                        )
+                            as *const u32);
+                        core::ptr::write_unaligned(
+                            (driver.cursor_dma_buf as *mut u8).add(
+                                (dst_y as usize).saturating_mul(dst_stride)
+                                    + (dst_x as usize).saturating_mul(bpp),
+                            ) as *mut u32,
+                            src_px,
+                        );
+                    }
                 }
             }
 
             // Allocate a virtio-GPU resource for the cursor on first use;
             // re-create it when the image dimensions change.  An existing
             // resource can be reused when only the pixel data changes.
-            let size_changed = driver.cursor_attached_size != (req.width, req.height);
+            let hw_cursor_size = (HW_CURSOR_SIDE, HW_CURSOR_SIDE);
+            let size_changed = driver.cursor_attached_size != hw_cursor_size;
             let need_new_resource = driver.cursor_resource_id == 0 || size_changed;
             if need_new_resource {
                 // Allocate a fresh resource ID only when we don't already have one.
@@ -1089,8 +1132,11 @@ fn vfs_device_call(driver: &mut VirtioGpuDriver, payload: &[u8]) -> ProviderResp
                     // Size changed: reuse the existing ID to avoid ID exhaustion.
                     driver.cursor_resource_id
                 };
-                driver.gpu.set_dimensions(req.width, req.height);
-                if let Err(e) = driver.gpu.create_resource_2d(res_id) {
+                driver.gpu.set_dimensions(HW_CURSOR_SIDE, HW_CURSOR_SIDE);
+                if let Err(e) = driver.gpu.create_resource_2d_with_format(
+                    res_id,
+                    virtio_gpu::VIRTIO_GPU_FORMAT_B8G8R8A8_UNORM,
+                ) {
                     stem::warn!("display_virtio_gpu: cursor resource create failed: {}", e);
                     return ProviderResponse::err(Errno::ENOMEM);
                 }
@@ -1104,33 +1150,40 @@ fn vfs_device_call(driver: &mut VirtioGpuDriver, payload: &[u8]) -> ProviderResp
                     return ProviderResponse::err(Errno::ENOMEM);
                 }
                 driver.cursor_resource_id = res_id;
-                driver.cursor_attached_size = (req.width, req.height);
+                driver.cursor_attached_size = hw_cursor_size;
             }
 
             let res_id = driver.cursor_resource_id;
             // Transfer the freshly-copied DMA pixels to the GPU resource.
-            let transfer_rect = virtio_gpu::Rect { x: 0, y: 0, w: req.width, h: req.height };
-            if let Err(e) = driver.gpu.transfer_to_host(res_id, transfer_rect) {
+            let transfer_rect =
+                virtio_gpu::Rect { x: 0, y: 0, w: HW_CURSOR_SIDE, h: HW_CURSOR_SIDE };
+            if let Err(e) =
+                driver.gpu.transfer_to_host_with_stride(res_id, transfer_rect, dst_stride as u32)
+            {
                 stem::warn!("display_virtio_gpu: cursor transfer failed: {}", e);
                 return ProviderResponse::err(Errno::EIO);
             }
 
             let resource_id = if req.visible != 0 { res_id } else { 0 };
-            if let Err(e) =
-                driver.gpu.update_cursor(resource_id, req.hotspot_x, req.hotspot_y, 0, 0)
-            {
+            let hot_x = cursor_hw_hotspot(req.hotspot_x, src_w);
+            let hot_y = cursor_hw_hotspot(req.hotspot_y, src_h);
+            if let Err(e) = driver.gpu.update_cursor(resource_id, hot_x, hot_y, 0, 0) {
                 stem::warn!("display_virtio_gpu: update_cursor failed: {}", e);
                 return ProviderResponse::err(Errno::EIO);
             }
 
             driver.cursor_buffer_id = Some(req.buffer_id);
             stem::debug!(
-                "display_virtio_gpu: hw cursor set buffer={} size={}x{} hotspot={},{} visible={} (dma_phys=0x{:x})",
+                "display_virtio_gpu: hw cursor set buffer={} size={}x{} hw_size={}x{} hotspot={},{} hw_hotspot={},{} visible={} (dma_phys=0x{:x})",
                 req.buffer_id.0,
                 req.width,
                 req.height,
+                HW_CURSOR_SIDE,
+                HW_CURSOR_SIDE,
                 req.hotspot_x,
                 req.hotspot_y,
+                hot_x,
+                hot_y,
                 req.visible,
                 driver.cursor_dma_phys,
             );
@@ -1982,8 +2035,11 @@ fn main(boot_arg: usize) -> ! {
                             if !valid_rects.is_empty() {
                                 // Phase 2: Transfer all rects (bandwidth follows true damage)
                                 for &rect in &valid_rects {
-                                    let _ =
-                                        driver.gpu.transfer_to_host(driver.current_res_id, rect);
+                                    let _ = driver.gpu.transfer_to_host_with_stride(
+                                        driver.current_res_id,
+                                        rect,
+                                        driver.disp_stride,
+                                    );
                                 }
                                 stats.total_transfers += valid_rects.len() as u32;
 
