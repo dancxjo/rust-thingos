@@ -6,6 +6,10 @@ edition = "2021"
 [dependencies]
 terminal_core = { path = "../../libs/terminal_core" }
 
+[target.'cfg(not(target_os = "thingos"))'.dependencies]
+softbuffer = { version = "0.4.8", default-features = true }
+winit = { version = "0.30.12", default-features = true }
+
 [target.'cfg(target_os = "thingos")'.dependencies]
 stem = { path = "../../stem", features = ["rt"] }
 abi = { path = "../../abi" }

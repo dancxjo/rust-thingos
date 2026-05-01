@@ -3,23 +3,253 @@
 
 #[cfg(not(target_os = "thingos"))]
 fn main() {
-    use std::process::{Command, Stdio};
+    host_app::run();
+}
 
-    let shell = std::env::var("SHELL").unwrap_or_else(|_| "/bin/sh".to_string());
-    eprintln!("leaf host preview: launching {shell}");
-    eprintln!("leaf host preview: Wayland UI is only enabled on Thing-OS for now");
+#[cfg(not(target_os = "thingos"))]
+mod host_app {
+    use std::num::NonZeroU32;
+    use std::sync::Arc;
 
-    let status = Command::new(&shell)
-        .stdin(Stdio::inherit())
-        .stdout(Stdio::inherit())
-        .stderr(Stdio::inherit())
-        .status();
+    use terminal_core::{CELL_HEIGHT, CELL_WIDTH, Cell, Font, TermModel};
+    use winit::dpi::LogicalSize;
+    use winit::event::{ElementState, Event, WindowEvent};
+    use winit::event_loop::{ControlFlow, EventLoop};
+    use winit::keyboard::{Key, NamedKey};
+    use winit::window::Window;
 
-    match status {
-        Ok(status) => std::process::exit(status.code().unwrap_or(0)),
-        Err(err) => {
-            eprintln!("leaf host preview: failed to launch {shell}: {err}");
-            std::process::exit(1);
+    const HOST_WIDTH: u32 = 880;
+    const HOST_HEIGHT: u32 = 520;
+
+    #[allow(deprecated)]
+    pub fn run() {
+        let backend = std::env::var("WINIT_UNIX_BACKEND").unwrap_or_else(|_| "auto".to_string());
+        eprintln!("leaf: host window starting (WINIT_UNIX_BACKEND={backend})");
+        eprintln!("leaf: set WINIT_UNIX_BACKEND=wayland to force a Wayland window");
+
+        let font = load_font();
+        let mut model = TermModel::new(HOST_WIDTH / CELL_WIDTH, HOST_HEIGHT / CELL_HEIGHT);
+        model.write_str("\x1b[32mThing-OS Leaf\x1b[0m\n", &font);
+        model.write_str("host Wayland preview\n", &font);
+        model.write_str("type here; Enter starts a new prompt\n\nleaf$ ", &font);
+        model.mark_all_dirty();
+
+        let event_loop = EventLoop::new().expect("create event loop");
+        event_loop.set_control_flow(ControlFlow::Wait);
+        let window = Arc::new(
+            event_loop
+                .create_window(
+                    Window::default_attributes()
+                        .with_title("Leaf")
+                        .with_inner_size(LogicalSize::new(HOST_WIDTH as f64, HOST_HEIGHT as f64)),
+                )
+                .expect("create Leaf host window"),
+        );
+
+        let context = softbuffer::Context::new(window.clone()).expect("create softbuffer context");
+        let mut surface =
+            softbuffer::Surface::new(&context, window.clone()).expect("create softbuffer surface");
+
+        let mut resized = true;
+        let mut redraw = true;
+
+        event_loop
+            .run(move |event, elwt| match event {
+                Event::WindowEvent { event, .. } => match event {
+                    WindowEvent::CloseRequested => elwt.exit(),
+                    WindowEvent::Resized(_) => {
+                        resized = true;
+                        redraw = true;
+                        window.request_redraw();
+                    }
+                    WindowEvent::KeyboardInput { event, .. } => {
+                        if event.state == ElementState::Pressed {
+                            if handle_key(&mut model, &font, &event.logical_key) {
+                                redraw = true;
+                                window.request_redraw();
+                            }
+                            if let Some(text) = event.text {
+                                let mut wrote_text = false;
+                                for ch in text.chars() {
+                                    if !ch.is_control() {
+                                        model.putc(ch, &font);
+                                        wrote_text = true;
+                                    }
+                                }
+                                if wrote_text {
+                                    redraw = true;
+                                    window.request_redraw();
+                                }
+                            }
+                        }
+                    }
+                    WindowEvent::RedrawRequested => {
+                        let size = window.inner_size();
+                        if size.width == 0 || size.height == 0 {
+                            return;
+                        }
+                        if resized {
+                            let width = NonZeroU32::new(size.width.max(1)).unwrap();
+                            let height = NonZeroU32::new(size.height.max(1)).unwrap();
+                            surface.resize(width, height).expect("resize softbuffer surface");
+                            let cols = (size.width / CELL_WIDTH).max(1);
+                            let rows = (size.height / CELL_HEIGHT).max(1);
+                            if cols != model.cols || rows != model.rows {
+                                model.resize(cols, rows);
+                                model.write_str("\x1b[32mThing-OS Leaf\x1b[0m\n", &font);
+                                model.write_str("host Wayland preview\n\nleaf$ ", &font);
+                                model.mark_all_dirty();
+                            }
+                            resized = false;
+                            redraw = true;
+                        }
+                        if redraw {
+                            paint(&mut surface, &mut model, &font, size.width, size.height);
+                            redraw = false;
+                        }
+                    }
+                    _ => {}
+                },
+                Event::AboutToWait => {
+                    if redraw {
+                        window.request_redraw();
+                    }
+                }
+                _ => {}
+            })
+            .expect("run event loop");
+    }
+
+    fn load_font() -> Font {
+        let candidates = [
+            "assets/fonts/unifont.hex",
+            "../../assets/fonts/unifont.hex",
+            "/usr/share/unifont/unifont.hex",
+        ];
+        for path in candidates {
+            if let Ok(text) = std::fs::read_to_string(path) {
+                let font = Font::from_unifont_hex(&text);
+                eprintln!("leaf: loaded {} glyphs from {path}", font.glyph_count());
+                return font;
+            }
+        }
+        eprintln!("leaf: unifont.hex not found; using empty fallback font");
+        Font::from_unifont_hex("003F:00000000000000000000000000000000\n")
+    }
+
+    fn handle_key(model: &mut TermModel, font: &Font, key: &Key) -> bool {
+        match key {
+            Key::Named(NamedKey::Enter) => {
+                model.write_str("\nleaf$ ", font);
+                true
+            }
+            Key::Named(NamedKey::Backspace) => {
+                model.putc('\x08', font);
+                model.putc(' ', font);
+                model.putc('\x08', font);
+                true
+            }
+            Key::Named(NamedKey::Tab) => {
+                model.putc('\t', font);
+                true
+            }
+            _ => false,
+        }
+    }
+
+    fn paint(
+        surface: &mut softbuffer::Surface<Arc<Window>, Arc<Window>>,
+        model: &mut TermModel,
+        font: &Font,
+        width: u32,
+        height: u32,
+    ) {
+        let mut buffer = surface.buffer_mut().expect("get softbuffer buffer");
+        buffer.fill(0xFF00_0000);
+        for row in 0..model.rows {
+            for col in 0..model.cols {
+                let idx = model.cell_idx(col, row);
+                draw_cell(&mut buffer, width, height, col, row, model.cells[idx], font);
+            }
+        }
+        if model.cursor_visible {
+            fill_rect(
+                &mut buffer,
+                width,
+                height,
+                model.cursor_col * CELL_WIDTH,
+                model.cursor_row * CELL_HEIGHT,
+                2,
+                CELL_HEIGHT,
+                model.current_fg,
+            );
+        }
+        buffer.present().expect("present Leaf host window");
+    }
+
+    fn draw_cell(
+        pixels: &mut [u32],
+        width: u32,
+        height: u32,
+        col: u32,
+        row: u32,
+        cell: Cell,
+        font: &Font,
+    ) {
+        if cell.ch == '\0' {
+            return;
+        }
+        let x = col * CELL_WIDTH;
+        let y = row * CELL_HEIGHT;
+        fill_rect(pixels, width, height, x, y, CELL_WIDTH, CELL_HEIGHT, cell.bg);
+        let Some(glyph) = font.get_glyph(cell.ch).or_else(|| font.get_glyph('?')) else {
+            return;
+        };
+        if glyph.bitmap.len() == 16 {
+            for py in 0..16usize {
+                let bits = glyph.bitmap[py];
+                for px in 0..8u32 {
+                    if (bits & (0x80 >> px)) != 0 {
+                        put_pixel(pixels, width, height, x + px, y + py as u32, cell.fg);
+                    }
+                }
+            }
+        } else if glyph.bitmap.len() == 32 {
+            for py in 0..16usize {
+                let b1 = glyph.bitmap[py * 2];
+                let b2 = glyph.bitmap[py * 2 + 1];
+                for px in 0..8u32 {
+                    if (b1 & (0x80 >> px)) != 0 {
+                        put_pixel(pixels, width, height, x + px, y + py as u32, cell.fg);
+                    }
+                    if (b2 & (0x80 >> px)) != 0 {
+                        put_pixel(pixels, width, height, x + px + 8, y + py as u32, cell.fg);
+                    }
+                }
+            }
+        }
+    }
+
+    fn fill_rect(
+        pixels: &mut [u32],
+        width: u32,
+        height: u32,
+        x: u32,
+        y: u32,
+        w: u32,
+        h: u32,
+        color: u32,
+    ) {
+        for py in y..(y + h).min(height) {
+            for px in x..(x + w).min(width) {
+                pixels[py as usize * width as usize + px as usize] = color;
+            }
+        }
+    }
+
+    fn put_pixel(pixels: &mut [u32], width: u32, height: u32, x: u32, y: u32, color: u32) {
+        if x < width && y < height {
+            pixels[y as usize * width as usize + x as usize] = color;
         }
     }
 }
