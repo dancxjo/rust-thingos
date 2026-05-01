@@ -64,6 +64,11 @@ pub enum QmpEndpoint {
     Tcp(std::net::SocketAddr),
 }
 
+#[derive(Clone, Copy, Debug, Default)]
+struct BootOptions {
+    qemu_xhci: bool,
+}
+
 pub(crate) trait QmpStream: AsyncRead + AsyncWrite {}
 
 impl<T: AsyncRead + AsyncWrite + ?Sized> QmpStream for T {}
@@ -212,6 +217,22 @@ impl ThingOsWorld {
     /// Boot the OS in QEMU for the given architecture.
     /// Reuses a cached ISO for the architecture/resolution when available.
     pub async fn boot(&mut self, arch: &str) -> Result<(), Box<dyn std::error::Error>> {
+        self.boot_with_options(arch, BootOptions::default()).await
+    }
+
+    /// Boot the OS with an explicit qemu-xhci PCI controller on x86_64.
+    pub async fn boot_with_qemu_xhci(
+        &mut self,
+        arch: &str,
+    ) -> Result<(), Box<dyn std::error::Error>> {
+        self.boot_with_options(arch, BootOptions { qemu_xhci: true }).await
+    }
+
+    async fn boot_with_options(
+        &mut self,
+        arch: &str,
+        options: BootOptions,
+    ) -> Result<(), Box<dyn std::error::Error>> {
         self.arch = arch.to_string();
         {
             let mut log = self.serial_log.lock().await;
@@ -343,6 +364,9 @@ impl ThingOsWorld {
             "x86_64" => {
                 cmd.args(["-M", "q35,usb=off,vmport=off,i8042=on"]);
                 cmd.args(["-device", "virtio-vga"]);
+                if options.qemu_xhci {
+                    cmd.args(["-device", "qemu-xhci,id=xhci"]);
+                }
                 cmd.args([
                     "-drive",
                     &format!("if=pflash,unit=0,format=raw,file={},readonly=on", ovmf_code),

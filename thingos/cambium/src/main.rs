@@ -24,7 +24,7 @@ use stem::service_loop::{ServiceEvent, ServiceLoop};
 use stem::syscall::message::KindId;
 use stem::syscall::vfs::{vfs_close, vfs_open, vfs_read, vfs_watch_path, vfs_write};
 use stem::time::Duration;
-use stem::{debug, error, info, warn};
+use stem::{debug, error, warn};
 use sysfs::{SysDevice, scan_devices};
 
 /// Periodic fallback rescan interval (milliseconds) when no events arrive.
@@ -414,6 +414,17 @@ fn reconcile_devices(
             device.class_code,
             device.present
         );
+        let is_xhci_pci = device.slot.starts_with("pci-") && device.class_code == 0x0c0330;
+        if is_xhci_pci {
+            stem::info!(
+                "CAMBIUM: discovered xHCI PCI device slot={} vendor=0x{:04x} device=0x{:04x} class=0x{:06x} present={}",
+                device.slot,
+                device.vendor_id,
+                device.device_id,
+                device.class_code,
+                device.present
+            );
+        }
         seen.insert(device.slot.clone(), ());
         if !device.present {
             continue;
@@ -437,6 +448,14 @@ fn reconcile_devices(
                 },
             )
         }) {
+            if is_xhci_pci {
+                stem::info!(
+                    "CAMBIUM: matched driver '{}' for xHCI PCI device {} class=0x{:06x}",
+                    entry.path,
+                    device.slot,
+                    device.class_code
+                );
+            }
             if should_skip_for_display_input_isolation(entry.driver_class, &entry.path) {
                 stem::debug!(
                     "CAMBIUM: isolation mode skipping driver '{}' class={:?} for {}",
@@ -468,6 +487,15 @@ fn reconcile_devices(
 
         // Fall back to the legacy static binding table.
         let Some(binding) = match_binding(&device) else {
+            if is_xhci_pci {
+                stem::warn!(
+                    "CAMBIUM: no driver matched xHCI PCI device {} vendor=0x{:04x} device=0x{:04x} class=0x{:06x}",
+                    device.slot,
+                    device.vendor_id,
+                    device.device_id,
+                    device.class_code
+                );
+            }
             continue;
         };
         let mount_path = mount_hint(binding, &device);

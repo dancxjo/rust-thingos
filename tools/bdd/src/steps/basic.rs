@@ -11,6 +11,18 @@ pub(super) async fn turn_on_machine(world: &mut ThingOsWorld) -> Result<(), Step
     Ok(())
 }
 
+pub(super) async fn turn_on_machine_with_qemu_xhci(
+    world: &mut ThingOsWorld,
+) -> Result<(), StepError> {
+    let arch = std::env::var("BDD_ARCH").unwrap_or_else(|_| "x86_64".to_string());
+
+    world
+        .boot_with_qemu_xhci(&arch)
+        .await
+        .map_err(|e| StepError(format!("Failed to boot QEMU with qemu-xhci: {}", e)))?;
+    Ok(())
+}
+
 #[then(
     regex = r#"^I should see a rectangle at (\d+), (\d+) with size (\d+)x(\d+) and color "(.+)"$"#
 )]

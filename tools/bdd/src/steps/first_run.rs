@@ -1,6 +1,6 @@
 use cucumber::{given, then, when};
 
-use super::basic::turn_on_machine;
+use super::basic::{turn_on_machine, turn_on_machine_with_qemu_xhci};
 use super::helpers::{
     StepError, capture_failure_diagnostics, check_serial, check_text_pixels, check_window_bg_color,
     default_timeout_secs, unescape_step_text, wait_for_clock_pixels, wait_for_clock_ticks,
@@ -357,6 +357,12 @@ async fn clock_window_visible(world: &mut ThingOsWorld) -> Result<(), StepError>
 #[given("the machine is booted")]
 async fn machine_is_booted(world: &mut ThingOsWorld) -> Result<(), StepError> {
     turn_on_machine(world).await?;
+    wait_for_boot(world).await
+}
+
+#[given("the machine is booted with qemu-xhci")]
+async fn machine_is_booted_with_qemu_xhci(world: &mut ThingOsWorld) -> Result<(), StepError> {
+    turn_on_machine_with_qemu_xhci(world).await?;
     wait_for_boot(world).await
 }
 

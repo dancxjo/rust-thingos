@@ -20,8 +20,9 @@ use core::ptr::{read_volatile, write_volatile};
 use core::sync::atomic::{Ordering, fence};
 
 use abi::driver_interface::{
-    BusKind, DRIVER_DESCRIPTOR_ABI_VERSION, DeviceInfo, DriverClass, DriverDescriptor,
-    DriverEntryCtx, ProbeResult, Status,
+    BusKind, DRIVER_DESCRIPTOR_ABI_VERSION, DRIVER_FLAG_PCI, DRIVER_INTERFACE_ABI_VERSION,
+    DeviceInfo, DriverClass, DriverDescriptor, DriverEntryCtx, DriverInterfaceV1, ProbeResult,
+    Status,
 };
 use abi::errors::Errno;
 use abi::vfs_rpc::VfsRpcOp;
@@ -55,6 +56,18 @@ pub static THINGOS_DRIVER: DriverDescriptor = DriverDescriptor {
     start: thingos_driver_start_safe,
     #[cfg(not(target_arch = "x86_64"))]
     start: thingos_driver_start_rust,
+};
+
+#[unsafe(no_mangle)]
+#[used]
+pub static THING_DRIVER_V1: DriverInterfaceV1 = DriverInterfaceV1 {
+    abi_version: DRIVER_INTERFACE_ABI_VERSION,
+    flags: DRIVER_FLAG_PCI,
+    vendor_id: 0,
+    device_id: 0,
+    class_code: 0x0c0330,
+    class_mask: 0x00ff_ffff,
+    entry_symbol: [0u8; 32],
 };
 
 unsafe extern "C" fn thingos_driver_probe(dev: *const DeviceInfo, out: *mut ProbeResult) -> Status {
