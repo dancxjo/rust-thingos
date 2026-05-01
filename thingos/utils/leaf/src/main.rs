@@ -325,9 +325,9 @@ mod thingos_app {
     fn main(_arg: usize) -> ! {
         stem::info!("leaf: starting");
 
-        let fd = connect_wayland();
         let font = load_font();
         let mut shell = spawn_shell();
+        let fd = connect_wayland();
 
         send_get_registry(fd, REGISTRY_ID);
         read_initial_globals(fd);
@@ -1065,6 +1065,10 @@ mod thingos_app {
     fn send_request(fd: u32, buf: &[u8]) {
         if let Err(e) = vfs_write(fd, buf) {
             stem::warn!("leaf: write failed: {:?}", e);
+            if matches!(e, abi::errors::Errno::EBADF | abi::errors::Errno::EPIPE) {
+                stem::info!("leaf: Wayland connection closed; exiting");
+                exit(0);
+            }
         }
     }
 
@@ -1075,6 +1079,10 @@ mod thingos_app {
         }
         if let Err(e) = sendmsg(fd, buf, fds) {
             stem::warn!("leaf: sendmsg failed: {:?}", e);
+            if matches!(e, abi::errors::Errno::EBADF | abi::errors::Errno::EPIPE) {
+                stem::info!("leaf: Wayland connection closed; exiting");
+                exit(0);
+            }
         }
     }
 
