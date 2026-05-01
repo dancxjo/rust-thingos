@@ -161,6 +161,9 @@ pub struct CompositionEntry {
     pub title: Option<String>,
     pub is_fullscreen: bool,
     pub is_shaded: bool,
+    /// The committed opaque region in surface-local coordinates, if any.
+    /// A rect that covers the full `src_rect` means the surface is fully opaque.
+    pub opaque_region: Option<Rect>,
 }
 
 pub struct Scene {
@@ -708,6 +711,7 @@ impl Scene {
                 title: surface.title.clone(),
                 is_fullscreen: surface.is_fullscreen,
                 is_shaded: surface.is_shaded,
+                opaque_region: surface.current.opaque_region,
             });
         }
         list.sort_by_key(|entry| entry.z_order);
