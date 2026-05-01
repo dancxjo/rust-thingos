@@ -76,8 +76,8 @@ pub struct CompositorVisuals {
     cursor: Option<CursorBuffer>,
     cursor_variants: Vec<(CursorKind, CursorBuffer)>,
     pointer_overlay: Option<PointerOverlayBuffer>,
-    body_overlay: Option<ChromeOverlayBuffer>,
-    chrome_overlay: Option<ChromeOverlayBuffer>,
+    body_overlays: Vec<ChromeOverlayBuffer>,
+    chrome_overlays: Vec<ChromeOverlayBuffer>,
     pistil: Option<PistilLib>,
     theme: UiTheme,
 }
@@ -120,6 +120,16 @@ pub struct OverlayPlane {
     pub height: u32,
 }
 
+#[derive(Clone, Copy)]
+pub struct WindowOverlayPlane {
+    pub surface_id: u32,
+    pub buffer_id: u32,
+    pub x: i32,
+    pub y: i32,
+    pub width: u32,
+    pub height: u32,
+}
+
 struct CursorBuffer {
     _texture: Texture,
     buffer_id: u32,
@@ -137,6 +147,7 @@ struct PointerOverlayBuffer {
 }
 
 struct ChromeOverlayBuffer {
+    surface_id: u32,
     texture: Texture,
     buffer_id: u32,
     width: u32,
@@ -153,8 +164,8 @@ impl CompositorVisuals {
             cursor: None,
             cursor_variants: Vec::new(),
             pointer_overlay: None,
-            body_overlay: None,
-            chrome_overlay: None,
+            body_overlays: Vec::new(),
+            chrome_overlays: Vec::new(),
             pistil,
             theme: default_theme(),
         }
@@ -300,8 +311,8 @@ impl CompositorVisuals {
         } else {
             self.prepare_solid_background(display, 0xFF0B0A10);
         }
-        release_overlay_buffer(display, self.body_overlay.take());
-        release_overlay_buffer(display, self.chrome_overlay.take());
+        release_overlay_buffers(display, &mut self.body_overlays);
+        release_overlay_buffers(display, &mut self.chrome_overlays);
         if let Some(old) = self.pointer_overlay.take() {
             display.release_buffer(old.buffer_id);
         }
@@ -405,58 +416,77 @@ impl CompositorVisuals {
         pointer_x: i32,
         pointer_y: i32,
         primary_button_down: bool,
-    ) -> (Option<OverlayPlane>, Option<OverlayPlane>) {
-        if !composition.iter().any(|entry| !entry.chrome.is_empty()) {
-            return (None, None);
+    ) -> (Vec<WindowOverlayPlane>, Vec<WindowOverlayPlane>) {
+        if !composition.iter().any(needs_window_overlay) {
+            release_overlay_buffers(display, &mut self.body_overlays);
+            release_overlay_buffers(display, &mut self.chrome_overlays);
+            return (Vec::new(), Vec::new());
         }
-        self.ensure_overlay_buffers(display);
+        self.ensure_overlay_buffers(display, composition);
 
         let draw_svg_icon = self.pistil.as_ref().and_then(|lib| lib.draw_svg_icon);
         let draw_text = self.pistil.as_ref().and_then(|lib| lib.draw_text);
         let draw_symbol_text = self.pistil.as_ref().and_then(|lib| lib.draw_symbol_text);
 
-        if let Some(body) = self.body_overlay.as_mut() {
-            draw_window_body_overlay(
-                body.texture.as_slice_mut(),
-                body.width,
-                body.height,
-                composition,
-                self.theme,
-            );
-        }
+        let mut body_planes = Vec::new();
+        let mut chrome_planes = Vec::new();
 
-        if let Some(chrome) = self.chrome_overlay.as_mut() {
+        for entry in composition.iter().filter(|entry| needs_window_overlay(entry)) {
+            let visual_rect = crate::scene::surface_visual_rect(entry.dest_rect, entry.chrome);
+            let local_entry = local_overlay_entry(entry, visual_rect);
+            if let Some(body) =
+                self.body_overlays.iter_mut().find(|buffer| buffer.surface_id == entry.surface_id)
+            {
+                draw_window_body_overlay(
+                    body.texture.as_slice_mut(),
+                    body.width,
+                    body.height,
+                    core::slice::from_ref(&local_entry),
+                    self.theme,
+                );
+                body_planes.push(WindowOverlayPlane {
+                    surface_id: entry.surface_id,
+                    buffer_id: body.buffer_id,
+                    x: visual_rect.x as i32,
+                    y: visual_rect.y as i32,
+                    width: body.width,
+                    height: body.height,
+                });
+            }
+
+            let Some(chrome) = self
+                .chrome_overlays
+                .iter_mut()
+                .find(|buffer| buffer.surface_id == entry.surface_id)
+            else {
+                continue;
+            };
+            let local_pointer_x = pointer_x.saturating_sub(visual_rect.x as i32);
+            let local_pointer_y = pointer_y.saturating_sub(visual_rect.y as i32);
             draw_chrome_overlay(
                 chrome.texture.as_slice_mut(),
                 chrome.width,
                 chrome.height,
-                composition,
+                core::slice::from_ref(&local_entry),
                 draw_svg_icon,
                 draw_text,
                 draw_symbol_text,
                 self.theme,
-                pointer_x,
-                pointer_y,
+                local_pointer_x,
+                local_pointer_y,
                 primary_button_down,
             );
+            chrome_planes.push(WindowOverlayPlane {
+                surface_id: entry.surface_id,
+                buffer_id: chrome.buffer_id,
+                x: visual_rect.x as i32,
+                y: visual_rect.y as i32,
+                width: chrome.width,
+                height: chrome.height,
+            });
         }
 
-        (
-            self.body_overlay.as_ref().map(|o| OverlayPlane {
-                buffer_id: o.buffer_id,
-                x: 0,
-                y: 0,
-                width: o.width,
-                height: o.height,
-            }),
-            self.chrome_overlay.as_ref().map(|o| OverlayPlane {
-                buffer_id: o.buffer_id,
-                x: 0,
-                y: 0,
-                width: o.width,
-                height: o.height,
-            }),
-        )
+        (body_planes, chrome_planes)
     }
 
     fn cursor_buffer(
@@ -528,26 +558,23 @@ impl CompositorVisuals {
         Some(())
     }
 
-    fn ensure_overlay_buffers(&mut self, display: &DisplayBackend) {
-        let (width, height) = display.output_size();
-        if !self.body_overlay.as_ref().map_or(false, |o| o.width == width && o.height == height) {
-            if let Some(buffer) =
-                make_overlay_buffer(display, "bloom.compositor.window_body", width, height)
-            {
-                release_overlay_buffer(display, self.body_overlay.take());
-                self.body_overlay = Some(buffer);
-            }
-        }
-
-        if !self.chrome_overlay.as_ref().map_or(false, |o| o.width == width && o.height == height) {
-            if let Some(buffer) =
-                make_overlay_buffer(display, "bloom.compositor.window_chrome", width, height)
-            {
-                release_overlay_buffer(display, self.chrome_overlay.take());
-                self.chrome_overlay = Some(buffer);
-                stem::info!("bloom: flat window overlays ready size={}x{}", width, height);
-            }
-        }
+    fn ensure_overlay_buffers(
+        &mut self,
+        display: &DisplayBackend,
+        composition: &[CompositionEntry],
+    ) {
+        sync_overlay_set(
+            display,
+            &mut self.body_overlays,
+            composition,
+            "bloom.compositor.window_body",
+        );
+        sync_overlay_set(
+            display,
+            &mut self.chrome_overlays,
+            composition,
+            "bloom.compositor.window_chrome",
+        );
     }
 
     pub fn pointer_overlay_plane(
@@ -789,6 +816,7 @@ fn copy_cursor_sample(cursor: &CursorBuffer, dst: &mut [u32; CURSOR_PIXELS]) -> 
 fn make_overlay_buffer(
     display: &DisplayBackend,
     name: &'static str,
+    surface_id: u32,
     width: u32,
     height: u32,
 ) -> Option<ChromeOverlayBuffer> {
@@ -802,13 +830,77 @@ fn make_overlay_buffer(
         0,
         0,
     )?;
-    Some(ChromeOverlayBuffer { texture, buffer_id, width, height })
+    Some(ChromeOverlayBuffer { surface_id, texture, buffer_id, width, height })
 }
 
-fn release_overlay_buffer(display: &DisplayBackend, buffer: Option<ChromeOverlayBuffer>) {
-    if let Some(buffer) = buffer {
+fn release_overlay_buffers(display: &DisplayBackend, buffers: &mut Vec<ChromeOverlayBuffer>) {
+    for buffer in buffers.drain(..) {
         display.release_buffer(buffer.buffer_id);
     }
+}
+
+fn sync_overlay_set(
+    display: &DisplayBackend,
+    buffers: &mut Vec<ChromeOverlayBuffer>,
+    composition: &[CompositionEntry],
+    name: &'static str,
+) {
+    let mut idx = 0;
+    while idx < buffers.len() {
+        let keep = overlay_size_for(composition, buffers[idx].surface_id)
+            .map(|(w, h)| buffers[idx].width == w && buffers[idx].height == h)
+            .unwrap_or(false);
+        if keep {
+            idx += 1;
+        } else {
+            let old = buffers.swap_remove(idx);
+            display.release_buffer(old.buffer_id);
+        }
+    }
+
+    for entry in composition.iter().filter(|entry| needs_window_overlay(entry)) {
+        let Some((width, height)) = overlay_size_for(composition, entry.surface_id) else {
+            continue;
+        };
+        if buffers.iter().any(|buffer| buffer.surface_id == entry.surface_id) {
+            continue;
+        }
+        if let Some(buffer) = make_overlay_buffer(display, name, entry.surface_id, width, height) {
+            stem::info!(
+                "bloom: flat window overlays ready surface={} size={}x{}",
+                entry.surface_id,
+                width,
+                height
+            );
+            buffers.push(buffer);
+        }
+    }
+}
+
+fn overlay_size_for(composition: &[CompositionEntry], surface_id: u32) -> Option<(u32, u32)> {
+    let entry = composition
+        .iter()
+        .find(|entry| entry.surface_id == surface_id && needs_window_overlay(entry))?;
+    let rect = crate::scene::surface_visual_rect(entry.dest_rect, entry.chrome);
+    if rect.w == 0 || rect.h == 0 { None } else { Some((rect.w, rect.h)) }
+}
+
+fn needs_window_overlay(entry: &CompositionEntry) -> bool {
+    !entry.is_fullscreen && !entry.chrome.is_empty()
+}
+
+fn local_overlay_entry(
+    entry: &CompositionEntry,
+    visual_rect: abi::display_protocol::Rect,
+) -> CompositionEntry {
+    let mut local = entry.clone();
+    local.dest_rect = abi::display_protocol::Rect {
+        x: entry.dest_rect.x.saturating_sub(visual_rect.x),
+        y: entry.dest_rect.y.saturating_sub(visual_rect.y),
+        w: entry.dest_rect.w,
+        h: entry.dest_rect.h,
+    };
+    local
 }
 
 fn cursor_path(kind: CursorKind) -> Option<&'static str> {

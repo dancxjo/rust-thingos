@@ -39,6 +39,126 @@ fn is_window_chrome_pixel(pixel: [u8; 3]) -> bool {
     is_brass_pixel(pixel) || is_chrome_border_pixel(pixel)
 }
 
+#[derive(Clone, Debug)]
+struct WindowInfo {
+    x: i32,
+    y: i32,
+    w: u32,
+    h: u32,
+    title: String,
+}
+
+#[derive(Clone, Copy)]
+struct TestRect {
+    x: i32,
+    y: i32,
+    w: u32,
+    h: u32,
+}
+
+async fn type_serial_command(world: &mut ThingOsWorld, command: &str) -> Result<String, StepError> {
+    world.serial_checkpoint = world.get_serial_log().await.len();
+    world.last_typed_command = Some(command.to_string());
+
+    let mut data = command.as_bytes().to_vec();
+    if !data.ends_with(b"\n") {
+        data.push(b'\n');
+    }
+    for b in data {
+        world
+            .serial_write(&[b])
+            .await
+            .map_err(|e| StepError(format!("Failed to write to serial: {}", e)))?;
+        tokio::time::sleep(std::time::Duration::from_millis(15)).await;
+    }
+
+    let start = std::time::Instant::now();
+    let timeout = std::time::Duration::from_secs(30);
+    loop {
+        let log = world.get_serial_log().await;
+        let start_offset = world.serial_checkpoint.min(log.len());
+        let recent = &log[start_offset..];
+        if recent.contains(" > ") {
+            return Ok(recent.to_string());
+        }
+        if start.elapsed() >= timeout {
+            return Err(StepError(format!(
+                "Timeout waiting for command '{}' to complete",
+                command
+            )));
+        }
+        tokio::time::sleep(std::time::Duration::from_millis(50)).await;
+    }
+}
+
+async fn read_wayland_windows(world: &mut ThingOsWorld) -> Result<Vec<WindowInfo>, StepError> {
+    let _ = world.wait_for_serial(" > ", 60.0).await;
+    let re = regex::Regex::new(
+        r#"(?m)^\s*\d+\s+(\d+)x(\d+)\+(\d+),(\d+)\s+z=(-?\d+)\s+title="([^"]*)""#,
+    )
+    .unwrap();
+    let mut last = String::new();
+    for _ in 0..8 {
+        let recent = type_serial_command(world, "cat /session/wayland/windows/index").await?;
+        last = recent.clone();
+        let windows: Vec<WindowInfo> = re
+            .captures_iter(&recent)
+            .filter_map(|caps| {
+                Some(WindowInfo {
+                    w: caps.get(1)?.as_str().parse().ok()?,
+                    h: caps.get(2)?.as_str().parse().ok()?,
+                    x: caps.get(3)?.as_str().parse().ok()?,
+                    y: caps.get(4)?.as_str().parse().ok()?,
+                    title: caps.get(6)?.as_str().to_string(),
+                })
+            })
+            .collect();
+        if windows.iter().any(|w| w.title.contains("Thing-OS Wayland Lab"))
+            && windows.iter().any(|w| w.title.contains("Clock"))
+        {
+            return Ok(windows);
+        }
+        tokio::time::sleep(std::time::Duration::from_millis(500)).await;
+    }
+    Err(StepError(format!(
+        "Could not read Wayland hello and Clock windows from /session/wayland/windows/index: {}",
+        last
+    )))
+}
+
+fn find_window<'a>(windows: &'a [WindowInfo], title: &str) -> Result<&'a WindowInfo, StepError> {
+    windows
+        .iter()
+        .find(|window| window.title.contains(title))
+        .ok_or_else(|| StepError(format!("Window titled '{}' was not present", title)))
+}
+
+fn intersect_test_rect(a: TestRect, b: TestRect) -> Option<TestRect> {
+    let x0 = a.x.max(b.x);
+    let y0 = a.y.max(b.y);
+    let x1 = a.x.saturating_add(a.w as i32).min(b.x.saturating_add(b.w as i32));
+    let y1 = a.y.saturating_add(a.h as i32).min(b.y.saturating_add(b.h as i32));
+    if x1 <= x0 || y1 <= y0 {
+        None
+    } else {
+        Some(TestRect { x: x0, y: y0, w: (x1 - x0) as u32, h: (y1 - y0) as u32 })
+    }
+}
+
+fn qmp_mouse_rel(dx: i32, dy: i32) -> String {
+    format!(
+        r#"{{"execute": "input-send-event", "arguments": {{"events": [{{"type": "rel", "data": {{"axis": "x", "value": {}}}}}, {{"type": "rel", "data": {{"axis": "y", "value": {}}}}}]}}}}"#,
+        dx, dy
+    )
+}
+
+fn qmp_mouse_button(down: bool) -> String {
+    format!(
+        r#"{{"execute": "input-send-event", "arguments": {{"events": [{{"type": "btn", "data": {{"down": {}, "button": "left"}}}}]}}}}"#,
+        if down { "true" } else { "false" }
+    )
+}
+
 /// Background: `Given the bloom compositor is running with blossom support`
 #[given("the bloom compositor is running with blossom support")]
 async fn bloom_compositor_running_with_blossom(world: &mut ThingOsWorld) -> Result<(), StepError> {
@@ -877,6 +997,121 @@ async fn active_window_chrome_should_include_facet_frame_focus_accents(
     Err(StepError(format!(
         "Active chrome facet frame accents were not visible (facet={}, gold={}, edge={}, inner={})",
         last.0, last.1, last.2, last.3
+    )))
+}
+
+#[when("I drag the Clock window over the Wayland hello title bar")]
+async fn drag_clock_window_over_wayland_hello_title_bar(
+    world: &mut ThingOsWorld,
+) -> Result<(), StepError> {
+    if world.qmp_control.is_none() {
+        return Err(StepError("No QMP connection for clock-window drag input".to_string()));
+    }
+    if !world.wait_for_serial("bloom: registered titlebar drag zone", 60.0).await {
+        return Err(StepError("Bloom did not register compositor chrome".to_string()));
+    }
+    if !world.wait_for_serial("ps2_mouse: bristle pid=", 60.0).await {
+        return Err(StepError("PS/2 mouse driver did not connect to Bristle".to_string()));
+    }
+    if !world.wait_for_serial("bloom: registered bristle pointer sink", 60.0).await {
+        return Err(StepError("Bloom did not register its Bristle pointer sink".to_string()));
+    }
+
+    let windows = read_wayland_windows(world).await?;
+    let hello = find_window(&windows, "Thing-OS Wayland Lab")?;
+    let clock = find_window(&windows, "Clock")?;
+    let target_x = hello.x.saturating_add(40);
+    let target_y = hello.y.saturating_sub(20);
+    let start_x = clock.x.saturating_add(24);
+    let start_y = clock.y.saturating_add(14);
+    let dx = target_x.saturating_sub(clock.x);
+    let dy = target_y.saturating_sub(clock.y);
+
+    let commands = [
+        qmp_mouse_rel(-10000, -10000),
+        qmp_mouse_rel(start_x, start_y),
+        qmp_mouse_button(true),
+        qmp_mouse_rel(dx, dy),
+        qmp_mouse_button(false),
+    ];
+    let delays = [1_000u64, 500, 200, 700, 200];
+    for (command, settle_ms) in commands.iter().zip(delays) {
+        world
+            .execute_qmp_control(command)
+            .await
+            .map_err(|e| StepError(format!("QMP clock-window drag failed: {}", e)))?;
+        tokio::time::sleep(std::time::Duration::from_millis(settle_ms)).await;
+    }
+    tokio::time::sleep(std::time::Duration::from_millis(1_500)).await;
+    Ok(())
+}
+
+#[then("higher z-order window content should obscure lower window chrome")]
+async fn higher_z_content_obscures_lower_window_chrome(
+    world: &mut ThingOsWorld,
+) -> Result<(), StepError> {
+    let windows = read_wayland_windows(world).await?;
+    let hello = find_window(&windows, "Thing-OS Wayland Lab")?;
+    let clock = find_window(&windows, "Clock")?;
+    let hello_title = TestRect {
+        x: hello.x.saturating_add(8),
+        y: hello.y.saturating_add(6),
+        w: hello.w.saturating_sub(16),
+        h: 18,
+    };
+    let clock_content_band = TestRect {
+        x: clock.x.saturating_add(40),
+        y: clock.y.saturating_add(32),
+        w: clock.w.saturating_sub(80),
+        h: 18,
+    };
+    let overlap = intersect_test_rect(hello_title, clock_content_band).ok_or_else(|| {
+        StepError(format!(
+            "Clock content did not overlap Wayland hello title bar (hello={}x{}+{},{} clock={}x{}+{},{})",
+            hello.w, hello.h, hello.x, hello.y, clock.w, clock.h, clock.x, clock.y
+        ))
+    })?;
+
+    let screenshot_path =
+        crate::artifacts::global().lock().await.screenshot_path("chrome_z_order_overlap");
+    let png_path = world
+        .take_screenshot(&screenshot_path)
+        .await
+        .map_err(|e| StepError(format!("Failed to take screenshot: {}", e)))?;
+    let img = image::open(&png_path)
+        .map_err(|e| StepError(format!("Failed to open screenshot: {}", e)))?
+        .to_rgb8();
+
+    let mut chrome_pixels = 0u32;
+    let mut body_pixels = 0u32;
+    let mut total = 0u32;
+    for y in overlap.y.max(0) as u32..overlap.y.max(0) as u32 + overlap.h {
+        for x in overlap.x.max(0) as u32..overlap.x.max(0) as u32 + overlap.w {
+            if x >= img.width() || y >= img.height() {
+                continue;
+            }
+            let pixel = img.get_pixel(x, y).0;
+            total += 1;
+            if is_window_chrome_pixel(pixel) {
+                chrome_pixels += 1;
+            }
+            if is_paper_pixel(pixel) {
+                body_pixels += 1;
+            }
+        }
+    }
+
+    if total > 0 && chrome_pixels.saturating_mul(10) < total && body_pixels > total / 3 {
+        eprintln!(
+            "│  │  │      ✅ Higher z-order content hides lower chrome (chrome={} body={} total={})",
+            chrome_pixels, body_pixels, total
+        );
+        return Ok(());
+    }
+
+    Err(StepError(format!(
+        "Lower window chrome leaked through higher z-order content (chrome={} body={} total={})",
+        chrome_pixels, body_pixels, total
     )))
 }
 

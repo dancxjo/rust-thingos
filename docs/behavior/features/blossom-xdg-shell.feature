@@ -72,6 +72,13 @@ Feature: blossom xdg-shell lifecycle
     And active window chrome should be rendered with flat thick borders
     And active window chrome should include facet frame focus accents
 
+  @pointer-debug @wayland-visible
+  Scenario: higher z-order content obscures lower window chrome
+    Given the client has an xdg_toplevel
+    Then the Wayland hello client should be visible
+    When I drag the Clock window over the Wayland hello title bar
+    Then higher z-order window content should obscure lower window chrome
+
   @wayland-visible @wayland-fs
   Scenario: displayed Wayland windows are visible through the session filesystem
     Then the Wayland hello client should be visible

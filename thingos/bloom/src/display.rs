@@ -11,8 +11,8 @@ use abi::display_protocol::Rect;
 use abi::pixel::PixelFormat;
 use stem::syscall::vfs::{vfs_close, vfs_device_call_raw, vfs_open};
 
-use crate::render::{CursorPlane, OverlayPlane};
-use crate::scene::{CompositionEntry, surface_visual_rect};
+use crate::render::{CursorPlane, OverlayPlane, WindowOverlayPlane};
+use crate::scene::CompositionEntry;
 
 const MAX_COMMIT_PLANES: usize = 16;
 const MAX_DAMAGE_RECTS: usize = 32;
@@ -61,6 +61,13 @@ fn push_overlay_commit(
         _reserved: [0; 7],
     };
     *plane_count += 1;
+}
+
+fn find_window_overlay(
+    overlays: &[WindowOverlayPlane],
+    surface_id: u32,
+) -> Option<WindowOverlayPlane> {
+    overlays.iter().copied().find(|overlay| overlay.surface_id == surface_id)
 }
 
 #[derive(Clone, Copy, Debug)]
@@ -301,8 +308,8 @@ impl DisplayBackend {
         composition_list: &[CompositionEntry],
         damage: &[Rect],
         fallback_buffer: Option<u32>,
-        body_overlay: Option<OverlayPlane>,
-        chrome_overlay: Option<OverlayPlane>,
+        body_overlays: &[WindowOverlayPlane],
+        chrome_overlays: &[WindowOverlayPlane],
         pointer_overlay: Option<OverlayPlane>,
         cursor: Option<CursorPlane>,
         flags: CommitFlags,
@@ -333,14 +340,21 @@ impl DisplayBackend {
             let base_z = entry.z_order.saturating_mul(4);
 
             // 2.1 Window body (themed background under content)
-            if let Some(overlay) = body_overlay {
-                if !entry.is_fullscreen && !entry.chrome.is_empty() && plane_count < MAX_COMMIT_PLANES {
-                    let visual_rect = surface_visual_rect(entry.dest_rect, entry.chrome);
+            if let Some(overlay) = find_window_overlay(body_overlays, entry.surface_id) {
+                if !entry.is_fullscreen
+                    && !entry.chrome.is_empty()
+                    && plane_count < MAX_COMMIT_PLANES
+                {
                     planes[plane_count] = PlaneCommit {
                         plane_id: PlaneId(plane_count as u32),
                         buffer_id: abi::display::BufferId(overlay.buffer_id),
-                        dest_rect: visual_rect,
-                        src_rect: visual_rect,
+                        dest_rect: Rect {
+                            x: overlay.x.max(0) as u32,
+                            y: overlay.y.max(0) as u32,
+                            w: overlay.width,
+                            h: overlay.height,
+                        },
+                        src_rect: Rect { x: 0, y: 0, w: overlay.width, h: overlay.height },
                         z_order: base_z,
                         alpha: 255,
                         _reserved: [0; 7],
@@ -371,14 +385,21 @@ impl DisplayBackend {
             }
 
             // 2.3 Chrome plane (interleaved)
-            if let Some(overlay) = chrome_overlay {
-                if !entry.is_fullscreen && !entry.chrome.is_empty() && plane_count < MAX_COMMIT_PLANES {
-                    let visual_rect = surface_visual_rect(entry.dest_rect, entry.chrome);
+            if let Some(overlay) = find_window_overlay(chrome_overlays, entry.surface_id) {
+                if !entry.is_fullscreen
+                    && !entry.chrome.is_empty()
+                    && plane_count < MAX_COMMIT_PLANES
+                {
                     planes[plane_count] = PlaneCommit {
                         plane_id: PlaneId(plane_count as u32),
                         buffer_id: abi::display::BufferId(overlay.buffer_id),
-                        dest_rect: visual_rect,
-                        src_rect: visual_rect,
+                        dest_rect: Rect {
+                            x: overlay.x.max(0) as u32,
+                            y: overlay.y.max(0) as u32,
+                            w: overlay.width,
+                            h: overlay.height,
+                        },
+                        src_rect: Rect { x: 0, y: 0, w: overlay.width, h: overlay.height },
                         z_order: base_z.saturating_add(2),
                         alpha: 255,
                         _reserved: [0; 7],
