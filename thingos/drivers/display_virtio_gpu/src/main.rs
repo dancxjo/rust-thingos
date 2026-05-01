@@ -2105,14 +2105,19 @@ fn execute_accel2d_cmd(
             // Try GPU path first; fall back to CPU on ENOSYS.
             match gpu_accel2d_copy_rect(driver, idx, &src_snapshot, c.src_rect, c.dst_rect) {
                 Ok(()) => {
+                    trace!("display_virtio_gpu: [batch {}] copy_rect using GPU", idx);
                     driver.accel2d_gpu_cmds = driver.accel2d_gpu_cmds.saturating_add(1);
                     Ok(())
                 }
                 Err(abi::errors::Errno::ENOSYS) => {
+                    trace!("display_virtio_gpu: [batch {}] copy_rect using CPU", idx);
                     driver.accel2d_cpu_cmds = driver.accel2d_cpu_cmds.saturating_add(1);
                     accel2d_copy_rect(driver, idx, c.src_buffer, c.dst_buffer, c.src_rect, c.dst_rect)
                 }
-                Err(e) => Err(e),
+                Err(e) => {
+                    warn!("display_virtio_gpu: [batch {}] gpu_accel2d_copy_rect failed: {:?}", idx, e);
+                    Err(e)
+                }
             }
         }
         ACCEL2D_CMD_STRETCH_BLIT => {
@@ -2134,16 +2139,21 @@ fn execute_accel2d_cmd(
                 driver, idx, &src_snapshot, c.src_rect, c.dst_rect, c.global_alpha,
             ) {
                 Ok(()) => {
+                    trace!("display_virtio_gpu: [batch {}] alpha_blit using GPU", idx);
                     driver.accel2d_gpu_cmds = driver.accel2d_gpu_cmds.saturating_add(1);
                     Ok(())
                 }
                 Err(abi::errors::Errno::ENOSYS) => {
+                    trace!("display_virtio_gpu: [batch {}] alpha_blit using CPU", idx);
                     driver.accel2d_cpu_cmds = driver.accel2d_cpu_cmds.saturating_add(1);
                     accel2d_alpha_blit(
                         driver, idx, c.src_buffer, c.dst_buffer, c.src_rect, c.dst_rect, c.global_alpha,
                     )
                 }
-                Err(e) => Err(e),
+                Err(e) => {
+                    warn!("display_virtio_gpu: [batch {}] gpu_accel2d_alpha_blit failed: {:?}", idx, e);
+                    Err(e)
+                }
             }
         }
         ACCEL2D_CMD_MASKED_BLIT => {
