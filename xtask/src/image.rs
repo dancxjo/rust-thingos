@@ -278,6 +278,7 @@ pub fn default_programs() -> Vec<ProgramConfig> {
         ProgramConfig { name: "ahci_disk", is_init: false, boot_module: true, features: vec![] },
         ProgramConfig { name: "ata_disk", is_init: false, boot_module: true, features: vec![] },
         ProgramConfig { name: "iso9660d", is_init: false, boot_module: true, features: vec![] },
+        ProgramConfig { name: "fatd", is_init: false, boot_module: true, features: vec![] },
         ProgramConfig { name: "virtio_sound", is_init: false, boot_module: true, features: vec![] },
         ProgramConfig { name: "hdaudio", is_init: false, boot_module: true, features: vec![] },
         ProgramConfig { name: "pci_stubd", is_init: false, boot_module: true, features: vec![] },

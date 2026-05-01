@@ -366,6 +366,18 @@ async fn machine_is_booted_with_qemu_xhci(world: &mut ThingOsWorld) -> Result<()
     wait_for_boot(world).await
 }
 
+#[given("the machine is booted with a USB FAT image")]
+async fn machine_is_booted_with_usb_fat_image(
+    world: &mut ThingOsWorld,
+) -> Result<(), StepError> {
+    let arch = std::env::var("BDD_ARCH").unwrap_or_else(|_| "x86_64".to_string());
+    world
+        .boot_with_usb_fat_image(&arch)
+        .await
+        .map_err(|e| StepError(format!("Failed to boot with USB FAT image: {}", e)))?;
+    wait_for_boot(world).await
+}
+
 #[then(regex = r#"^"(.+)" should appear at least (\d+) times$"#)]
 async fn check_occurrence_count(
     world: &mut ThingOsWorld,

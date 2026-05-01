@@ -123,6 +123,8 @@ members = [
   "thingos/utils/ipc_pipe_demo",
   "thingos/utils/ipc_provider_demo",
   "thingos/utils/ipc_service_demo",
+  "thingos/utils/fat",
+  "thingos/utils/fatd",
   "thingos/utils/iso9660",
   "thingos/utils/iso9660d",
   "thingos/utils/iso_reader",
