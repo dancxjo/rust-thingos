@@ -17,9 +17,10 @@ use abi::attrs::{
 };
 use abi::device::{DeviceCall, DeviceKind};
 use abi::display::{
-    BufferHandle, BufferId, CommitRequest, DISPLAY_OP_COMMIT, DISPLAY_OP_GET_INFO,
-    DISPLAY_OP_IMPORT_BUFFER, DISPLAY_OP_MOVE_CURSOR, DISPLAY_OP_RELEASE_BUFFER,
-    DISPLAY_OP_SET_CURSOR, PlaneCommit,
+    BufferHandle, BufferId, CommitRequest, DISPLAY_OP_ACCEL2D, DISPLAY_OP_COMMIT,
+    DISPLAY_OP_GET_INFO, DISPLAY_OP_IMPORT_BUFFER, DISPLAY_OP_MOVE_CURSOR,
+    DISPLAY_OP_RELEASE_BUFFER, DISPLAY_OP_SET_CURSOR, PlaneCommit,
+    accel2d::{Accel2dBatch, Accel2dCommand, ACCEL2D_COMMAND_SIZE},
 };
 use abi::errors::Errno;
 use abi::vfs_rpc::VfsRpcOp;
@@ -229,6 +230,38 @@ fn device_call(driver: &mut BootFbDriver, payload: &[u8]) -> ProviderResponse {
             // display_bootfb does not advertise HARDWARE_CURSOR capability.
             // Return ENOSYS so callers fall back to the software cursor path.
             ProviderResponse::err(Errno::ENOSYS)
+        }
+        DISPLAY_OP_ACCEL2D => {
+            let batch_size = core::mem::size_of::<Accel2dBatch>();
+            if call_payload.len() < batch_size {
+                return ProviderResponse::err(Errno::EINVAL);
+            }
+            let header: Accel2dBatch =
+                unsafe { core::ptr::read_unaligned(call_payload.as_ptr() as *const _) };
+            let cmd_count = header.cmd_count as usize;
+            // Reject unreasonably large batches before arithmetic to prevent
+            // malformed requests from exhausting memory.
+            if cmd_count > 4096 {
+                return ProviderResponse::err(Errno::EINVAL);
+            }
+            let needed = batch_size.saturating_add(cmd_count.saturating_mul(ACCEL2D_COMMAND_SIZE));
+            if call_payload.len() < needed {
+                return ProviderResponse::err(Errno::EINVAL);
+            }
+            let mut commands = alloc::vec::Vec::with_capacity(cmd_count);
+            for i in 0..cmd_count {
+                let off = batch_size + i * ACCEL2D_COMMAND_SIZE;
+                let cmd: Accel2dCommand = unsafe {
+                    core::ptr::read_unaligned(
+                        call_payload[off..off + ACCEL2D_COMMAND_SIZE].as_ptr() as *const _,
+                    )
+                };
+                commands.push(cmd);
+            }
+            match driver.execute_accel2d(&header, &commands) {
+                Ok(()) => ProviderResponse::ok_device_call(0, &[]),
+                Err(e) => ProviderResponse::err(e),
+            }
         }
         _ => ProviderResponse::err(Errno::ENOSYS),
     }
