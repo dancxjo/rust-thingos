@@ -315,6 +315,16 @@ pub struct WEvtKeyboardKey {
     pub timestamp_ms: u32,
 }
 
+#[repr(C, packed)]
+#[derive(Clone, Copy)]
+pub struct WEvtOutputInfo {
+    pub msg_type: u8, // = WEVT_OUTPUT_INFO
+    pub _pad: [u8; 3],
+    pub width: u32,
+    pub height: u32,
+    pub refresh_mhz: u32,
+}
+
 // ── Encoding helpers ─────────────────────────────────────────────────────────
 
 macro_rules! as_bytes {

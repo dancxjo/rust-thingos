@@ -309,6 +309,11 @@ impl BloomWorld {
         self.hw_cursor_position = None;
         self.cursor_present_logged = false;
         self.damage.mark_full(next.width, next.height);
+        if let Some(port) = self.wayland_evt_write {
+            let msg =
+                crate::wayland::ipc::encode_output_info(next.width, next.height, next.refresh_mhz);
+            let _ = port_send_all(port, &msg);
+        }
         stem::info!(
             "bloom: output0 resized {}x{} -> {}x{} @ {}mHz",
             old.width,

@@ -457,6 +457,30 @@ impl WaylandServer {
         }
     }
 
+    fn handle_output_info(&mut self, width: u32, height: u32, refresh_mhz: u32) {
+        self.output.width = width;
+        self.output.height = height;
+        self.output.refresh_mhz = refresh_mhz;
+
+        for client in self.clients.values_mut() {
+            // 1. Send Wayland protocol events for the output change.
+            if let Some(output_obj) = client.output_object() {
+                dispatch::send_output_events(client, output_obj, &self.output);
+            }
+
+            // 2. Generate and send resize configures for maximized/fullscreen windows.
+            let cmds = client.blossom.generate_resize_configures(width as i32, height as i32);
+            if !cmds.is_empty() {
+                dispatch::send_blossom_commands(client, &cmds, self.cmd_write);
+            }
+        }
+
+        info!(
+            "wayland-server: updated output0 to {}x{} @ {}mHz",
+            width, height, refresh_mhz
+        );
+    }
+
     // ── Main thread events ───────────────────────────────────────────────
 
     fn handle_main_event(&mut self, data: &[u8]) {
@@ -703,6 +727,15 @@ impl WaylandServer {
                 let time = u32::from_ne_bytes(data[12..16].try_into().unwrap_or([0; 4]));
                 let serial = self.alloc_serial();
                 self.send_keyboard_key(surface, key, pressed, modifiers, time, serial);
+            }
+            ipc::WEVT_OUTPUT_INFO => {
+                if data.len() < 16 {
+                    return;
+                }
+                let width = u32::from_ne_bytes(data[4..8].try_into().unwrap_or([0; 4]));
+                let height = u32::from_ne_bytes(data[8..12].try_into().unwrap_or([0; 4]));
+                let refresh_mhz = u32::from_ne_bytes(data[12..16].try_into().unwrap_or([0; 4]));
+                self.handle_output_info(width, height, refresh_mhz);
             }
             _ => {}
         }

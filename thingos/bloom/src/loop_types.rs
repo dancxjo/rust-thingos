@@ -300,6 +300,7 @@ impl BloomLoop {
         }
         self.next_display_poll_ns = now.saturating_add(DISPLAY_POLL_INTERVAL_NS);
         if world.refresh_display_output() {
+            self.frame_clock.update_refresh_rate(world.primary.refresh_mhz);
             self.frame_clock.request_immediate_repaint();
             true
         } else {

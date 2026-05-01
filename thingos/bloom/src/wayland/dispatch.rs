@@ -660,7 +660,11 @@ fn dispatch_output(msg: &WireMsg, client: &mut WaylandClient, obj_id: u32) -> Ve
 /// Send the initial burst of `wl_output` events to a newly-bound output object.
 ///
 /// Sends (in order): `geometry`, `mode`, `scale` (v2), `done` (v2).
-fn send_output_events(client: &WaylandClient, output_obj: u32, info: &crate::display::OutputInfo) {
+pub(crate) fn send_output_events(
+    client: &WaylandClient,
+    output_obj: u32,
+    info: &crate::display::OutputInfo,
+) {
     use crate::wayland::wire::encode_string;
 
     // wl_output.geometry (opcode 0)
