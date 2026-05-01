@@ -366,6 +366,8 @@ impl ThingOsWorld {
                 cmd.args(["-device", "virtio-vga"]);
                 if options.qemu_xhci {
                     cmd.args(["-device", "qemu-xhci,id=xhci"]);
+                    cmd.args(["-blockdev", "driver=null-co,node-name=usbdisk,size=1073741824"]);
+                    cmd.args(["-device", "usb-storage,bus=xhci.0,drive=usbdisk"]);
                 }
                 cmd.args([
                     "-drive",

@@ -760,17 +760,14 @@ impl XhciController {
         let vid = le16(&device_desc[8..10]);
         let pid = le16(&device_desc[10..12]);
         let config_count = device_desc[17];
+        info!("usb: vid={:04x} pid={:04x}", vid, pid);
         info!(
-            "usb: vid={:04x} pid={:04x} usb={}.{:02x} class={:02x} subclass={:02x} protocol={:02x} configs={}",
-            vid,
-            pid,
+            "usb: usb={}.{:02x}",
             (usb_bcd >> 8) & 0xff,
             usb_bcd & 0xff,
-            class,
-            subclass,
-            protocol,
-            config_count
         );
+        info!("usb: class={:02x} subclass={:02x} protocol={:02x}", class, subclass, protocol);
+        info!("usb: configurations={}", config_count);
 
         let config_head = self.get_descriptor(&mut dev, USB_DESC_CONFIGURATION, 0, 9)?;
         if config_head.len() < 9 {
@@ -889,6 +886,7 @@ impl XhciController {
         });
         doorbell(self.regs.doorbells, 0, 0);
         let _ = self.wait_command_completion(ptr)?;
+        info!("xhci: address device slot={} ok", slot_id);
         Ok(())
     }
 
