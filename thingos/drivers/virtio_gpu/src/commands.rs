@@ -235,6 +235,184 @@ pub struct VirtioGpuCmdSubmit3d {
 }
 
 // ============================================================================
+// Virgl Command Encoding for GPU Alpha Blending
+// ============================================================================
+
+/// Virgl command opcode: BLIT — copy a region from one resource to another.
+///
+/// When the `VIRGL_BLIT_S0_ALPHA_BLEND` flag is set in the `s0` field the
+/// virglrenderer performs a blitter-based render pass with alpha blending
+/// enabled on the destination surface, compositing the source over the
+/// destination using the standard Porter-Duff "over" operator.
+///
+/// Command header format (from virglrenderer `virgl_protocol.h`):
+/// ```text
+/// bits  0-7:  command opcode
+/// bits  8-15: object type (0 for non-object commands)
+/// bits 16-31: payload length in 32-bit DWORDs (excluding this header word)
+/// ```
+pub const VIRGL_CCMD_BLIT: u32 = 0x2d;
+
+/// Number of additional 32-bit DWORDs in the BLIT payload (after the header).
+pub const VIRGL_OBJ_BLIT_SIZE: u32 = 25;
+
+/// BLIT s0 field: write mask covering all four RGBA channels (bits 0-3).
+pub const VIRGL_BLIT_S0_MASK_RGBA: u32 = 0x0f;
+
+/// BLIT s0 field: enable Porter-Duff "over" alpha blending (bit 6).
+///
+/// When set, virglrenderer instructs the blitter to enable alpha blending on
+/// the destination surface (`GL_SRC_ALPHA / GL_ONE_MINUS_SRC_ALPHA`).  The
+/// result is:
+/// `out = src_color * src_alpha + dst_color * (1 – src_alpha)`.
+///
+/// The `global_alpha` pre-multiplication must be baked into the source
+/// texture's alpha channel by the caller before issuing this command so
+/// that the GPU blend produces the same result as the CPU fallback.
+///
+/// Bit position 6 follows the virglrenderer `VIRGL_OBJ_BLIT_S0_ALPHA_BLEND`
+/// constant from `virgl_protocol.h`.
+pub const VIRGL_BLIT_S0_ALPHA_BLEND: u32 = 1 << 6;
+
+/// Build the first DWord of a virgl command buffer entry.
+///
+/// `cmd` is the VIRGL_CCMD_* opcode (8-bit value placed in bits 0-7).
+/// `obj` is the object type (8-bit, placed in bits 8-15; 0 for non-object
+/// commands like BLIT).
+/// `len` is the number of 32-bit DWORDs that follow this header word.
+#[inline]
+pub const fn virgl_cmd0(cmd: u32, obj: u32, len: u32) -> u32 {
+    (cmd & 0xff) | ((obj & 0xff) << 8) | ((len & 0xffff) << 16)
+}
+
+/// Encode a `VIRGL_CCMD_BLIT` command into a byte buffer (26 DWORDs = 104 bytes).
+///
+/// The produced command composites the source rectangle `(src_x, src_y,
+/// src_w, src_h)` from `src_res_id` over the destination rectangle
+/// `(dst_x, dst_y, dst_w, dst_h)` in `dst_res_id`.
+///
+/// When `alpha_blend` is `true` the virglrenderer enables GL alpha blending
+/// (`GL_SRC_ALPHA / GL_ONE_MINUS_SRC_ALPHA`) so the result is
+/// `out = src_color * src_alpha + dst_color * (1 – src_alpha)`.  The
+/// `global_alpha` pre-multiplication must be baked into the source texture's
+/// alpha channel by the caller before issuing this command.
+///
+/// Both resources must be attached to the virgl context before submission
+/// (via `VIRTIO_GPU_CMD_CTX_ATTACH_RESOURCE`).
+#[allow(clippy::too_many_arguments)]
+pub fn virgl_encode_blit(
+    src_res_id: u32,
+    dst_res_id: u32,
+    src_x: u32,
+    src_y: u32,
+    src_w: u32,
+    src_h: u32,
+    dst_x: u32,
+    dst_y: u32,
+    dst_w: u32,
+    dst_h: u32,
+    src_format: u32,
+    dst_format: u32,
+    alpha_blend: bool,
+) -> [u8; 104] {
+    // Header: cmd_opcode | (obj_type=0 << 8) | (payload_dwords << 16)
+    let header: u32 = virgl_cmd0(VIRGL_CCMD_BLIT, 0, VIRGL_OBJ_BLIT_SIZE);
+    let mut s0 = VIRGL_BLIT_S0_MASK_RGBA;
+    if alpha_blend {
+        s0 |= VIRGL_BLIT_S0_ALPHA_BLEND;
+    }
+    let dwords: [u32; 26] = [
+        header,
+        s0,
+        0, // scissor minx|miny (scissor disabled)
+        0, // scissor maxx|maxy
+        // dst (15 DWORDs)
+        dst_res_id,
+        0,   // dst_level
+        dst_x,
+        dst_y,
+        0,   // dst_z
+        dst_w,
+        dst_h,
+        1,   // dst_depth
+        dst_format,
+        0,   // dst_stride (use default)
+        0,   // dst_layer_stride (use default)
+        // src (11 DWORDs to reach 25 payload DWORDs)
+        src_res_id,
+        0,   // src_level
+        src_x,
+        src_y,
+        0,   // src_z
+        src_w,
+        src_h,
+        1,   // src_depth
+        src_format,
+        0,   // src_stride (use default)
+        0,   // src_layer_stride (use default)
+    ];
+
+    let mut bytes = [0u8; 104];
+    for (i, &dw) in dwords.iter().enumerate() {
+        let off = i * 4;
+        bytes[off] = (dw & 0xff) as u8;
+        bytes[off + 1] = ((dw >> 8) & 0xff) as u8;
+        bytes[off + 2] = ((dw >> 16) & 0xff) as u8;
+        bytes[off + 3] = (dw >> 24) as u8;
+    }
+    bytes
+}
+
+// ============================================================================
+// Tests for virgl command encoding
+// ============================================================================
+
+#[cfg(test)]
+mod virgl_blit_tests {
+    use super::*;
+
+    #[test]
+    fn virgl_cmd0_encodes_correct_header() {
+        // cmd in bits 0-7, obj in bits 8-15, len in bits 16-31
+        let hdr = virgl_cmd0(0x2d, 0, 25);
+        assert_eq!(hdr & 0xff, 0x2d, "opcode must be in low byte");
+        assert_eq!((hdr >> 8) & 0xff, 0, "object type must be 0");
+        assert_eq!((hdr >> 16) & 0xffff, 25, "length must be 25");
+    }
+
+    #[test]
+    fn virgl_encode_blit_header_byte_layout() {
+        let cmd = virgl_encode_blit(1, 2, 0, 0, 16, 16, 8, 8, 16, 16, 1, 2, false);
+        // DWord 0 (bytes 0-3) is the virgl command header.
+        // Expected: virgl_cmd0(0x2d, 0, 25) in little-endian = [0x2d, 0x00, 0x19, 0x00]
+        assert_eq!(cmd[0], 0x2d, "opcode byte 0");
+        assert_eq!(cmd[1], 0x00, "opcode byte 1");
+        assert_eq!(cmd[2], 0x19, "length low byte (25 = 0x19)");
+        assert_eq!(cmd[3], 0x00, "length high byte");
+    }
+
+    #[test]
+    fn virgl_encode_blit_alpha_blend_flag() {
+        // Without alpha_blend: s0 = VIRGL_BLIT_S0_MASK_RGBA = 0x0f
+        let no_blend = virgl_encode_blit(1, 2, 0, 0, 4, 4, 0, 0, 4, 4, 1, 2, false);
+        let s0_no = u32::from_le_bytes([no_blend[4], no_blend[5], no_blend[6], no_blend[7]]);
+        assert_eq!(s0_no, 0x0f, "s0 without alpha_blend");
+
+        // With alpha_blend: s0 = 0x0f | (1 << 6) = 0x4f
+        let with_blend = virgl_encode_blit(1, 2, 0, 0, 4, 4, 0, 0, 4, 4, 1, 2, true);
+        let s0_blend = u32::from_le_bytes([with_blend[4], with_blend[5], with_blend[6], with_blend[7]]);
+        assert_eq!(s0_blend, 0x4f, "s0 with alpha_blend enabled");
+        assert_ne!(s0_no, s0_blend, "alpha_blend flag must change s0");
+    }
+
+    #[test]
+    fn virgl_encode_blit_total_size() {
+        let cmd = virgl_encode_blit(0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, false);
+        assert_eq!(cmd.len(), 104, "BLIT command must be exactly 26 DWORDs = 104 bytes");
+    }
+}
+
+// ============================================================================
 // Cursor Queue Commands (0x0300 range — sent on cursorq)
 // ============================================================================
 

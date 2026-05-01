@@ -346,11 +346,31 @@ mod tests {
         assert!(virtio_caps.contains(DisplayCaps::RESOURCE_CACHE));
         assert!(virtio_caps.contains(DisplayCaps::ATOMIC));
         assert!(virtio_caps.contains(DisplayCaps::DMABUF_IMPORT));
-        // Conservative: do not advertise unimplemented GPU features
+        // Conservative: the baseline capability set (no virgl 3D) does not
+        // advertise unimplemented GPU features.
         assert!(!virtio_caps.contains(DisplayCaps::GPU_ALPHA_BLEND));
         assert!(!virtio_caps.contains(DisplayCaps::GPU_SCALE));
         assert!(!virtio_caps.contains(DisplayCaps::GPU_ROUNDED_CLIP));
         assert!(!virtio_caps.contains(DisplayCaps::FENCES));
+    }
+
+    #[test]
+    fn virtio_gpu_caps_with_virgl_include_gpu_alpha_blend() {
+        // When the virtio-gpu device supports virgl 3D the driver initialises
+        // the alpha-blending pipeline and advertises GPU_ALPHA_BLEND so that
+        // compositors (e.g. Bloom) can branch on `supports_gpu_alpha_blend()`.
+        let virgl_caps = DisplayCaps::ATOMIC
+            | DisplayCaps::DMABUF_IMPORT
+            | DisplayCaps::GPU_BLIT
+            | DisplayCaps::DIRECT_SCANOUT
+            | DisplayCaps::PARTIAL_FLUSH
+            | DisplayCaps::RESOURCE_CACHE
+            | DisplayCaps::GPU_ALPHA_BLEND; // <-- added when virgl ctx is ready
+        assert!(virgl_caps.contains(DisplayCaps::GPU_ALPHA_BLEND));
+        // Non-virgl features are still absent.
+        assert!(!virgl_caps.contains(DisplayCaps::GPU_SCALE));
+        assert!(!virgl_caps.contains(DisplayCaps::GPU_ROUNDED_CLIP));
+        assert!(!virgl_caps.contains(DisplayCaps::FENCES));
     }
 
     #[test]

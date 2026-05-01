@@ -401,6 +401,24 @@ struct VirtioGpuDriver {
     /// Incremented each time a plane requires per-pixel alpha blending or
     /// rounded-rectangle clipping that cannot be offloaded to the GPU.
     cpu_fallback_planes: u64,
+    /// virgl 3D context ID used for GPU alpha blending (0 = not available).
+    ///
+    /// Initialized once at driver startup when the virtio-gpu device advertises
+    /// the `VIRTIO_GPU_F_VIRGL` feature bit.  All virgl operations for alpha
+    /// blending use this single context.
+    virgl_ctx_id: u32,
+    /// Virtual (driver-mapped) address of the DMA staging buffer used to hold
+    /// source pixel data before uploading to the virgl source texture.  0 means
+    /// the staging buffer was not successfully allocated.
+    virgl_blend_staging_buf: u64,
+    /// Physical address of `virgl_blend_staging_buf` (for GPU DMA).
+    virgl_blend_staging_phys: u64,
+    /// Byte capacity of `virgl_blend_staging_buf`
+    /// (`disp_width * disp_height * 4`).
+    virgl_blend_staging_size: usize,
+    /// virgl 3D resource ID for the pre-created BGRA source texture that is
+    /// backed by `virgl_blend_staging_buf` (0 = not created).
+    virgl_src_res_id: u32,
 }
 
 /// Dispatch one VFS RPC request to the appropriate handler.
@@ -531,6 +549,230 @@ fn rounded_clip_coverage(radius: u32, x: u32, y: u32, w: u32, h: u32) -> u8 {
     ((inside * 255 + 8) / 16) as u8
 }
 
+// ============================================================================
+// Virgl GPU Alpha Blending Path
+// ============================================================================
+
+/// Initialize the virgl GPU alpha-blending subsystem.
+///
+/// Returns `(ctx_id, staging_buf_virt, staging_buf_phys, staging_size,
+/// src_res_id)`.  All values are 0 / empty on failure.  The caller stores
+/// these in [`VirtioGpuDriver`] fields prefixed `virgl_`.
+///
+/// ## Steps
+/// 1. Creates a virgl 3D context (`VIRTIO_GPU_CMD_CTX_CREATE`).
+/// 2. Attaches every frame-pool 2D resource to the context so they can be
+///    used as render targets in `VIRGL_CCMD_BLIT`.
+/// 3. Allocates a DMA-backed staging buffer sized for one full frame.
+/// 4. Creates a `PIPE_TEXTURE_2D` / `PIPE_BIND_SAMPLER_VIEW` 3D source
+///    texture backed by the staging buffer.
+/// 5. Attaches the source texture to the context.
+fn init_virgl_blend(
+    gpu: &mut virtio_gpu::VirtioGpu,
+    disp_width: u32,
+    disp_height: u32,
+    frame_pool: &[Buffer],
+) -> (u32, u64, u64, usize, u32) {
+    if !gpu.has_3d_feature() {
+        return (0, 0, 0, 0, 0);
+    }
+
+    const BLEND_CTX_ID: u32 = 1;
+    if let Err(e) = gpu.create_context(BLEND_CTX_ID, b"blend") {
+        warn!("display_virtio_gpu: virgl create_context failed: {}; GPU alpha blend unavailable", e);
+        return (0, 0, 0, 0, 0);
+    }
+
+    // Attach all frame-pool 2D resources to the virgl context so they can
+    // receive rendered output from VIRGL_CCMD_BLIT.
+    for buf in frame_pool {
+        if let Err(e) = gpu.ctx_attach_resource(BLEND_CTX_ID, buf.res_id) {
+            warn!(
+                "display_virtio_gpu: virgl ctx_attach frame_pool res={} failed: {}",
+                buf.res_id, e
+            );
+        }
+    }
+
+    // Allocate a DMA-backed staging buffer (width × height × 4 bytes).
+    let size = match (disp_width as usize)
+        .checked_mul(disp_height as usize)
+        .and_then(|n| n.checked_mul(4))
+    {
+        Some(s) if s > 0 => s,
+        _ => {
+            warn!("display_virtio_gpu: virgl staging size overflow; GPU alpha blend unavailable");
+            return (0, 0, 0, 0, 0);
+        }
+    };
+    let pages = (size + 4095) / 4096;
+    let (buf_virt, buf_phys) = match gpu.alloc_dma(pages) {
+        Ok(v) => v,
+        Err(e) => {
+            warn!("display_virtio_gpu: virgl staging alloc failed: {}; GPU alpha blend unavailable", e);
+            return (0, 0, 0, 0, 0);
+        }
+    };
+
+    // Create the 3D source texture (BGRA, sampler-view, full display size).
+    let src_res_id = gpu.alloc_resource_id();
+    if let Err(e) = gpu.create_resource_3d(
+        src_res_id,
+        virtio_gpu::PIPE_TEXTURE_2D,
+        virtio_gpu::VIRTIO_GPU_FORMAT_B8G8R8A8_UNORM,
+        virtio_gpu::PIPE_BIND_SAMPLER_VIEW,
+        disp_width,
+        disp_height,
+        1,
+    ) {
+        warn!("display_virtio_gpu: virgl create_resource_3d failed: {}; GPU alpha blend unavailable", e);
+        return (0, 0, 0, 0, 0);
+    }
+    if let Err(e) = gpu.attach_backing_3d(src_res_id, buf_phys, size) {
+        warn!("display_virtio_gpu: virgl attach_backing_3d failed: {}; GPU alpha blend unavailable", e);
+        return (0, 0, 0, 0, 0);
+    }
+    if let Err(e) = gpu.ctx_attach_resource(BLEND_CTX_ID, src_res_id) {
+        warn!("display_virtio_gpu: virgl ctx_attach src_res failed: {}; GPU alpha blend unavailable", e);
+        return (0, 0, 0, 0, 0);
+    }
+
+    info!(
+        "display_virtio_gpu: virgl GPU alpha blend ready ctx_id={} src_res={} staging={}B ({}x{})",
+        BLEND_CTX_ID, src_res_id, size, disp_width, disp_height
+    );
+    (BLEND_CTX_ID, buf_virt, buf_phys, size, src_res_id)
+}
+
+/// Composite `src_buffer` over the frame-pool buffer at `dst_rect` using the
+/// virgl GPU alpha-blend pipeline.
+///
+/// ## Algorithm
+/// 1. **Staging copy**: The source region is copied into the pre-allocated DMA
+///    staging buffer (at offset 0, stride = `copy_w * 4`).  If `global_alpha`
+///    is less than 255 the source alpha channel is pre-multiplied by it so
+///    that the GPU BLIT produces the same result as the CPU path.
+/// 2. **Texture upload**: `VIRTIO_GPU_CMD_TRANSFER_TO_HOST_3D` uploads the
+///    staged pixels into the virgl source texture resource.
+/// 3. **GPU BLIT**: `VIRGL_CCMD_BLIT` with `alpha_blend=1` composites the
+///    source texture over the frame-pool 2D resource using
+///    `GL_SRC_ALPHA / GL_ONE_MINUS_SRC_ALPHA` — the Porter-Duff "over"
+///    operator.  The blend is performed entirely in GPU hardware with no
+///    per-pixel CPU read-modify-write loop on the destination.
+///
+/// Callers must call `transfer_to_host_with_stride` for any OPAQUE planes
+/// BEFORE calling this function so that the GPU resource already contains
+/// the correct background layer for the blend to composite on top of.
+///
+/// Returns `Ok(())` on success.  On failure the caller should fall back to
+/// the CPU blend path.
+fn gpu_alpha_blit(
+    driver: &mut VirtioGpuDriver,
+    idx: usize,
+    src_buffer: &ImportedBuffer,
+    src_x: usize,
+    src_y: usize,
+    copy_w: usize,
+    copy_h: usize,
+    dst_x: usize,
+    dst_y: usize,
+    global_alpha: u8,
+) -> abi::errors::SysResult<()> {
+    if driver.virgl_ctx_id == 0 || driver.virgl_src_res_id == 0 {
+        return Err(abi::errors::Errno::ENOSYS);
+    }
+    if copy_w == 0 || copy_h == 0 {
+        return Ok(());
+    }
+
+    // Verify the source region fits within the staging buffer.
+    let needed = match copy_w.checked_mul(copy_h).and_then(|n| n.checked_mul(4)) {
+        Some(n) => n,
+        None => return Err(abi::errors::Errno::EINVAL),
+    };
+    if needed > driver.virgl_blend_staging_size {
+        return Err(abi::errors::Errno::ENOSYS);
+    }
+
+    let staging_ptr = driver.virgl_blend_staging_buf as *mut u8;
+    let staging_stride = (copy_w as u32) * 4;
+    let bpp = 4usize;
+
+    // ── Pass 1: CPU copy source pixels → staging buffer ─────────────────────
+    //
+    // This is a sequential write-only pass (no destination read-modify-write).
+    // global_alpha is pre-multiplied into the source alpha channel so that the
+    // GPU BLIT (which uses raw src_alpha) produces the same blended output as
+    // the CPU path's `alpha_over_argb(src, dst, plane_alpha)`.
+    unsafe {
+        for row in 0..copy_h {
+            for col in 0..copy_w {
+                let src_off = (src_y + row).saturating_mul(src_buffer.stride as usize)
+                    + (src_x + col).saturating_mul(bpp);
+                let stg_off = row.saturating_mul(staging_stride as usize)
+                    + col.saturating_mul(bpp);
+                if src_off + bpp > src_buffer.size {
+                    // Out-of-bounds source pixel — write transparent black.
+                    core::ptr::write_unaligned(staging_ptr.add(stg_off) as *mut u32, 0u32);
+                    continue;
+                }
+                // Normalise to BGRA (fill alpha=0xff for BGRX sources).
+                let mut px = source_argb_for_blend(
+                    core::ptr::read_unaligned(src_buffer.ptr.add(src_off) as *const u32),
+                    src_buffer.format,
+                );
+                // Pre-multiply global_alpha into the source alpha channel so
+                // that the GPU blend is equivalent to the CPU fallback.
+                if global_alpha < 255 {
+                    let a = ((px >> 24) & 0xff) * global_alpha as u32 / 255;
+                    px = (px & 0x00ff_ffff) | (a << 24);
+                }
+                core::ptr::write_unaligned(staging_ptr.add(stg_off) as *mut u32, px);
+            }
+        }
+    }
+
+    // ── Pass 2: Upload staged pixels to the virgl source texture ─────────────
+    driver
+        .gpu
+        .transfer_to_host_3d(
+            driver.virgl_ctx_id,
+            driver.virgl_src_res_id,
+            copy_w as u32,
+            copy_h as u32,
+            0, // offset from start of backing memory
+            staging_stride,
+        )
+        .map_err(|_| abi::errors::Errno::EIO)?;
+
+    // ── Pass 3: GPU BLIT with alpha blending ─────────────────────────────────
+    //
+    // Composites the source texture (0,0,copy_w,copy_h) over the frame-pool
+    // 2D resource at (dst_x,dst_y) using GL_SRC_ALPHA/GL_ONE_MINUS_SRC_ALPHA.
+    let dst_res_id = driver.frame_pool[idx].res_id;
+    let blit_cmd = virtio_gpu::virgl_encode_blit(
+        driver.virgl_src_res_id,
+        dst_res_id,
+        0,
+        0,
+        copy_w as u32,
+        copy_h as u32,
+        dst_x as u32,
+        dst_y as u32,
+        copy_w as u32,
+        copy_h as u32,
+        virtio_gpu::VIRTIO_GPU_FORMAT_B8G8R8A8_UNORM,
+        virtio_gpu::VIRTIO_GPU_FORMAT_B8G8R8X8_UNORM,
+        true, // alpha_blend
+    );
+    driver
+        .gpu
+        .submit_3d(driver.virgl_ctx_id, &blit_cmd)
+        .map_err(|_| abi::errors::Errno::EIO)?;
+
+    Ok(())
+}
+
 fn vfs_lookup(payload: &[u8]) -> ProviderResponse {
     if payload.len() < 4 {
         return ProviderResponse::err(Errno::EINVAL);
@@ -608,6 +850,13 @@ fn vfs_device_call(driver: &mut VirtioGpuDriver, payload: &[u8]) -> ProviderResp
             if driver.gpu.has_cursorq() && driver.cursor_dma_buf != 0 && driver.cursor_dma_phys != 0
             {
                 caps |= DisplayCaps::HARDWARE_CURSOR;
+            }
+            // Advertise GPU_ALPHA_BLEND when the virgl 3D context and staging
+            // buffer are ready.  Bloom (and other compositors) can call
+            // `supports_gpu_alpha_blend()` to branch on this capability and
+            // avoid per-pixel CPU blend loops on the client side.
+            if driver.virgl_ctx_id != 0 && driver.virgl_src_res_id != 0 {
+                caps |= DisplayCaps::GPU_ALPHA_BLEND;
             }
             let info = DisplayInfo {
                 card_id: 0,
@@ -849,6 +1098,18 @@ fn vfs_device_call(driver: &mut VirtioGpuDriver, payload: &[u8]) -> ProviderResp
                 let mut first_copy_sample: Option<(u32, u32, u32, u32, u32)> = None;
                 let mut saw_cursor_plane = false;
                 let mut cursor_copy_sample: Option<(u32, u32, u32, u32, u32, u32)> = None;
+                // Planes deferred to GPU alpha blend pass: (buffer_id, src_x, src_y,
+                // copy_w, copy_h, dst_x, dst_y, global_alpha).
+                let mut gpu_blend_deferred: alloc::vec::Vec<(
+                    BufferId,
+                    usize,
+                    usize,
+                    usize,
+                    usize,
+                    usize,
+                    usize,
+                    u8,
+                )> = alloc::vec::Vec::new();
                 for plane in &planes {
                     let src = match driver.imported_buffers.get(&plane.buffer_id) {
                         Some(s) => s,
@@ -901,10 +1162,72 @@ fn vfs_device_call(driver: &mut VirtioGpuDriver, payload: &[u8]) -> ProviderResp
                     // rectangles overlap it.
                     let use_gpu_path = plane_can_use_gpu_path(plane, src);
                     let should_blend = !use_gpu_path;
-                    if use_gpu_path {
+                    // Use virgl GPU alpha blend when:
+                    //   • virgl context + staging texture are ready
+                    //   • plane requires blending (not opaque fast-copy)
+                    //   • no rounded-corner clip (clip requires per-pixel CPU coverage)
+                    // Virgl blend planes are deferred until after transfer_to_host_2d
+                    // so that the GPU resource already contains the composited opaque
+                    // layer before the blend pass runs.
+                    let use_virgl_blend = should_blend
+                        && driver.virgl_ctx_id != 0
+                        && driver.virgl_src_res_id != 0
+                        && clip_radius == 0;
+                    if use_gpu_path || use_virgl_blend {
                         driver.gpu_path_planes = driver.gpu_path_planes.saturating_add(1);
                     } else {
                         driver.cpu_fallback_planes = driver.cpu_fallback_planes.saturating_add(1);
+                    }
+                    if use_virgl_blend {
+                        // Defer to second (GPU) pass.  Still add the plane rect to
+                        // `damage` so that transfer_to_host_2d uploads the background
+                        // layer and flush_resource covers this plane's area.
+                        gpu_blend_deferred.push((
+                            plane.buffer_id,
+                            src_x,
+                            src_y,
+                            copy_w,
+                            copy_h,
+                            dst_x,
+                            dst_y,
+                            plane.alpha,
+                        ));
+                        damage = Some(match damage {
+                            Some(old) => rect_union(old, plane_rect),
+                            None => plane_rect,
+                        });
+                        if first_copy_sample.is_none() {
+                            // Record a sample for the first-commit log.
+                            let src_off = src_y.saturating_mul(src.stride as usize)
+                                + src_x.saturating_mul(bpp);
+                            let dst_off = dst_y.saturating_mul(driver.disp_stride as usize)
+                                + dst_x.saturating_mul(bpp);
+                            let target_ptr = driver.frame_pool[idx].ptr;
+                            let sp = if src_off + 4 <= src.size {
+                                unsafe {
+                                    core::ptr::read_unaligned(src.ptr.add(src_off) as *const u32)
+                                }
+                            } else {
+                                0
+                            };
+                            let dp = if dst_off + 4 <= driver.frame_pool[idx].size {
+                                unsafe {
+                                    core::ptr::read_unaligned(
+                                        target_ptr.add(dst_off) as *const u32
+                                    )
+                                }
+                            } else {
+                                0
+                            };
+                            first_copy_sample = Some((
+                                plane.buffer_id.0,
+                                sp,
+                                dp,
+                                copy_w as u32,
+                                copy_h as u32,
+                            ));
+                        }
+                        continue;
                     }
                     for dirty in &damage_rects {
                         let Some(rect) = rect_intersect(plane_rect, *dirty) else {
@@ -1054,6 +1377,90 @@ fn vfs_device_call(driver: &mut VirtioGpuDriver, payload: &[u8]) -> ProviderResp
                         driver.present_seq.saturating_add(1),
                         res_id
                     );
+
+                    // ── GPU alpha blend pass ─────────────────────────────────────
+                    // For planes that were deferred above, composite each one onto
+                    // the GPU resource (which now contains the opaque background
+                    // layer uploaded by transfer_to_host_with_stride) using the
+                    // virgl BLIT command with alpha_blend=1.
+                    // CPU fallback on virgl error ensures no frame is silently lost.
+                    for &(buf_id, sx, sy, cw, ch, dx, dy, ga) in &gpu_blend_deferred {
+                        // Re-borrow the immutable source buffer (driver is &mut but
+                        // imported_buffers is only read here; gpu_alpha_blit takes
+                        // the buffer by reference so we snapshot the needed values
+                        // to avoid the borrow-checker conflict).
+                        let src_snapshot = driver.imported_buffers.get(&buf_id).map(|s| {
+                            (s.ptr, s.size, s.stride, s.format)
+                        });
+                        if let Some((src_ptr, src_size, src_stride, src_format)) = src_snapshot {
+                            // Build a temporary ImportedBuffer view from the snapshot.
+                            let tmp_buf = ImportedBuffer {
+                                fd: 0,
+                                ptr: src_ptr,
+                                size: src_size,
+                                width: 0,
+                                height: 0,
+                                stride: src_stride,
+                                format: src_format,
+                            };
+                            if let Err(e) = gpu_alpha_blit(
+                                driver, idx, &tmp_buf, sx, sy, cw, ch, dx, dy, ga,
+                            ) {
+                                // Fall back to CPU blend for this plane.
+                                stem::warn!(
+                                    "DISP: GPU alpha blit failed ({:?}), applying CPU fallback",
+                                    e
+                                );
+                                driver.cpu_fallback_planes =
+                                    driver.cpu_fallback_planes.saturating_add(1);
+                                driver.gpu_path_planes =
+                                    driver.gpu_path_planes.saturating_sub(1);
+                                let target_ptr = driver.frame_pool[idx].ptr;
+                                let target_size = driver.frame_pool[idx].size;
+                                let fb_stride = driver.disp_stride as usize;
+                                unsafe {
+                                    for row in 0..ch {
+                                        for col in 0..cw {
+                                            let s_off = (sy + row)
+                                                .saturating_mul(src_stride as usize)
+                                                + (sx + col).saturating_mul(4);
+                                            let d_off = (dy + row)
+                                                .saturating_mul(fb_stride)
+                                                + (dx + col).saturating_mul(4);
+                                            if s_off + 4 > src_size || d_off + 4 > target_size {
+                                                continue;
+                                            }
+                                            let sp = source_argb_for_blend(
+                                                core::ptr::read_unaligned(
+                                                    src_ptr.add(s_off) as *const u32,
+                                                ),
+                                                src_format,
+                                            );
+                                            let dp = core::ptr::read_unaligned(
+                                                target_ptr.add(d_off) as *const u32,
+                                            );
+                                            core::ptr::write_unaligned(
+                                                target_ptr.add(d_off) as *mut u32,
+                                                alpha_over_argb(sp, dp, ga),
+                                            );
+                                        }
+                                    }
+                                }
+                                // Re-upload the CPU-blended region.
+                                let fallback_rect = Rect {
+                                    x: dx as u32,
+                                    y: dy as u32,
+                                    w: cw as u32,
+                                    h: ch as u32,
+                                };
+                                let _ = driver.gpu.transfer_to_host_with_stride(
+                                    res_id,
+                                    fallback_rect,
+                                    driver.disp_stride,
+                                );
+                            }
+                        }
+                    }
                     stem::trace!(
                         "DISP: COMMIT flush begin seq={} res_id={}",
                         driver.present_seq.saturating_add(1),
@@ -2379,7 +2786,7 @@ fn main(boot_arg: usize) -> ! {
     // are always available; virgl 3D extends the GPU acceleration surface.
     info!("display_virtio_gpu: composition paths: gpu_opaque_copy=enabled cpu_alpha_blend=enabled");
     if gpu.has_3d_feature() {
-        debug!("display_virtio_gpu: Virgl 3D supported");
+        debug!("display_virtio_gpu: Virgl 3D supported — GPU alpha blend path will be initialized");
     } else {
         debug!("display_virtio_gpu: Virgl 3D not supported, using 2D only");
     }
@@ -2454,6 +2861,18 @@ fn main(boot_arg: usize) -> ! {
             }
         }
     };
+
+    // ── Virgl GPU Alpha Blend Context ─────────────────────────────────────────
+    // Attempt to initialize the virgl 3D rendering context and DMA staging
+    // buffer for GPU-backed alpha blending.  Failures are non-fatal; the
+    // driver falls back to the CPU blend path.
+    let (virgl_ctx_id, virgl_blend_staging_buf, virgl_blend_staging_phys, virgl_blend_staging_size, virgl_src_res_id) =
+        init_virgl_blend(&mut gpu, disp_width, disp_height, &frame_pool_buffers);
+    if virgl_ctx_id != 0 {
+        info!(
+            "display_virtio_gpu: composition paths: gpu_opaque_copy=enabled gpu_alpha_blend=enabled cpu_alpha_blend=enabled"
+        );
+    }
 
     // =========================================================================
     // SOVEREIGN REGISTRATION: Handshake with sprout supervisor
@@ -2614,6 +3033,11 @@ fn main(boot_arg: usize) -> ! {
         cursor_attached_size: (0, 0),
         gpu_path_planes: 0,
         cpu_fallback_planes: 0,
+        virgl_ctx_id,
+        virgl_blend_staging_buf,
+        virgl_blend_staging_phys,
+        virgl_blend_staging_size,
+        virgl_src_res_id,
     };
 
     // ProviderLoop handles VFS RPC framing and correctly prefixes every
