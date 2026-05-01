@@ -100,6 +100,14 @@ Feature: Bloom compositor service loop and responsiveness
     Then the serial output should contain "display_virtio_gpu: GPU initialized successfully" within 60s
     And the serial output should contain "bloom: output0" within 60s
 
+  Scenario: virtio GPU driver discovers host scanout dimensions
+    # Regression coverage for host-driven QEMU display sizing.  The virtio
+    # display path must query virtio-gpu scanout metadata instead of freezing
+    # the compositor to the boot framebuffer dimensions forever.
+    Given the machine is booted
+    Then the serial output should contain "display_virtio_gpu: host scanout" within 60s
+    And the serial output should contain "bloom: output0" within 60s
+
   Scenario: bloom service loop paints the first frame without client connections
     # The FrameClock starts with repaint_requested=true so the compositor
     # produces an initial frame (the fallback wallpaper) immediately on boot,

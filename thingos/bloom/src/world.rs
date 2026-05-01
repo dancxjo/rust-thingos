@@ -278,6 +278,39 @@ impl BloomWorld {
         }
     }
 
+    pub fn refresh_display_output(&mut self) -> bool {
+        let old = self.primary;
+        let Some(changed) = self.display.refresh_info_changed() else {
+            return false;
+        };
+        if !changed {
+            return false;
+        }
+
+        let next = self.display.primary_output_info();
+        if next.width == 0 || next.height == 0 {
+            return false;
+        }
+
+        self.primary = next;
+        self.vsync_enabled = self.display.supports_vblank();
+        self.damage.set_output_bounds(next.width, next.height);
+        self.input.update_dimensions(next.width, next.height);
+        self.visuals.reconfigure_for_output(&self.display);
+        self.hw_cursor_position = None;
+        self.cursor_present_logged = false;
+        self.damage.mark_full(next.width, next.height);
+        stem::info!(
+            "bloom: output0 resized {}x{} -> {}x{} @ {}mHz",
+            old.width,
+            old.height,
+            next.width,
+            next.height,
+            next.refresh_mhz
+        );
+        true
+    }
+
     pub fn sync_wayland_session_fs(&self, event: alloc::string::String) {
         session_fs::sync_scene(&self.scene, &event);
     }

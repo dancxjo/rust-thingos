@@ -72,6 +72,14 @@ pub struct VirtioGpuResourceCreate2d {
     pub height: u32,
 }
 
+/// Destroy a resource.
+#[repr(C, packed)]
+pub struct VirtioGpuResourceUnref {
+    pub hdr: VirtioGpuCtrlHdr,
+    pub resource_id: u32,
+    pub padding: u32,
+}
+
 /// Attach backing memory entry
 #[repr(C, packed)]
 pub struct VirtioGpuMemEntry {

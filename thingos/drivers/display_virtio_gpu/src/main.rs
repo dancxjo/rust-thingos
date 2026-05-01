@@ -26,6 +26,8 @@ use stem::{debug, error, info, trace, warn};
 use virtio_gpu::{Rect, VirtioGpu};
 const THINGOS_DRIVER_NAME: &[u8] = b"display_virtio_gpu";
 const DISPLAY_PROVIDER_POLL_ISOLATION: bool = true;
+const DISPLAY_BPP: u32 = 4;
+const FRAME_POOL_COUNT: usize = 1;
 
 /// Maximum cursor image side length (pixels). Allocating DMA pages up-front
 /// for this many pixels × 4 bytes ensures the cursor pixel buffer is
@@ -288,8 +290,7 @@ impl PresentStats {
     /// by subtracting the values stored from the previous call.
     fn log_and_reset(&mut self, gpu_planes_total: u64, cpu_planes_total: u64) {
         if self.frame_count > 0 {
-            let gpu_interval =
-                gpu_planes_total.saturating_sub(self.gpu_path_planes_at_last_log);
+            let gpu_interval = gpu_planes_total.saturating_sub(self.gpu_path_planes_at_last_log);
             let cpu_interval =
                 cpu_planes_total.saturating_sub(self.cpu_fallback_planes_at_last_log);
             trace!(
@@ -333,6 +334,7 @@ struct VirtioGpuDriver {
     disp_width: u32,
     disp_height: u32,
     disp_stride: u32,
+    disp_format: u32,
     /// Pre-allocated pool of DMA-backed frame buffers created during driver
     /// initialization.  COMMIT operations round-robin through this pool as
     /// blit targets before the pixels are transferred to the GPU.
@@ -575,6 +577,7 @@ fn vfs_device_call(driver: &mut VirtioGpuDriver, payload: &[u8]) -> ProviderResp
 
     match call.op {
         DISPLAY_OP_GET_INFO => {
+            let _ = refresh_display_mode(driver);
             stem::trace!("DISP: DISPLAY_OP_GET_INFO requested");
             let mut caps = DisplayCaps::ATOMIC
                 | DisplayCaps::DMABUF_IMPORT
@@ -709,6 +712,7 @@ fn vfs_device_call(driver: &mut VirtioGpuDriver, payload: &[u8]) -> ProviderResp
             }
         }
         DISPLAY_OP_COMMIT => {
+            let _ = refresh_display_mode(driver);
             let header_size = core::mem::size_of::<CommitRequest>();
             if call_payload.len() < header_size {
                 return ProviderResponse::err(Errno::EINVAL);
@@ -1508,6 +1512,148 @@ fn get_display_dimensions() -> (u32, u32, u32, u32) {
     (1024, 768, 1024 * 4, 1)
 }
 
+fn initial_display_dimensions(gpu: &mut VirtioGpu) -> (u32, u32, u32, u32) {
+    let (boot_w, boot_h, _boot_stride, boot_format) = get_display_dimensions();
+    match gpu.query_display_info() {
+        Ok(Some(scanout)) if scanout.width > 0 && scanout.height > 0 => {
+            let stride = scanout.width.saturating_mul(DISPLAY_BPP);
+            info!(
+                "display_virtio_gpu: host scanout {}x{} enabled={} (bootfb was {}x{})",
+                scanout.width, scanout.height, scanout.enabled, boot_w, boot_h
+            );
+            (scanout.width, scanout.height, stride, boot_format)
+        }
+        Ok(_) => {
+            let stride = boot_w.saturating_mul(DISPLAY_BPP);
+            warn!(
+                "display_virtio_gpu: host scanout unavailable; using bootfb {}x{}",
+                boot_w, boot_h
+            );
+            (boot_w, boot_h, stride, boot_format)
+        }
+        Err(e) => {
+            let stride = boot_w.saturating_mul(DISPLAY_BPP);
+            warn!(
+                "display_virtio_gpu: GET_DISPLAY_INFO failed ({}); using bootfb {}x{}",
+                e, boot_w, boot_h
+            );
+            (boot_w, boot_h, stride, boot_format)
+        }
+    }
+}
+
+fn create_frame_pool_buffer(
+    gpu: &mut VirtioGpu,
+    width: u32,
+    height: u32,
+    stride: u32,
+    res_id: u32,
+) -> Result<Buffer, &'static str> {
+    let size = (height as usize).checked_mul(stride as usize).ok_or("display size overflow")?;
+    let fd = stem::syscall::memfd_create("frame_pool", size).map_err(|_| "memfd_create failed")?;
+    let phys = stem::syscall::shared_memory_phys(fd).map_err(|_| "shared_memory_phys failed")?;
+
+    let mut req: abi::vm::VmMapReq = unsafe { core::mem::zeroed() };
+    req.backing = abi::vm::VmBacking::File { thing: fd, offset: 0 };
+    req.len = size;
+    req.prot = abi::vm::VmProt::READ | abi::vm::VmProt::WRITE | abi::vm::VmProt::USER;
+    let map_resp = stem::syscall::vm_map(&req).map_err(|_| "vm_map(frame_pool) failed")?;
+
+    gpu.set_dimensions(width, height);
+    gpu.create_resource_2d_sized_with_format(
+        res_id,
+        width,
+        height,
+        virtio_gpu::VIRTIO_GPU_FORMAT_B8G8R8X8_UNORM,
+    )?;
+    gpu.attach_backing(res_id, phys, size, stride)?;
+
+    Ok(Buffer { fd, res_id, phys, ptr: map_resp.addr as *mut u8, size, last_present_seq: 0 })
+}
+
+fn create_frame_pool(
+    gpu: &mut VirtioGpu,
+    width: u32,
+    height: u32,
+    stride: u32,
+) -> Result<alloc::vec::Vec<Buffer>, &'static str> {
+    let mut buffers = alloc::vec::Vec::new();
+    for _ in 0..FRAME_POOL_COUNT {
+        let res_id = gpu.alloc_resource_id();
+        buffers.push(create_frame_pool_buffer(gpu, width, height, stride, res_id)?);
+    }
+    Ok(buffers)
+}
+
+fn release_frame_pool(gpu: &mut VirtioGpu, buffers: alloc::vec::Vec<Buffer>) {
+    for buffer in buffers {
+        let _ = gpu.resource_unref(buffer.res_id);
+        if buffer.ptr as usize != 0 && buffer.size > 0 {
+            let _ = stem::syscall::vm_unmap(buffer.ptr as usize, buffer.size);
+        }
+        let _ = stem::syscall::vfs::vfs_close(buffer.fd);
+    }
+}
+
+fn resize_frame_pool(
+    driver: &mut VirtioGpuDriver,
+    width: u32,
+    height: u32,
+    stride: u32,
+) -> Result<(), &'static str> {
+    let new_pool = create_frame_pool(&mut driver.gpu, width, height, stride)?;
+    let new_res_id = new_pool[0].res_id;
+    driver.gpu.set_scanout(new_res_id, width, height)?;
+
+    let old_pool = core::mem::replace(&mut driver.frame_pool, new_pool);
+    release_frame_pool(&mut driver.gpu, old_pool);
+
+    driver.disp_width = width;
+    driver.disp_height = height;
+    driver.disp_stride = stride;
+    driver.next_buffer_idx = 0;
+    driver.last_presented_idx = None;
+    driver.current_fd = Some(driver.frame_pool[0].fd);
+    driver.current_res_id = new_res_id;
+    driver.present_seq = driver.present_seq.saturating_add(1);
+    Ok(())
+}
+
+fn refresh_display_mode(driver: &mut VirtioGpuDriver) -> bool {
+    let Ok(Some(scanout)) = driver.gpu.query_display_info() else {
+        return false;
+    };
+    if scanout.width == 0 || scanout.height == 0 {
+        return false;
+    }
+    let stride = scanout.width.saturating_mul(DISPLAY_BPP);
+    if scanout.width == driver.disp_width
+        && scanout.height == driver.disp_height
+        && stride == driver.disp_stride
+    {
+        return false;
+    }
+
+    let old_w = driver.disp_width;
+    let old_h = driver.disp_height;
+    match resize_frame_pool(driver, scanout.width, scanout.height, stride) {
+        Ok(()) => {
+            info!(
+                "display_virtio_gpu: output resized {}x{} -> {}x{}",
+                old_w, old_h, driver.disp_width, driver.disp_height
+            );
+            true
+        }
+        Err(e) => {
+            warn!(
+                "display_virtio_gpu: output resize {}x{} -> {}x{} failed: {}",
+                old_w, old_h, scanout.width, scanout.height, e
+            );
+            false
+        }
+    }
+}
+
 #[stem::main]
 fn main(boot_arg: usize) -> ! {
     stem::info!("display_virtio_gpu: starting v0.4.1 (boot_arg={})", boot_arg);
@@ -1627,80 +1773,27 @@ fn main(boot_arg: usize) -> ! {
     // =========================================================================
     // FRAME POOL SETUP: Create GPU resources and buffers for triple buffering
     // =========================================================================
-    let (disp_width, disp_height, disp_stride, disp_format) = get_display_dimensions();
-    let disp_size = (disp_height as usize) * (disp_stride as usize);
+    let (disp_width, disp_height, disp_stride, disp_format) = initial_display_dimensions(&mut gpu);
 
     debug!(
         "display_virtio_gpu: creating frame pool 1x {}x{} stride={} format={}",
         disp_width, disp_height, disp_stride, disp_format
     );
 
-    // Single buffer for now - multi-buffer requires cross-process shared memory access
-    let frame_pool_count = 1;
-    let mut frame_pool_buffers = alloc::vec::Vec::new();
-    for i in 0..frame_pool_count {
-        let fd = match stem::syscall::memfd_create("frame_pool", disp_size) {
-            Ok(id) => id,
-            Err(e) => {
-                error!("display_virtio_gpu: memfd_create failed: {:?}", e);
-                loop {
-                    stem::time::sleep_ms(1);
-                }
-            }
-        };
-
-        let phys = match stem::syscall::shared_memory_phys(fd) {
-            Ok(phys) => phys,
-            Err(e) => {
-                error!("display_virtio_gpu: shared_memory_phys failed: {:?}", e);
-                loop {
-                    stem::time::sleep_ms(1);
-                }
-            }
-        };
-
-        // Explicitly map it locally so it stays pinned/resident
-        let mut req: abi::vm::VmMapReq = unsafe { core::mem::zeroed() };
-        req.backing = abi::vm::VmBacking::File { thing: fd, offset: 0 };
-        req.len = disp_size;
-        req.prot = abi::vm::VmProt::READ | abi::vm::VmProt::WRITE | abi::vm::VmProt::USER;
-        let map_resp = match stem::syscall::vm_map(&req) {
-            Ok(resp) => resp,
-            Err(e) => {
-                error!("display_virtio_gpu: vm_map(frame_pool) failed: {:?}", e);
-                loop {
-                    stem::time::sleep_ms(1);
-                }
-            }
-        };
-
-        let res_id = (i + 1) as u32;
-        gpu.set_dimensions(disp_width, disp_height);
-        if let Err(e) = gpu.create_resource_2d(res_id) {
-            error!("display_virtio_gpu: create_resource_2d failed: {}", e);
+    let frame_pool_buffers = match create_frame_pool(&mut gpu, disp_width, disp_height, disp_stride)
+    {
+        Ok(pool) => pool,
+        Err(e) => {
+            error!("display_virtio_gpu: frame pool setup failed: {}", e);
             loop {
                 stem::time::sleep_ms(1);
             }
         }
-        if let Err(e) = gpu.attach_backing(res_id, phys, disp_size, disp_stride) {
-            error!("display_virtio_gpu: attach_backing failed: {}", e);
-            loop {
-                stem::time::sleep_ms(1);
-            }
-        }
-
-        frame_pool_buffers.push(Buffer {
-            fd,
-            res_id,
-            phys,
-            ptr: map_resp.addr as *mut u8,
-            size: disp_size,
-            last_present_seq: 0,
-        });
-    }
+    };
+    let driver_initial_res_id = frame_pool_buffers[0].res_id;
 
     // Set initial scanout to first buffer
-    if let Err(e) = gpu.set_scanout(frame_pool_buffers[0].res_id, disp_width, disp_height) {
+    if let Err(e) = gpu.set_scanout(driver_initial_res_id, disp_width, disp_height) {
         error!("display_virtio_gpu: set_scanout failed: {}", e);
         loop {
             stem::time::sleep_ms(1);
@@ -1709,8 +1802,8 @@ fn main(boot_arg: usize) -> ! {
 
     debug!(
         "display_virtio_gpu: frame pool ready ({} buffer{})",
-        frame_pool_count,
-        if frame_pool_count == 1 { "" } else { "s" }
+        FRAME_POOL_COUNT,
+        if FRAME_POOL_COUNT == 1 { "" } else { "s" }
     );
 
     // ── Cursor DMA pixel buffer ───────────────────────────────────────────────
@@ -1886,6 +1979,7 @@ fn main(boot_arg: usize) -> ! {
         disp_width,
         disp_height,
         disp_stride,
+        disp_format,
         frame_pool: frame_pool_buffers,
         next_buffer_idx: 0,
         present_seq: 0,
@@ -1893,7 +1987,7 @@ fn main(boot_arg: usize) -> ! {
         imported_buffers: alloc::collections::BTreeMap::new(),
         next_import_id: 1,
         current_fd: None,
-        current_res_id: 1,
+        current_res_id: driver_initial_res_id,
         first_commit_logged: false,
         cursor_commit_logged: false,
         cursor_resource_id: 0,
@@ -2046,6 +2140,7 @@ fn main(boot_arg: usize) -> ! {
                     }
                 }
                 drvproto::MSG_ACQUIRE => {
+                    let _ = refresh_display_mode(&mut driver);
                     stem::debug!("display_virtio_gpu: received MSG_ACQUIRE");
                     let mut buffer_age = 0;
                     let idx = driver.next_buffer_idx;
@@ -2069,7 +2164,7 @@ fn main(boot_arg: usize) -> ! {
                         width: driver.disp_width,
                         height: driver.disp_height,
                         stride: driver.disp_stride,
-                        format: disp_format,
+                        format: driver.disp_format,
                         buffer_age,
                         _pad2: 0,
                     };
@@ -2113,6 +2208,7 @@ fn main(boot_arg: usize) -> ! {
                     }
                 }
                 drvproto::MSG_PRESENT => {
+                    let _ = refresh_display_mode(&mut driver);
                     if driver.current_fd.is_none() {
                         stem::error!("display_virtio_gpu: current_fd is NONE during MSG_PRESENT!");
                         let err = drvproto::ErrResp { code: 1 };

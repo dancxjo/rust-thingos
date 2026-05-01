@@ -48,6 +48,7 @@ use alloc::vec::Vec;
 /// Fallback frame interval used when no display refresh rate is known yet
 /// (≈ 60 fps = 16 666 666 ns per frame).
 const DEFAULT_FRAME_INTERVAL_NS: u64 = 16_666_666;
+const DISPLAY_POLL_INTERVAL_NS: u64 = 250_000_000;
 
 use stem::time::monotonic_ns;
 use stem::wait_set::{WaitSet, WaitToken};
@@ -263,8 +264,9 @@ impl BloomLoop {
     /// Compute the soonest timeout the loop should wait before the next
     /// iteration, taking both the frame clock and pending timers into account.
     ///
-    /// Returns `None` (wait indefinitely) only when no repaint is pending and
-    /// no timers are armed.  Returns `Some(0)` to skip sleeping entirely.
+    /// Returns a bounded timeout even when no repaint is pending so Bloom can
+    /// cheaply poll display metadata and react to host-driven output resizes.
+    /// Returns `Some(0)` to skip sleeping entirely.
     ///
     /// All comparisons are done at nanosecond precision to preserve the full
     /// 16.67 ms frame interval without millisecond rounding.
@@ -275,12 +277,14 @@ impl BloomLoop {
             t.expiry_ns.saturating_sub(now)
         });
 
-        match (frame_ns, timer_ns) {
-            (None, None) => None,
-            (Some(ns), None) => Some(core::time::Duration::from_nanos(ns)),
-            (None, Some(ns)) => Some(core::time::Duration::from_nanos(ns)),
-            (Some(fns), Some(tns)) => Some(core::time::Duration::from_nanos(fns.min(tns))),
-        }
+        let poll_ns = DISPLAY_POLL_INTERVAL_NS;
+        let ns = match (frame_ns, timer_ns) {
+            (None, None) => poll_ns,
+            (Some(ns), None) => ns.min(poll_ns),
+            (None, Some(ns)) => ns.min(poll_ns),
+            (Some(fns), Some(tns)) => fns.min(tns).min(poll_ns),
+        };
+        Some(core::time::Duration::from_nanos(ns))
     }
 
     /// Apply a `LoopAction` returned by a service dispatch.
@@ -337,6 +341,7 @@ impl BloomLoop {
         let mut wake_requested = false;
         let mut first_frame_rendered = false;
         loop {
+            let mut display_polled = false;
             // ── 1. Wait for the next event ────────────────────────────────
             let timeout = if wake_requested {
                 wake_requested = false;
@@ -372,7 +377,11 @@ impl BloomLoop {
             // ── 2. Dispatch ready FD events ───────────────────────────────
             if events.is_empty() {
                 // Timeout elapsed: could be frame deadline or a timer expiry.
-                self.frame_clock.request_repaint();
+                if world.refresh_display_output() {
+                    self.frame_clock.request_immediate_repaint();
+                    wake_requested = true;
+                }
+                display_polled = true;
             } else {
                 for ev in events {
                     let svc_idx =
@@ -389,6 +398,11 @@ impl BloomLoop {
             // ── 3. Fire elapsed one-shot timers ───────────────────────────
             let (_fired, timer_wake) = self.fire_due_timers(world);
             wake_requested |= timer_wake;
+
+            if !display_polled && world.refresh_display_output() {
+                self.frame_clock.request_immediate_repaint();
+                wake_requested = true;
+            }
 
             // ── 4. Poll background reload state ───────────────────────────
             if world.visuals.poll_ready_background(&world.display) {

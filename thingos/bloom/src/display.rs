@@ -112,6 +112,29 @@ impl DisplayBackend {
         Some(())
     }
 
+    pub fn refresh_info_changed(&mut self) -> Option<bool> {
+        let old = self.info;
+        let new = get_display_info(self.fd)?;
+        let changed = old.preferred_mode.width != new.preferred_mode.width
+            || old.preferred_mode.height != new.preferred_mode.height
+            || old.preferred_mode.refresh_mhz != new.preferred_mode.refresh_mhz
+            || old.caps != new.caps
+            || old.supported_formats != new.supported_formats;
+        self.info = new;
+        Some(changed)
+    }
+
+    pub fn primary_output_info(&self) -> OutputInfo {
+        OutputInfo {
+            output_id: 0,
+            width: self.info.preferred_mode.width,
+            height: self.info.preferred_mode.height,
+            refresh_mhz: self.info.preferred_mode.refresh_mhz,
+            supported_formats: self.info.supported_formats,
+            supports_dmabuf: self.info.caps.contains(abi::display::DisplayCaps::DMABUF_IMPORT),
+        }
+    }
+
     /// Returns `true` when the connected display driver supports hardware cursor
     /// planes (`DisplayCaps::HARDWARE_CURSOR`).
     pub fn supports_hw_cursor(&self) -> bool {
@@ -214,14 +237,7 @@ impl DisplayBackend {
     }
 
     pub fn enumerate_outputs(&self) -> Vec<OutputInfo> {
-        alloc::vec![OutputInfo {
-            output_id: 0,
-            width: self.info.preferred_mode.width,
-            height: self.info.preferred_mode.height,
-            refresh_mhz: self.info.preferred_mode.refresh_mhz,
-            supported_formats: self.info.supported_formats,
-            supports_dmabuf: self.info.caps.contains(abi::display::DisplayCaps::DMABUF_IMPORT),
-        }]
+        alloc::vec![self.primary_output_info()]
     }
 
     pub fn output_size(&self) -> (u32, u32) {

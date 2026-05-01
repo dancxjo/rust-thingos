@@ -294,6 +294,19 @@ impl CompositorVisuals {
         false
     }
 
+    pub fn reconfigure_for_output(&mut self, display: &DisplayBackend) {
+        if let Some(path) = self.wallpaper_path.clone() {
+            self.prepare_background(display, &path);
+        } else {
+            self.prepare_solid_background(display, 0xFF0B0A10);
+        }
+        release_overlay_buffer(display, self.body_overlay.take());
+        release_overlay_buffer(display, self.chrome_overlay.take());
+        if let Some(old) = self.pointer_overlay.take() {
+            display.release_buffer(old.buffer_id);
+        }
+    }
+
     pub fn fallback_buffer_id(&self) -> Option<u32> {
         self.background.as_ref().map(|b| b.buffer_id)
     }

@@ -35,6 +35,13 @@ const COMMAND_SLEEP_NS: u64 = 50_000;
 /// (§2.7.2 Virtqueue Descriptor Format) and QEMU's DMA engine.
 const VIRTIO_DESCRIPTOR_ALIGNMENT: usize = 16;
 
+#[derive(Copy, Clone, Debug, PartialEq, Eq)]
+pub struct DisplayScanout {
+    pub width: u32,
+    pub height: u32,
+    pub enabled: bool,
+}
+
 /// Virtio GPU driver state
 pub struct VirtioGpu {
     claim_handle: usize,
@@ -239,6 +246,56 @@ impl VirtioGpu {
         self.display_height = height;
     }
 
+    /// Query the host-visible scanout dimensions reported by virtio-gpu.
+    pub fn query_display_info(&mut self) -> Result<Option<DisplayScanout>, &'static str> {
+        let cmd = VirtioGpuCtrlHdr {
+            type_: VIRTIO_GPU_CMD_GET_DISPLAY_INFO,
+            flags: 0,
+            fence_id: 0,
+            ctx_id: 0,
+            padding: 0,
+        };
+        let cmd_bytes = unsafe {
+            core::slice::from_raw_parts(
+                &cmd as *const _ as *const u8,
+                core::mem::size_of::<VirtioGpuCtrlHdr>(),
+            )
+        };
+        let resp_offset = align_up(cmd_bytes.len(), VIRTIO_DESCRIPTOR_ALIGNMENT);
+        self.send_cmd(cmd_bytes, core::mem::size_of::<VirtioGpuRespDisplayInfo>())?;
+
+        let base = self.cmd_buf.saturating_add(resp_offset as u64);
+        let pmodes_base = base.saturating_add(core::mem::size_of::<VirtioGpuCtrlHdr>() as u64);
+        let mode_size = core::mem::size_of::<VirtioGpuDisplayOne>() as u64;
+        let mut first_active = None;
+        let mut first_nonzero = None;
+        for i in 0..16u64 {
+            let mode = pmodes_base.saturating_add(i.saturating_mul(mode_size));
+            let width = read_dma_u32(mode.saturating_add(8));
+            let height = read_dma_u32(mode.saturating_add(12));
+            let enabled = read_dma_u32(mode.saturating_add(16)) != 0;
+            if width == 0 || height == 0 {
+                continue;
+            }
+            let scanout = DisplayScanout { width, height, enabled };
+            if first_nonzero.is_none() {
+                first_nonzero = Some(scanout);
+            }
+            if enabled {
+                first_active = Some(scanout);
+                break;
+            }
+        }
+
+        if let Some(scanout) = first_active.or(first_nonzero) {
+            self.display_width = scanout.width;
+            self.display_height = scanout.height;
+            Ok(Some(scanout))
+        } else {
+            Ok(None)
+        }
+    }
+
     /// Create a 2D resource with current dimensions
     pub fn create_resource_2d(&mut self, resource_id: u32) -> Result<(), &'static str> {
         self.create_resource_2d_sized_with_format(
@@ -289,6 +346,29 @@ impl VirtioGpu {
             core::slice::from_raw_parts(
                 &cmd as *const _ as *const u8,
                 core::mem::size_of::<VirtioGpuResourceCreate2d>(),
+            )
+        };
+
+        self.send_cmd(cmd_bytes, core::mem::size_of::<VirtioGpuCtrlHdr>())
+    }
+
+    pub fn resource_unref(&mut self, resource_id: u32) -> Result<(), &'static str> {
+        let cmd = VirtioGpuResourceUnref {
+            hdr: VirtioGpuCtrlHdr {
+                type_: VIRTIO_GPU_CMD_RESOURCE_UNREF,
+                flags: 0,
+                fence_id: 0,
+                ctx_id: 0,
+                padding: 0,
+            },
+            resource_id,
+            padding: 0,
+        };
+
+        let cmd_bytes = unsafe {
+            core::slice::from_raw_parts(
+                &cmd as *const _ as *const u8,
+                core::mem::size_of::<VirtioGpuResourceUnref>(),
             )
         };
 
@@ -1154,6 +1234,23 @@ fn read_sys_u32(path: &str) -> Option<u32> {
         u32::from_str_radix(&trimmed[2..], 16).ok()
     } else {
         trimmed.parse::<u32>().ok()
+    }
+}
+
+fn align_up(value: usize, alignment: usize) -> usize {
+    if alignment == 0 { value } else { ((value + alignment - 1) / alignment) * alignment }
+}
+
+fn read_dma_u32(addr: u64) -> u32 {
+    unsafe {
+        let ptr = addr as *const u8;
+        let bytes = [
+            read_volatile(ptr),
+            read_volatile(ptr.add(1)),
+            read_volatile(ptr.add(2)),
+            read_volatile(ptr.add(3)),
+        ];
+        u32::from_le_bytes(bytes)
     }
 }
 
