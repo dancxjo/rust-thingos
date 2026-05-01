@@ -371,7 +371,10 @@ impl BloomWorld {
 
             // Cursor-only update: no content damage, only cursor motion.
             if self.damage.has_only_cursor_damage() {
-                // Drain the cursor damage so the tracker resets to clean.
+                // Drain cursor damage — we only care about the side-effect of
+                // resetting the tracker's dirty flag; the individual rects are
+                // not needed because the hardware cursor is positioned directly
+                // via DISPLAY_OP_MOVE_CURSOR without a framebuffer upload.
                 let _ = self.damage.take();
                 let moved = self.display.move_cursor(pointer_x, pointer_y, cursor.is_some());
                 if moved {
@@ -400,7 +403,7 @@ impl BloomWorld {
         // When hardware cursor is active the cursor plane is handled
         // independently; pass `None` to the software compositor so it is not
         // also blended as a plane.
-        let sw_cursor =
+        let compositor_cursor =
             if self.display.supports_hw_cursor() && self.hw_cursor_buffer.is_some() {
                 None
             } else {
@@ -447,7 +450,7 @@ impl BloomWorld {
             body_overlay,
             chrome_overlay,
             pointer_overlay,
-            sw_cursor,
+            compositor_cursor,
             flags,
             self.visuals.corner_radius(),
         );

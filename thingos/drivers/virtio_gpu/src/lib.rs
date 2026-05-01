@@ -126,7 +126,13 @@ impl VirtioGpu {
 
         // Allocate a separate DMA page for cursor queue commands so they don't
         // share storage with in-flight controlq transactions.
-        let cursor_cmd_buf = device_alloc_dma(claim_handle, 1).unwrap_or(0);
+        let cursor_cmd_buf = device_alloc_dma(claim_handle, 1).unwrap_or_else(|e| {
+            stem::warn!(
+                "virtio_gpu: cursor command DMA alloc failed: {:?}; hw cursor unavailable",
+                e
+            );
+            0
+        });
         let cursor_cmd_buf_phys =
             if cursor_cmd_buf != 0 { device_dma_phys(cursor_cmd_buf).unwrap_or(0) } else { 0 };
 
@@ -802,11 +808,15 @@ impl VirtioGpu {
         self.write_common(virtio::VIRTIO_COMMON_QUEUE_DESC_LO, (vq_phys & 0xFFFFFFFF) as u32);
         self.write_common(virtio::VIRTIO_COMMON_QUEUE_DESC_HI, (vq_phys >> 32) as u32);
 
+        // Descriptor table: `size` entries × 16 bytes each.
         let avail_offset = (size as usize) * 16;
         let avail_phys = vq_phys + avail_offset as u64;
         self.write_common(virtio::VIRTIO_COMMON_QUEUE_AVAIL_LO, (avail_phys & 0xFFFFFFFF) as u32);
         self.write_common(virtio::VIRTIO_COMMON_QUEUE_AVAIL_HI, (avail_phys >> 32) as u32);
 
+        // Available ring: 2 bytes (flags) + 2 bytes (idx) = 6-byte header,
+        // followed by `size` × 2-byte ring slots.  Align up to 4 bytes for
+        // the used ring (virtio spec §2.7.2 alignment requirement).
         let used_unaligned = avail_offset + 6 + (size as usize) * 2;
         let used_offset = (used_unaligned + 3) & !3;
         let used_phys = vq_phys + used_offset as u64;
@@ -899,6 +909,8 @@ impl VirtioGpu {
 
         let cmd_size = core::mem::size_of::<VirtioGpuUpdateCursor>();
         let resp_size = core::mem::size_of::<VirtioGpuCtrlHdr>();
+        // Align response offset to 16 bytes — virtio descriptor buffers must
+        // be naturally aligned per the virtio spec and QEMU's DMA engine.
         let resp_offset = ((cmd_size + 15) / 16) * 16;
         if resp_offset.saturating_add(resp_size) > DMA_PAGE_SIZE {
             return Err("Cursor command too large");
@@ -944,6 +956,7 @@ impl VirtioGpu {
         Ok(())
     }
 
+    fn read_common(&self, offset: u32) -> u32 {
         unsafe { read_volatile((self.common_cfg + offset as u64) as *const u32) }
     }
 
