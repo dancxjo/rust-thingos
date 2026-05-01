@@ -338,3 +338,13 @@ Feature: Bloom compositor service loop and responsiveness
     And the serial output should contain "gpu_planes=" within 60s
     And the serial output should contain "cpu_planes=" within 60s
 
+
+
+  Scenario: wl_keyboard keymap is advertised as us-intl XKB layout
+    # Verifies that bloom sends a proper XKB keymap (WL_KEYBOARD_KEYMAP_FORMAT_XKB_V1)
+    # when a client binds wl_keyboard via wl_seat.  The keymap should use the
+    # us-intl layout so that clients can decode key symbols including dead keys
+    # for accented characters.
+    Given the machine is booted
+    Then the serial output should contain "wayland-server: listening on /run/wayland-0" within 60s
+    And the serial output should contain "wayland-server: sending us-intl XKB keymap" within 120s

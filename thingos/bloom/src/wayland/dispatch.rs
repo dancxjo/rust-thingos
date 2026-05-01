@@ -386,13 +386,251 @@ fn dispatch_keyboard(msg: &WireMsg, client: &mut WaylandClient, obj_id: u32) -> 
     vec![]
 }
 
+/// Self-contained XKB keymap for the US International (us-intl) layout.
+///
+/// This is a complete, self-contained XKB text keymap (no `include` statements)
+/// that defines the us-intl layout with dead keys.  It is sent to Wayland
+/// clients as the `wl_keyboard.keymap` event payload when they bind a keyboard.
+///
+/// The string is null-terminated; `US_INTL_KEYMAP.len()` includes the `\0`.
+const US_INTL_KEYMAP: &[u8] = b"xkb_keymap {\
+  xkb_keycodes \"thingos_evdev\" {\
+    minimum = 8;\
+    maximum = 255;\
+    <ESC>  =  9; <AE01> = 10; <AE02> = 11; <AE03> = 12; <AE04> = 13;\
+    <AE05> = 14; <AE06> = 15; <AE07> = 16; <AE08> = 17; <AE09> = 18;\
+    <AE10> = 19; <AE11> = 20; <AE12> = 21; <BKSP> = 22; <TAB>  = 23;\
+    <AD01> = 24; <AD02> = 25; <AD03> = 26; <AD04> = 27; <AD05> = 28;\
+    <AD06> = 29; <AD07> = 30; <AD08> = 31; <AD09> = 32; <AD10> = 33;\
+    <AD11> = 34; <AD12> = 35; <RTRN> = 36; <LCTL> = 37; <AC01> = 38;\
+    <AC02> = 39; <AC03> = 40; <AC04> = 41; <AC05> = 42; <AC06> = 43;\
+    <AC07> = 44; <AC08> = 45; <AC09> = 46; <AC10> = 47; <AC11> = 48;\
+    <TLDE> = 49; <LFSH> = 50; <BKSL> = 51; <AB01> = 52; <AB02> = 53;\
+    <AB03> = 54; <AB04> = 55; <AB05> = 56; <AB06> = 57; <AB07> = 58;\
+    <AB08> = 59; <AB09> = 60; <AB10> = 61; <RTSH> = 62; <KPMU> = 63;\
+    <LALT> = 64; <SPCE> = 65; <CAPS> = 66; <FK01> = 67; <FK02> = 68;\
+    <FK03> = 69; <FK04> = 70; <FK05> = 71; <FK06> = 72; <FK07> = 73;\
+    <FK08> = 74; <FK09> = 75; <FK10> = 76; <NMLK> = 77; <SCLK> = 78;\
+    <KP7>  = 79; <KP8>  = 80; <KP9>  = 81; <KPSU> = 82; <KP4>  = 83;\
+    <KP5>  = 84; <KP6>  = 85; <KPAD> = 86; <KP1>  = 87; <KP2>  = 88;\
+    <KP3>  = 89; <KP0>  = 90; <KPDL> = 91; <LSGT> = 94; <FK11> = 95;\
+    <FK12> = 96; <KPEN> = 104; <RCTL> = 105; <KPDV> = 106; <PRSC> = 107;\
+    <RALT> = 108; <HOME> = 110; <UP>   = 111; <PGUP> = 112; <LEFT> = 113;\
+    <RGHT> = 114; <END>  = 115; <DOWN> = 116; <PGDN> = 117; <INS>  = 118;\
+    <DELE> = 119; <PAUS> = 127; <LWIN> = 133; <RWIN> = 134; <COMP> = 135;\
+  };\
+  xkb_types \"thingos\" {\
+    virtual_modifiers NumLock,LevelThree;\
+    type \"ONE_LEVEL\" {\
+      modifiers = none;\
+      map[none] = Level1;\
+      level_name[Level1] = \"Any\";\
+    };\
+    type \"TWO_LEVEL\" {\
+      modifiers = Shift;\
+      map[none] = Level1;\
+      map[Shift] = Level2;\
+      level_name[Level1] = \"Base\";\
+      level_name[Level2] = \"Shift\";\
+    };\
+    type \"ALPHABETIC\" {\
+      modifiers = Shift+Lock;\
+      map[none] = Level1;\
+      map[Shift] = Level2;\
+      map[Lock] = Level2;\
+      map[Shift+Lock] = Level1;\
+      level_name[Level1] = \"Base\";\
+      level_name[Level2] = \"Caps\";\
+    };\
+    type \"KEYPAD\" {\
+      modifiers = Shift+NumLock;\
+      map[none] = Level1;\
+      map[NumLock] = Level2;\
+      map[Shift+NumLock] = Level1;\
+      map[Shift] = Level2;\
+      level_name[Level1] = \"Base\";\
+      level_name[Level2] = \"Number\";\
+    };\
+    type \"FOUR_LEVEL\" {\
+      modifiers = Shift+LevelThree;\
+      map[none] = Level1;\
+      map[Shift] = Level2;\
+      map[LevelThree] = Level3;\
+      map[Shift+LevelThree] = Level4;\
+      level_name[Level1] = \"Base\";\
+      level_name[Level2] = \"Shift\";\
+      level_name[Level3] = \"Alt Base\";\
+      level_name[Level4] = \"Shift Alt\";\
+    };\
+    type \"FOUR_LEVEL_ALPHABETIC\" {\
+      modifiers = Shift+Lock+LevelThree;\
+      map[none] = Level1;\
+      map[Shift] = Level2;\
+      map[Lock] = Level2;\
+      map[Shift+Lock] = Level1;\
+      map[LevelThree] = Level3;\
+      map[Shift+LevelThree] = Level4;\
+      map[Lock+LevelThree] = Level4;\
+      map[Shift+Lock+LevelThree] = Level3;\
+      level_name[Level1] = \"Base\";\
+      level_name[Level2] = \"Caps\";\
+      level_name[Level3] = \"Alt Base\";\
+      level_name[Level4] = \"Shift Alt\";\
+    };\
+  };\
+  xkb_compat \"thingos\" {\
+    virtual_modifiers NumLock,LevelThree;\
+    interpret.useModMapMods = AnyLevel;\
+    interpret.repeat = False;\
+    interpret.locking = False;\
+    interpret ISO_Level3_Shift+AnyOf(all) {\
+      action = SetMods(modifiers=LevelThree,clearLocks);\
+    };\
+    interpret Any+AnyOf(all) {\
+      action = SetMods(modifiers=modMapMods,clearLocks);\
+    };\
+    indicator \"Caps Lock\" {\
+      !allowExplicit;\
+      whichModState = locked;\
+      modifiers = Lock;\
+    };\
+    indicator \"Num Lock\" {\
+      !allowExplicit;\
+      whichModState = locked;\
+      virtualMods = NumLock;\
+    };\
+  };\
+  xkb_symbols \"thingos_us_intl\" {\
+    name[Group1] = \"English (US, intl., with dead keys)\";\
+    key <ESC>  { [ Escape ] };\
+    key <AE01> { type[Group1] = \"FOUR_LEVEL\", [ 1, exclam, onesuperior, exclamdown ] };\
+    key <AE02> { type[Group1] = \"FOUR_LEVEL\", [ 2, at, twosuperior, onehalf ] };\
+    key <AE03> { type[Group1] = \"FOUR_LEVEL\", [ 3, numbersign, threesuperior, sterling ] };\
+    key <AE04> { type[Group1] = \"FOUR_LEVEL\", [ 4, dollar, EuroSign, cent ] };\
+    key <AE05> { type[Group1] = \"TWO_LEVEL\", [ 5, percent ] };\
+    key <AE06> { type[Group1] = \"FOUR_LEVEL\", [ dead_circumflex, 6, onequarter, threequarters ] };\
+    key <AE07> { type[Group1] = \"TWO_LEVEL\", [ 7, ampersand ] };\
+    key <AE08> { type[Group1] = \"TWO_LEVEL\", [ 8, asterisk ] };\
+    key <AE09> { type[Group1] = \"TWO_LEVEL\", [ 9, parenleft ] };\
+    key <AE10> { type[Group1] = \"TWO_LEVEL\", [ 0, parenright ] };\
+    key <AE11> { type[Group1] = \"TWO_LEVEL\", [ minus, underscore ] };\
+    key <AE12> { type[Group1] = \"FOUR_LEVEL\", [ equal, plus, dead_cedilla, dead_ogonek ] };\
+    key <BKSP> { [ BackSpace, BackSpace ] };\
+    key <TAB>  { [ Tab, ISO_Left_Tab ] };\
+    key <AD01> { type[Group1] = \"ALPHABETIC\", [ q, Q ] };\
+    key <AD02> { type[Group1] = \"ALPHABETIC\", [ w, W ] };\
+    key <AD03> { type[Group1] = \"FOUR_LEVEL_ALPHABETIC\", [ dead_acute, E, eacute, Eacute ] };\
+    key <AD04> { type[Group1] = \"ALPHABETIC\", [ r, R ] };\
+    key <AD05> { type[Group1] = \"ALPHABETIC\", [ t, T ] };\
+    key <AD06> { type[Group1] = \"ALPHABETIC\", [ y, Y ] };\
+    key <AD07> { type[Group1] = \"FOUR_LEVEL_ALPHABETIC\", [ dead_diaeresis, U, udiaeresis, Udiaeresis ] };\
+    key <AD08> { type[Group1] = \"FOUR_LEVEL_ALPHABETIC\", [ i, I, iacute, Iacute ] };\
+    key <AD09> { type[Group1] = \"FOUR_LEVEL_ALPHABETIC\", [ o, O, oacute, Oacute ] };\
+    key <AD10> { type[Group1] = \"ALPHABETIC\", [ p, P ] };\
+    key <AD11> { type[Group1] = \"TWO_LEVEL\", [ dead_diaeresis, dead_circumflex ] };\
+    key <AD12> { type[Group1] = \"TWO_LEVEL\", [ dead_tilde, dead_grave ] };\
+    key <RTRN> { [ Return ] };\
+    key <LCTL> { [ Control_L ] };\
+    key <AC01> { type[Group1] = \"FOUR_LEVEL_ALPHABETIC\", [ a, A, aacute, Aacute ] };\
+    key <AC02> { type[Group1] = \"FOUR_LEVEL_ALPHABETIC\", [ s, S, ssharp, section ] };\
+    key <AC03> { type[Group1] = \"ALPHABETIC\", [ d, D ] };\
+    key <AC04> { type[Group1] = \"ALPHABETIC\", [ f, F ] };\
+    key <AC05> { type[Group1] = \"ALPHABETIC\", [ g, G ] };\
+    key <AC06> { type[Group1] = \"ALPHABETIC\", [ h, H ] };\
+    key <AC07> { type[Group1] = \"ALPHABETIC\", [ j, J ] };\
+    key <AC08> { type[Group1] = \"ALPHABETIC\", [ k, K ] };\
+    key <AC09> { type[Group1] = \"FOUR_LEVEL_ALPHABETIC\", [ l, L, oslash, Oslash ] };\
+    key <AC10> { type[Group1] = \"FOUR_LEVEL\", [ semicolon, colon, dead_acute, dead_diaeresis ] };\
+    key <AC11> { type[Group1] = \"TWO_LEVEL\", [ dead_acute, dead_diaeresis ] };\
+    key <TLDE> { type[Group1] = \"TWO_LEVEL\", [ dead_grave, dead_tilde ] };\
+    key <LFSH> { [ Shift_L ] };\
+    key <BKSL> { type[Group1] = \"TWO_LEVEL\", [ backslash, bar ] };\
+    key <AB01> { type[Group1] = \"ALPHABETIC\", [ z, Z ] };\
+    key <AB02> { type[Group1] = \"ALPHABETIC\", [ x, X ] };\
+    key <AB03> { type[Group1] = \"FOUR_LEVEL_ALPHABETIC\", [ c, C, ccedilla, Ccedilla ] };\
+    key <AB04> { type[Group1] = \"ALPHABETIC\", [ v, V ] };\
+    key <AB05> { type[Group1] = \"ALPHABETIC\", [ b, B ] };\
+    key <AB06> { type[Group1] = \"FOUR_LEVEL_ALPHABETIC\", [ n, N, ntilde, Ntilde ] };\
+    key <AB07> { type[Group1] = \"ALPHABETIC\", [ m, M ] };\
+    key <AB08> { type[Group1] = \"TWO_LEVEL\", [ comma, less ] };\
+    key <AB09> { type[Group1] = \"TWO_LEVEL\", [ period, greater ] };\
+    key <AB10> { type[Group1] = \"TWO_LEVEL\", [ slash, question ] };\
+    key <RTSH> { [ Shift_R ] };\
+    key <KPMU> { [ KP_Multiply, KP_Multiply ] };\
+    key <LALT> { [ Alt_L, Meta_L ] };\
+    key <SPCE> { [ space ] };\
+    key <CAPS> { [ Caps_Lock ] };\
+    key <FK01> { [ F1 ] }; key <FK02> { [ F2 ] }; key <FK03> { [ F3 ] };\
+    key <FK04> { [ F4 ] }; key <FK05> { [ F5 ] }; key <FK06> { [ F6 ] };\
+    key <FK07> { [ F7 ] }; key <FK08> { [ F8 ] }; key <FK09> { [ F9 ] };\
+    key <FK10> { [ F10 ] }; key <FK11> { [ F11 ] }; key <FK12> { [ F12 ] };\
+    key <NMLK> { [ Num_Lock ] };\
+    key <SCLK> { [ Scroll_Lock ] };\
+    key <KP7>  { type[Group1] = \"KEYPAD\", [ KP_Home,   KP_7 ] };\
+    key <KP8>  { type[Group1] = \"KEYPAD\", [ KP_Up,     KP_8 ] };\
+    key <KP9>  { type[Group1] = \"KEYPAD\", [ KP_Prior,  KP_9 ] };\
+    key <KPSU> { [ KP_Subtract, KP_Subtract ] };\
+    key <KP4>  { type[Group1] = \"KEYPAD\", [ KP_Left,   KP_4 ] };\
+    key <KP5>  { type[Group1] = \"KEYPAD\", [ KP_Begin,  KP_5 ] };\
+    key <KP6>  { type[Group1] = \"KEYPAD\", [ KP_Right,  KP_6 ] };\
+    key <KPAD> { [ KP_Add, KP_Add ] };\
+    key <KP1>  { type[Group1] = \"KEYPAD\", [ KP_End,    KP_1 ] };\
+    key <KP2>  { type[Group1] = \"KEYPAD\", [ KP_Down,   KP_2 ] };\
+    key <KP3>  { type[Group1] = \"KEYPAD\", [ KP_Next,   KP_3 ] };\
+    key <KP0>  { type[Group1] = \"KEYPAD\", [ KP_Insert, KP_0 ] };\
+    key <KPDL> { type[Group1] = \"KEYPAD\", [ KP_Delete, KP_Decimal ] };\
+    key <LSGT> { type[Group1] = \"TWO_LEVEL\", [ less, greater ] };\
+    key <KPEN> { [ KP_Enter, KP_Enter ] };\
+    key <RCTL> { [ Control_R ] };\
+    key <KPDV> { [ KP_Divide, KP_Divide ] };\
+    key <PRSC> { [ Print ] };\
+    key <RALT> { type[Group1] = \"TWO_LEVEL\", [ ISO_Level3_Shift, Multi_key ] };\
+    key <HOME> { [ Home ] }; key <UP>   { [ Up ] }; key <PGUP> { [ Prior ] };\
+    key <LEFT> { [ Left ] }; key <RGHT> { [ Right ] };\
+    key <END>  { [ End ] };  key <DOWN> { [ Down ] }; key <PGDN> { [ Next ] };\
+    key <INS>  { [ Insert ] }; key <DELE> { [ Delete ] };\
+    key <PAUS> { [ Pause ] };\
+    key <LWIN> { [ Super_L ] }; key <RWIN> { [ Super_R ] };\
+    key <COMP> { [ Menu ] };\
+    modifier_map Control { <LCTL>, <RCTL> };\
+    modifier_map Shift   { <LFSH>, <RTSH> };\
+    modifier_map Mod1    { <LALT> };\
+    modifier_map Lock    { <CAPS> };\
+    modifier_map Mod2    { <NMLK> };\
+    modifier_map Mod4    { <LWIN>, <RWIN> };\
+    modifier_map Mod5    { <RALT> };\
+  };\
+};\0";
+
 fn send_keyboard_keymap(client: &WaylandClient, keyboard_obj: u32) {
-    // wl_keyboard.keymap(format=no_keymap, fd, size). With no_keymap the fd is
-    // ignored by clients; send no ancillary handle and a zero size.
+    // Send the us-intl XKB keymap (WL_KEYBOARD_KEYMAP_FORMAT_XKB_V1 = 1).
+    // The keymap string is written into a memfd so it can be transferred to
+    // the client via Wayland's ancillary fd mechanism.
+    let size = US_INTL_KEYMAP.len() as u32;
+    let fd = match stem::syscall::memfd_create("xkb-keymap-us-intl", size as usize) {
+        Ok(fd) => fd,
+        Err(_) => {
+            // Fallback: send no_keymap if memfd creation fails.
+            blossom_warn!("wayland-server: memfd_create for XKB keymap failed, sending no_keymap");
+            let mut payload = Vec::new();
+            payload.extend_from_slice(&0u32.to_ne_bytes());
+            payload.extend_from_slice(&0u32.to_ne_bytes());
+            client.send_with_fds(keyboard_obj, 0, &payload, &[]);
+            return;
+        }
+    };
+    let _ = stem::syscall::vfs::vfs_write(fd, US_INTL_KEYMAP);
     let mut payload = Vec::new();
-    payload.extend_from_slice(&0u32.to_ne_bytes());
-    payload.extend_from_slice(&0u32.to_ne_bytes());
-    client.send_with_fds(keyboard_obj, 0, &payload, &[]);
+    payload.extend_from_slice(&1u32.to_ne_bytes()); // WL_KEYBOARD_KEYMAP_FORMAT_XKB_V1
+    payload.extend_from_slice(&size.to_ne_bytes());
+    blossom_debug!(
+        "wayland-server: sending us-intl XKB keymap to keyboard obj={} size={}",
+        keyboard_obj,
+        size
+    );
+    client.send_with_fds(keyboard_obj, 0, &payload, &[fd]);
+    // Close our copy of the fd; the client received its own copy via sendmsg.
+    let _ = stem::syscall::vfs::vfs_close(fd);
 }
 
 fn send_keyboard_repeat_info(client: &WaylandClient, keyboard_obj: u32) {
