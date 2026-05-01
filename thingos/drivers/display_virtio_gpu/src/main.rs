@@ -177,8 +177,22 @@ struct Buffer {
     last_present_seq: u64,
 }
 
+#[derive(Clone, Copy)]
 struct ImportedBuffer {
     fd: u32,
+    /// Raw pointer to the client-provided shared-memory region mapped into
+    /// this process at import time.  Copying this struct copies the pointer
+    /// value, not the underlying memory.
+    ///
+    /// # Safety
+    ///
+    /// The pointer is valid for the lifetime of the `ImportedBuffer` entry in
+    /// `VirtioGpuDriver::imported_buffers`.  Callers that take a snapshot
+    /// (`let snap = *entry`) for the purpose of releasing the `BTreeMap` borrow
+    /// before mutably borrowing `driver` must ensure the entry is not released
+    /// (via `DISPLAY_OP_RELEASE_BUFFER`) while the snapshot is in use.  In the
+    /// single-threaded driver loop this is always satisfied because a single
+    /// RPC handler runs to completion before another can begin.
     ptr: *mut u8,
     size: usize,
     width: u32,
@@ -267,6 +281,10 @@ struct PresentStats {
     /// Snapshot of `VirtioGpuDriver::cpu_fallback_planes` at the last log reset,
     /// used to compute the per-interval delta.
     cpu_fallback_planes_at_last_log: u64,
+    /// Snapshot of `VirtioGpuDriver::accel2d_gpu_cmds` at the last log reset.
+    accel2d_gpu_cmds_at_last_log: u64,
+    /// Snapshot of `VirtioGpuDriver::accel2d_cpu_cmds` at the last log reset.
+    accel2d_cpu_cmds_at_last_log: u64,
 }
 
 /// Entry in the texture registry mapping client IDs to GPU resource IDs
@@ -292,6 +310,8 @@ impl PresentStats {
             using_frame_pool: frame_pool,
             gpu_path_planes_at_last_log: 0,
             cpu_fallback_planes_at_last_log: 0,
+            accel2d_gpu_cmds_at_last_log: 0,
+            accel2d_cpu_cmds_at_last_log: 0,
         }
     }
 
@@ -324,6 +344,24 @@ impl PresentStats {
         *self = Self::new(fp);
         self.gpu_path_planes_at_last_log = gpu_snapshot;
         self.cpu_fallback_planes_at_last_log = cpu_snapshot;
+    }
+
+    /// Log per-interval ACCEL2D stats and reset interval counters.
+    ///
+    /// Called alongside `log_and_reset` when the ACCEL2D path is active so
+    /// that GPU vs CPU command dispatch ratios are visible in trace logs.
+    fn log_and_reset_accel2d(&mut self, gpu_cmds_total: u64, cpu_cmds_total: u64) {
+        let gpu_interval = gpu_cmds_total.saturating_sub(self.accel2d_gpu_cmds_at_last_log);
+        let cpu_interval = cpu_cmds_total.saturating_sub(self.accel2d_cpu_cmds_at_last_log);
+        if gpu_interval > 0 || cpu_interval > 0 {
+            trace!(
+                "display_virtio_gpu accel2d stats: gpu_cmds={}, cpu_cmds={}",
+                gpu_interval,
+                cpu_interval,
+            );
+        }
+        self.accel2d_gpu_cmds_at_last_log = gpu_cmds_total;
+        self.accel2d_cpu_cmds_at_last_log = cpu_cmds_total;
     }
 }
 
@@ -420,6 +458,15 @@ struct VirtioGpuDriver {
     /// virgl 3D resource ID for the pre-created BGRA source texture that is
     /// backed by `virgl_blend_staging_buf` (0 = not created).
     virgl_src_res_id: u32,
+    /// Cumulative count of ACCEL2D commands executed via the GPU (virgl) path.
+    /// Incremented each time `ACCEL2D_CMD_COPY_RECT` or `ACCEL2D_CMD_ALPHA_BLIT`
+    /// is dispatched to the virgl pipeline rather than the CPU fallback.
+    accel2d_gpu_cmds: u64,
+    /// Cumulative count of ACCEL2D commands executed via the CPU fallback path.
+    /// Incremented when GPU is unavailable or the command has no GPU equivalent
+    /// (e.g., `ACCEL2D_CMD_CLEAR_RECT`, `ACCEL2D_CMD_MASKED_BLIT`,
+    /// `ACCEL2D_CMD_ROUNDED_CLIP_BLIT`, `ACCEL2D_CMD_STRETCH_BLIT`).
+    accel2d_cpu_cmds: u64,
 }
 
 /// Dispatch one VFS RPC request to the appropriate handler.
@@ -858,6 +905,10 @@ fn vfs_device_call(driver: &mut VirtioGpuDriver, payload: &[u8]) -> ProviderResp
             // avoid per-pixel CPU blend loops on the client side.
             if driver.virgl_ctx_id != 0 && driver.virgl_src_res_id != 0 {
                 caps |= DisplayCaps::GPU_ALPHA_BLEND;
+                // When virgl is available, ACCEL2D_CMD_COPY_RECT and
+                // ACCEL2D_CMD_ALPHA_BLIT are dispatched to the GPU pipeline
+                // (virgl BLIT command) rather than the CPU fallback path.
+                caps |= DisplayCaps::ACCEL2D_GPU;
             }
             let info = DisplayInfo {
                 card_id: 0,
@@ -1838,10 +1889,152 @@ fn validate_accel2d_src_format(format: PixelFormat) -> abi::errors::SysResult<()
     Ok(())
 }
 
+// ============================================================================
+// ACCEL2D GPU execution path
+// ============================================================================
+
+/// GPU-backed opaque copy: stage `src_buffer[src_rect]` into the virgl
+/// staging buffer and issue `VIRGL_CCMD_BLIT` (no alpha blend) to copy it
+/// into the frame-pool 2D resource at `dst_rect`.
+///
+/// Returns `Ok(())` on success.  Returns `Err(Errno::ENOSYS)` when the virgl
+/// subsystem is not ready, signalling the caller to fall back to the CPU path.
+fn gpu_accel2d_copy_rect(
+    driver: &mut VirtioGpuDriver,
+    idx: usize,
+    src_buffer: &ImportedBuffer,
+    src_rect: abi::display_protocol::Rect,
+    dst_rect: abi::display_protocol::Rect,
+) -> abi::errors::SysResult<()> {
+    if driver.virgl_ctx_id == 0 || driver.virgl_src_res_id == 0 {
+        return Err(abi::errors::Errno::ENOSYS);
+    }
+    let copy_w = src_rect.w as usize;
+    let copy_h = src_rect.h as usize;
+    if copy_w == 0 || copy_h == 0 {
+        return Ok(());
+    }
+
+    // Verify the source region fits within the staging buffer.
+    let needed = match copy_w.checked_mul(copy_h).and_then(|n| n.checked_mul(4)) {
+        Some(n) => n,
+        None => return Err(abi::errors::Errno::EINVAL),
+    };
+    if needed > driver.virgl_blend_staging_size {
+        // Region too large for the staging buffer; fall back to CPU.
+        return Err(abi::errors::Errno::ENOSYS);
+    }
+
+    let staging_ptr = driver.virgl_blend_staging_buf as *mut u8;
+    let staging_stride = (copy_w as u32) * 4;
+    let bpp = 4usize;
+
+    // ── Stage source pixels (CPU write-only pass) ─────────────────────────────
+    // Per-pixel bounds checking ensures that a malformed (or shrunk) source
+    // buffer cannot cause out-of-bounds reads even when src_rect extends
+    // beyond the buffer's actual dimensions.  Out-of-bounds pixels are
+    // replaced with opaque black so the GPU never reads uninitialised staging
+    // memory.  Performance: this loop is write-only to the staging buffer
+    // (no destination read-modify-write), matching the pattern used by
+    // gpu_alpha_blit() for the COMMIT path.  For large regions the overhead
+    // is dominated by the subsequent GPU texture upload, not this loop.
+    unsafe {
+        for row in 0..copy_h {
+            for col in 0..copy_w {
+                let src_off = (src_rect.y as usize + row)
+                    .saturating_mul(src_buffer.stride as usize)
+                    + (src_rect.x as usize + col).saturating_mul(bpp);
+                let stg_off =
+                    row.saturating_mul(staging_stride as usize) + col.saturating_mul(bpp);
+                let px = if src_off + bpp <= src_buffer.size {
+                    // Normalise BGRX → BGRA by forcing alpha=0xff for opaque formats.
+                    let raw = core::ptr::read_unaligned(src_buffer.ptr.add(src_off) as *const u32);
+                    source_argb_for_blend(raw, src_buffer.format)
+                } else {
+                    // Out-of-bounds: write opaque black.
+                    0xff00_0000u32
+                };
+                core::ptr::write_unaligned(staging_ptr.add(stg_off) as *mut u32, px);
+            }
+        }
+    }
+
+    // ── Upload staged pixels to virgl source texture ──────────────────────────
+    driver
+        .gpu
+        .transfer_to_host_3d(
+            driver.virgl_ctx_id,
+            driver.virgl_src_res_id,
+            copy_w as u32,
+            copy_h as u32,
+            0,
+            staging_stride,
+        )
+        .map_err(|_| abi::errors::Errno::EIO)?;
+
+    // ── GPU BLIT (opaque copy, no alpha blend) ────────────────────────────────
+    let dst_res_id = driver.frame_pool[idx].res_id;
+    let blit_cmd = virtio_gpu::virgl_encode_blit(
+        driver.virgl_src_res_id,
+        dst_res_id,
+        0,
+        0,
+        copy_w as u32,
+        copy_h as u32,
+        dst_rect.x,
+        dst_rect.y,
+        dst_rect.w,
+        dst_rect.h,
+        virtio_gpu::VIRTIO_GPU_FORMAT_B8G8R8A8_UNORM,
+        virtio_gpu::VIRTIO_GPU_FORMAT_B8G8R8X8_UNORM,
+        false, // opaque copy — no alpha blending
+    );
+    driver
+        .gpu
+        .submit_3d(driver.virgl_ctx_id, &blit_cmd)
+        .map_err(|_| abi::errors::Errno::EIO)?;
+
+    Ok(())
+}
+
+/// GPU-backed alpha blit: wraps the existing [`gpu_alpha_blit`] helper with
+/// the `src_rect` / `dst_rect` ABI used by `ACCEL2D_CMD_ALPHA_BLIT`.
+///
+/// Returns `Err(Errno::ENOSYS)` when virgl is unavailable so the caller can
+/// fall back to the CPU path transparently.
+fn gpu_accel2d_alpha_blit(
+    driver: &mut VirtioGpuDriver,
+    idx: usize,
+    src_buffer: &ImportedBuffer,
+    src_rect: abi::display_protocol::Rect,
+    dst_rect: abi::display_protocol::Rect,
+    global_alpha: u8,
+) -> abi::errors::SysResult<()> {
+    gpu_alpha_blit(
+        driver,
+        idx,
+        src_buffer,
+        src_rect.x as usize,
+        src_rect.y as usize,
+        src_rect.w as usize,
+        src_rect.h as usize,
+        dst_rect.x as usize,
+        dst_rect.y as usize,
+        global_alpha,
+    )
+}
+
 /// Parse and execute a batch of 2D acceleration commands sent via
-/// `DISPLAY_OP_ACCEL2D`.  Drawing commands operate on the current frame-pool
-/// buffer in CPU space; `ACCEL2D_CMD_FLUSH_DAMAGE` transfers the declared dirty
-/// regions to the virtio-GPU resource and flushes them to the display.
+/// `DISPLAY_OP_ACCEL2D`.
+///
+/// When the virgl GPU pipeline is available (i.e. `ACCEL2D_GPU` is advertised
+/// in `DisplayCaps`), eligible commands (`ACCEL2D_CMD_COPY_RECT` and
+/// `ACCEL2D_CMD_ALPHA_BLIT`) are dispatched to the GPU execution path.
+/// Commands without a GPU equivalent (`ACCEL2D_CMD_CLEAR_RECT`,
+/// `ACCEL2D_CMD_STRETCH_BLIT`, `ACCEL2D_CMD_MASKED_BLIT`,
+/// `ACCEL2D_CMD_ROUNDED_CLIP_BLIT`) always use the CPU fallback.
+/// `ACCEL2D_CMD_FLUSH_DAMAGE` uploads dirty CPU pixels and flushes them to
+/// the display via the standard virtio-gpu 2D path.
 fn execute_accel2d(driver: &mut VirtioGpuDriver, call_payload: &[u8]) -> ProviderResponse {
     let batch_size = core::mem::size_of::<Accel2dBatch>();
     if call_payload.len() < batch_size {
@@ -1883,6 +2076,12 @@ fn execute_accel2d(driver: &mut VirtioGpuDriver, call_payload: &[u8]) -> Provide
 }
 
 /// Execute a single 2D acceleration command against `driver.frame_pool[idx]`.
+///
+/// For `ACCEL2D_CMD_COPY_RECT` and `ACCEL2D_CMD_ALPHA_BLIT`, the GPU (virgl)
+/// path is attempted first; if the GPU subsystem is not ready (`ENOSYS`), the
+/// command silently falls back to the CPU path.  All other commands always use
+/// the CPU path.  The `accel2d_gpu_cmds` / `accel2d_cpu_cmds` counters are
+/// updated accordingly for diagnostics.
 fn execute_accel2d_cmd(
     driver: &mut VirtioGpuDriver,
     idx: usize,
@@ -1891,30 +2090,65 @@ fn execute_accel2d_cmd(
     match cmd.kind {
         ACCEL2D_CMD_CLEAR_RECT => {
             let c = unsafe { cmd.body.clear_rect };
+            driver.accel2d_cpu_cmds = driver.accel2d_cpu_cmds.saturating_add(1);
             accel2d_clear_rect(driver, idx, c.dst_buffer, c.rect, c.color)
         }
         ACCEL2D_CMD_COPY_RECT => {
             let c = unsafe { cmd.body.copy_rect };
-            accel2d_copy_rect(driver, idx, c.src_buffer, c.dst_buffer, c.src_rect, c.dst_rect)
+            validate_accel2d_dst_buffer(c.dst_buffer)?;
+            // Extract source buffer metadata before any mutable borrow.
+            let src_snapshot = driver
+                .imported_buffers
+                .get(&c.src_buffer)
+                .ok_or(Errno::ENOENT)
+                .and_then(|s| { validate_accel2d_src_format(s.format)?; Ok(*s) })?;
+            // Try GPU path first; fall back to CPU on ENOSYS.
+            match gpu_accel2d_copy_rect(driver, idx, &src_snapshot, c.src_rect, c.dst_rect) {
+                Ok(()) => {
+                    driver.accel2d_gpu_cmds = driver.accel2d_gpu_cmds.saturating_add(1);
+                    Ok(())
+                }
+                Err(abi::errors::Errno::ENOSYS) => {
+                    driver.accel2d_cpu_cmds = driver.accel2d_cpu_cmds.saturating_add(1);
+                    accel2d_copy_rect(driver, idx, c.src_buffer, c.dst_buffer, c.src_rect, c.dst_rect)
+                }
+                Err(e) => Err(e),
+            }
         }
         ACCEL2D_CMD_STRETCH_BLIT => {
             let c = unsafe { cmd.body.stretch_blit };
+            driver.accel2d_cpu_cmds = driver.accel2d_cpu_cmds.saturating_add(1);
             accel2d_stretch_blit(driver, idx, c.src_buffer, c.dst_buffer, c.src_rect, c.dst_rect)
         }
         ACCEL2D_CMD_ALPHA_BLIT => {
             let c = unsafe { cmd.body.alpha_blit };
-            accel2d_alpha_blit(
-                driver,
-                idx,
-                c.src_buffer,
-                c.dst_buffer,
-                c.src_rect,
-                c.dst_rect,
-                c.global_alpha,
-            )
+            validate_accel2d_dst_buffer(c.dst_buffer)?;
+            // Extract source buffer metadata before any mutable borrow.
+            let src_snapshot = driver
+                .imported_buffers
+                .get(&c.src_buffer)
+                .ok_or(Errno::ENOENT)
+                .and_then(|s| { validate_accel2d_src_format(s.format)?; Ok(*s) })?;
+            // Try GPU path first; fall back to CPU on ENOSYS.
+            match gpu_accel2d_alpha_blit(
+                driver, idx, &src_snapshot, c.src_rect, c.dst_rect, c.global_alpha,
+            ) {
+                Ok(()) => {
+                    driver.accel2d_gpu_cmds = driver.accel2d_gpu_cmds.saturating_add(1);
+                    Ok(())
+                }
+                Err(abi::errors::Errno::ENOSYS) => {
+                    driver.accel2d_cpu_cmds = driver.accel2d_cpu_cmds.saturating_add(1);
+                    accel2d_alpha_blit(
+                        driver, idx, c.src_buffer, c.dst_buffer, c.src_rect, c.dst_rect, c.global_alpha,
+                    )
+                }
+                Err(e) => Err(e),
+            }
         }
         ACCEL2D_CMD_MASKED_BLIT => {
             let c = unsafe { cmd.body.masked_blit };
+            driver.accel2d_cpu_cmds = driver.accel2d_cpu_cmds.saturating_add(1);
             accel2d_masked_blit(
                 driver,
                 idx,
@@ -1928,6 +2162,7 @@ fn execute_accel2d_cmd(
         }
         ACCEL2D_CMD_ROUNDED_CLIP_BLIT => {
             let c = unsafe { cmd.body.rounded_clip_blit };
+            driver.accel2d_cpu_cmds = driver.accel2d_cpu_cmds.saturating_add(1);
             accel2d_rounded_clip_blit(
                 driver,
                 idx,
@@ -2711,6 +2946,9 @@ fn main(boot_arg: usize) -> ! {
         info!(
             "display_virtio_gpu: composition paths: gpu_opaque_copy=enabled gpu_alpha_blend=enabled cpu_alpha_blend=enabled"
         );
+        info!(
+            "display_virtio_gpu: accel2d_gpu=enabled (COPY_RECT and ALPHA_BLIT dispatched to virgl GPU pipeline)"
+        );
     }
 
     // =========================================================================
@@ -2877,6 +3115,8 @@ fn main(boot_arg: usize) -> ! {
         virgl_blend_staging_phys,
         virgl_blend_staging_size,
         virgl_src_res_id,
+        accel2d_gpu_cmds: 0,
+        accel2d_cpu_cmds: 0,
     };
 
     // ProviderLoop handles VFS RPC framing and correctly prefixes every
@@ -3215,6 +3455,7 @@ fn main(boot_arg: usize) -> ! {
                         // Rate-limited stats logging
                         if stats.frame_count >= STATS_LOG_INTERVAL {
                             stats.log_and_reset(driver.gpu_path_planes, driver.cpu_fallback_planes);
+                            stats.log_and_reset_accel2d(driver.accel2d_gpu_cmds, driver.accel2d_cpu_cmds);
                         }
                     }
                     send_msg(drv_resp_write, drvproto::MSG_ACK, &[]);

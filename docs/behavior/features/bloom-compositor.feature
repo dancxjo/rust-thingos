@@ -357,6 +357,15 @@ Feature: Bloom compositor service loop and responsiveness
     And the serial output should contain "gpu_alpha_blend=enabled" within 60s
     And the serial output should contain "bloom: display driver supports GPU alpha blending" within 120s
 
+  Scenario: virtio GPU driver advertises ACCEL2D_GPU when virgl 3D is available
+    # When the virtio-gpu device supports virgl 3D, the driver enables the
+    # GPU-backed ACCEL2D execution path and logs a confirmation message.
+    # ACCEL2D_CMD_COPY_RECT and ACCEL2D_CMD_ALPHA_BLIT are routed to the virgl
+    # GPU pipeline; other commands use the CPU fallback path.
+    Given the machine is booted
+    Then the serial output should contain "display_virtio_gpu: GPU initialized successfully" within 60s
+    And the serial output should contain "display_virtio_gpu: accel2d_gpu=enabled" within 60s
+
   Scenario: virtio GPU driver records GPU vs CPU plane composition counts on first commit
     # After the first successful DISPLAY_OP_COMMIT the driver logs how many
     # planes went through the GPU fast-copy path and how many required CPU

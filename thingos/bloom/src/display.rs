@@ -278,6 +278,17 @@ impl DisplayBackend {
         self.info.caps.contains(DisplayCaps::ACCEL2D_ROUNDED_CLIP_BLIT)
     }
 
+    /// Returns `true` when the driver dispatches eligible ACCEL2D commands
+    /// (`ACCEL2D_CMD_COPY_RECT`, `ACCEL2D_CMD_ALPHA_BLIT`) to the GPU (virgl)
+    /// pipeline rather than the CPU fallback path.
+    ///
+    /// When this returns `false`, ACCEL2D semantics are identical — only the
+    /// execution path differs.  Callers do not need to branch on this value
+    /// for correctness; it is exposed for diagnostics and profiling.
+    pub fn supports_accel2d_gpu(&self) -> bool {
+        self.info.caps.contains(DisplayCaps::ACCEL2D_GPU)
+    }
+
     pub fn enumerate_outputs(&self) -> Vec<OutputInfo> {
         alloc::vec![self.primary_output_info()]
     }

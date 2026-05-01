@@ -210,6 +210,11 @@ bitflags::bitflags! {
         const ACCEL2D_ROUNDED_CLIP_BLIT = 1 << 18;
         /// Driver processes `ACCEL2D_CMD_FLUSH_DAMAGE` hints.
         const ACCEL2D_FLUSH_DAMAGE = 1 << 19;
+        /// ACCEL2D commands that map to GPU operations (copy, alpha-blit) are
+        /// dispatched to the virgl/GPU pipeline rather than the CPU fallback.
+        /// Commands without a GPU equivalent (clear, masked-blit,
+        /// rounded-clip-blit) continue to use the CPU path.
+        const ACCEL2D_GPU = 1 << 20;
     }
 }
 
