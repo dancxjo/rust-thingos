@@ -79,7 +79,7 @@ pub fn cull_composition(
         for entry in entries.iter().rev() {
             if entry.is_fullscreen && is_fully_opaque(entry) {
                 let dr = entry.dest_rect;
-                if dr.w >= output_w && dr.h >= output_h {
+                if dr.x == 0 && dr.y == 0 && dr.w >= output_w && dr.h >= output_h {
                     counters.fullscreen_direct_present += 1;
                     break;
                 }
@@ -404,6 +404,16 @@ mod tests {
         let entries = alloc::vec![e];
         let (_, counters) = cull_composition(&entries, 800, 600);
         assert_eq!(counters.fullscreen_direct_present, 1);
+    }
+
+    #[test]
+    fn fullscreen_offset_rect_not_a_direct_present_candidate() {
+        // Surface with correct size but wrong origin — does NOT cover (0,0).
+        let mut e = opaque_entry(1, r(10, 10, 800, 600));
+        e.is_fullscreen = true;
+        let entries = alloc::vec![e];
+        let (_, counters) = cull_composition(&entries, 800, 600);
+        assert_eq!(counters.fullscreen_direct_present, 0);
     }
 
     #[test]
