@@ -11,12 +11,116 @@ mod reporter;
 mod steps;
 mod world;
 
-use std::fs;
 use std::path::PathBuf;
+use std::{fs, io};
 
 use cucumber::World;
 use reporter::ThingOsReporter;
 use world::ThingOsWorld;
+
+#[derive(Default, Debug)]
+struct PngCompressionStats {
+    scanned: usize,
+    optimized: usize,
+    before_bytes: u64,
+    after_bytes: u64,
+    failed: usize,
+}
+
+fn collect_png_files(dir: &std::path::Path, out: &mut Vec<PathBuf>) -> io::Result<()> {
+    for entry in fs::read_dir(dir)? {
+        let entry = entry?;
+        let path = entry.path();
+        if path.is_dir() {
+            collect_png_files(&path, out)?;
+            continue;
+        }
+        if path
+            .extension()
+            .and_then(|ext| ext.to_str())
+            .is_some_and(|ext| ext.eq_ignore_ascii_case("png"))
+        {
+            out.push(path);
+        }
+    }
+    Ok(())
+}
+
+fn compress_png_lossless(path: &std::path::Path) -> io::Result<(u64, u64, bool)> {
+    use image::ImageEncoder;
+    use image::codecs::png::{CompressionType, FilterType, PngEncoder};
+
+    let before = fs::metadata(path)?.len();
+    let rgba = image::open(path)
+        .map_err(|e| io::Error::other(format!("failed to decode PNG {}: {e}", path.display())))?
+        .to_rgba8();
+
+    let tmp_path = path.with_extension("png.tmp");
+    {
+        let file = fs::File::create(&tmp_path)?;
+        let encoder =
+            PngEncoder::new_with_quality(file, CompressionType::Best, FilterType::Adaptive);
+        encoder
+            .write_image(
+                rgba.as_raw(),
+                rgba.width(),
+                rgba.height(),
+                image::ExtendedColorType::Rgba8,
+            )
+            .map_err(|e| {
+                io::Error::other(format!("failed to encode compressed PNG {}: {e}", path.display()))
+            })?;
+    }
+
+    let compressed = fs::metadata(&tmp_path)?.len();
+    if compressed < before {
+        // Replace atomically where supported, otherwise remove then rename.
+        if let Err(err) = fs::rename(&tmp_path, path) {
+            let _ = fs::remove_file(path);
+            fs::rename(&tmp_path, path).map_err(|_| err)?;
+        }
+        Ok((before, compressed, true))
+    } else {
+        let _ = fs::remove_file(&tmp_path);
+        Ok((before, before, false))
+    }
+}
+
+fn compress_png_artifacts(root: &std::path::Path) -> PngCompressionStats {
+    let mut stats = PngCompressionStats::default();
+    let mut pngs = Vec::new();
+    if let Err(err) = collect_png_files(root, &mut pngs) {
+        eprintln!(
+            "[bdd] WARNING: failed to enumerate PNG artifacts under {}: {}",
+            root.display(),
+            err
+        );
+        return stats;
+    }
+
+    for png in pngs {
+        stats.scanned += 1;
+        match compress_png_lossless(&png) {
+            Ok((before, after, optimized)) => {
+                stats.before_bytes += before;
+                stats.after_bytes += after;
+                if optimized {
+                    stats.optimized += 1;
+                }
+            }
+            Err(err) => {
+                stats.failed += 1;
+                eprintln!(
+                    "[bdd] WARNING: failed to compress PNG artifact {}: {}",
+                    png.display(),
+                    err
+                );
+            }
+        }
+    }
+
+    stats
+}
 
 #[tokio::main]
 async fn main() {
@@ -89,6 +193,20 @@ async fn main() {
         })
         .run(features_path)
         .await;
+
+    // Final artifact stage: keep repository screenshots small via lossless PNG recompression.
+    let compression_stats = compress_png_artifacts(&output_dir);
+    if compression_stats.scanned > 0 {
+        let bytes_saved =
+            compression_stats.before_bytes.saturating_sub(compression_stats.after_bytes);
+        eprintln!(
+            "[bdd] PNG compression: scanned={} optimized={} failed={} saved={} bytes",
+            compression_stats.scanned,
+            compression_stats.optimized,
+            compression_stats.failed,
+            bytes_saved
+        );
+    }
 
     // ALWAYS generate the report
     let collector = artifacts::global().lock().await;
