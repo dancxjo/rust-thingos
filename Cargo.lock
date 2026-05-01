@@ -3902,6 +3902,15 @@ dependencies = [
 ]
 
 [[package]]
+name = "leaf"
+version = "0.1.0"
+dependencies = [
+ "abi",
+ "stem",
+ "terminal_core",
+]
+
+[[package]]
 name = "leb128"
 version = "0.2.5"
 source = "registry+https://github.com/rust-lang/crates.io-index"
@@ -9749,15 +9758,6 @@ dependencies = [
  "libdl",
  "pistil-types",
  "stem",
-]
-
-[[package]]
-name = "wayland_terminal"
-version = "0.1.0"
-dependencies = [
- "abi",
- "stem",
- "terminal_core",
 ]
 
 [[package]]

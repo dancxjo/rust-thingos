@@ -1,5 +1,5 @@
 [package]
-name = "wayland_terminal"
+name = "leaf"
 version = "0.1.0"
 edition = "2021"
 
@@ -9,8 +9,7 @@ abi = { path = "../../abi" }
 terminal_core = { path = "../../libs/terminal_core" }
 
 [[bin]]
-name = "wayland_terminal"
+name = "leaf"
 path = "src/main.rs"
 test = false
 bench = false
-

@@ -33,6 +33,12 @@ Feature: Sprout graphics pipeline orchestration
     And the serial output should contain "System clock tick:" within 180s
     And the serial output should contain "clock: tick local=" within 180s
 
+  Scenario: sprout launches the Leaf Wayland terminal client
+    Given the machine is booted
+    Then the serial output should contain "SPROUT: Spawned leaf" within 180s
+    And the serial output should contain "leaf: connected to /run/wayland-0" within 180s
+    And the serial output should contain "leaf: spawned shell pid=" within 180s
+
   Scenario: rtc anchors the system clock before the Wayland clock displays realtime
     Given the machine is booted
     Then the serial output should contain "RTC: claimed /sys/devices/isa-0070" within 180s

@@ -3,7 +3,7 @@
 extern crate alloc;
 
 use alloc::collections::BTreeMap;
-use alloc::string::{String, ToString};
+use alloc::string::String;
 use alloc::vec::Vec;
 
 pub const CELL_WIDTH: u32 = 8;
@@ -50,10 +50,7 @@ impl Font {
     }
 
     pub fn glyph_width(&self, c: char) -> u32 {
-        self.get_glyph(c)
-            .or_else(|| self.get_glyph('?'))
-            .map(|g| g.width)
-            .unwrap_or(CELL_WIDTH)
+        self.get_glyph(c).or_else(|| self.get_glyph('?')).map(|g| g.width).unwrap_or(CELL_WIDTH)
     }
 }
 
@@ -382,4 +379,3 @@ impl TermModel {
         self.write_str(&text, font);
     }
 }
-

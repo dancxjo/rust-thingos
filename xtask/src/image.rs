@@ -287,6 +287,7 @@ pub fn default_programs() -> Vec<ProgramConfig> {
         ProgramConfig { name: "vfs_hello", is_init: false, boot_module: true, features: vec![] },
         ProgramConfig { name: "show_args", is_init: false, boot_module: true, features: vec![] },
         ProgramConfig { name: "clock", is_init: false, boot_module: true, features: vec![] },
+        ProgramConfig { name: "leaf", is_init: false, boot_module: true, features: vec![] },
         ProgramConfig {
             name: "env_roundtrip",
             is_init: false,
