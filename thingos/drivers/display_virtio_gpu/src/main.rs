@@ -180,6 +180,19 @@ struct Buffer {
 #[derive(Clone, Copy)]
 struct ImportedBuffer {
     fd: u32,
+    /// Raw pointer to the client-provided shared-memory region mapped into
+    /// this process at import time.  Copying this struct copies the pointer
+    /// value, not the underlying memory.
+    ///
+    /// # Safety
+    ///
+    /// The pointer is valid for the lifetime of the `ImportedBuffer` entry in
+    /// `VirtioGpuDriver::imported_buffers`.  Callers that take a snapshot
+    /// (`let snap = *entry`) for the purpose of releasing the `BTreeMap` borrow
+    /// before mutably borrowing `driver` must ensure the entry is not released
+    /// (via `DISPLAY_OP_RELEASE_BUFFER`) while the snapshot is in use.  In the
+    /// single-threaded driver loop this is always satisfied because a single
+    /// RPC handler runs to completion before another can begin.
     ptr: *mut u8,
     size: usize,
     width: u32,
@@ -1917,6 +1930,14 @@ fn gpu_accel2d_copy_rect(
     let bpp = 4usize;
 
     // ── Stage source pixels (CPU write-only pass) ─────────────────────────────
+    // Per-pixel bounds checking ensures that a malformed (or shrunk) source
+    // buffer cannot cause out-of-bounds reads even when src_rect extends
+    // beyond the buffer's actual dimensions.  Out-of-bounds pixels are
+    // replaced with opaque black so the GPU never reads uninitialised staging
+    // memory.  Performance: this loop is write-only to the staging buffer
+    // (no destination read-modify-write), matching the pattern used by
+    // gpu_alpha_blit() for the COMMIT path.  For large regions the overhead
+    // is dominated by the subsequent GPU texture upload, not this loop.
     unsafe {
         for row in 0..copy_h {
             for col in 0..copy_w {
@@ -2109,7 +2130,9 @@ fn execute_accel2d_cmd(
                 .ok_or(Errno::ENOENT)
                 .and_then(|s| { validate_accel2d_src_format(s.format)?; Ok(*s) })?;
             // Try GPU path first; fall back to CPU on ENOSYS.
-            match gpu_accel2d_alpha_blit(driver, idx, &src_snapshot, c.src_rect, c.dst_rect, c.global_alpha) {
+            match gpu_accel2d_alpha_blit(
+                driver, idx, &src_snapshot, c.src_rect, c.dst_rect, c.global_alpha,
+            ) {
                 Ok(()) => {
                     driver.accel2d_gpu_cmds = driver.accel2d_gpu_cmds.saturating_add(1);
                     Ok(())
