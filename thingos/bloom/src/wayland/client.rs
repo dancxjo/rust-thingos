@@ -318,6 +318,25 @@ impl WaylandClient {
         None
     }
 
+    /// Return the `bloom_surface_id` values for all live `xdg_popup` objects
+    /// owned by this client.
+    ///
+    /// Used by the compositor to check whether a pointer click lands on a
+    /// popup surface so it can emit `xdg_popup.popup_done` when appropriate.
+    pub fn popup_bloom_surface_ids(&self) -> Vec<u32> {
+        let mut result = Vec::new();
+        for entry in self.objects.values() {
+            if let ObjectEntry::XdgPopup { xdg_surface_obj } = entry {
+                if let Some(ObjectEntry::XdgSurface { bloom_surface_id }) =
+                    self.objects.get(xdg_surface_obj)
+                {
+                    result.push(*bloom_surface_id);
+                }
+            }
+        }
+        result
+    }
+
     pub fn pointer_object(&self) -> Option<u32> {
         self.objects.iter().find_map(|(id, entry)| match entry {
             ObjectEntry::Pointer => Some(*id),

@@ -2107,6 +2107,15 @@ pub fn send_blossom_commands(client: &mut WaylandClient, cmds: &[BlossomCommand]
                 // opcode 1 (no payload)
                 client.send(*toplevel, 1, &[]);
             }
+            BlossomCommand::DismissPopup { xdg_popup, .. } => {
+                // xdg_popup.popup_done()
+                // opcode 1 (no payload, destructor)
+                blossom_debug!(
+                    "wayland-server: xdg_popup.popup_done sent to obj={}",
+                    xdg_popup
+                );
+                client.send(*xdg_popup, 1, &[]);
+            }
             BlossomCommand::SendPing { wm_base, serial, .. } => {
                 // xdg_wm_base.ping(serial: uint)
                 // opcode 0

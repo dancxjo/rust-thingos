@@ -215,6 +215,7 @@ fn main(_arg: usize) -> ! {
                     }
                 }
                 (POPUP_ID, 1) => {
+                    info!("wayland_hello: compositor dismissed popup (popup_done)");
                     popup_created = false;
                     popup_pending.serial = None;
                 }

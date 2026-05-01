@@ -163,6 +163,26 @@ Feature: blossom xdg-shell lifecycle
     Then a new xdg_popup object is registered successfully
     And the compositor emits xdg_popup.configure before xdg_surface.configure
 
+  @pointer-debug @wayland-popup
+  Scenario: clicking outside a popup causes the compositor to send popup_done
+    Given the client has an xdg_toplevel
+    Then the Wayland hello client should be visible
+    When I click inside the Wayland hello client popup area
+    Then the Wayland hello popup should be visible
+    When I click outside the Wayland hello popup
+    Then the compositor should send xdg_popup.popup_done
+    And the Wayland hello client should log "compositor dismissed popup"
+
+  @pointer-debug @wayland-popup
+  Scenario: clicking the close chrome button on a toplevel also dismisses any open popup
+    Given the client has an xdg_toplevel
+    Then the Wayland hello client should be visible
+    When I click inside the Wayland hello client popup area
+    Then the Wayland hello popup should be visible
+    When I click the Wayland hello close button
+    Then the compositor should send xdg_popup.popup_done
+    And the compositor should send xdg_toplevel.close
+
   # ── Frame callbacks ───────────────────────────────────────────────────────────
 
   Scenario: frame callback fires after surface commit

@@ -185,6 +185,8 @@ pub enum BlossomCommand {
     SetToplevelChrome { surface: SurfaceId, titlebar_height: u32, frame_thickness: u32 },
     /// The compositor should send `xdg_toplevel.close` and initiate teardown.
     CloseToplevel { toplevel: ToplevelId },
+    /// Send `xdg_popup.popup_done` to the client, dismissing the popup.
+    DismissPopup { client: ClientId, xdg_popup: PopupId },
     /// Send `xdg_wm_base.ping(serial)` to the client.
     SendPing { client: ClientId, wm_base: ObjectId, serial: ConfigureSerial },
 }
@@ -805,6 +807,32 @@ impl Blossom {
         Some(vec![BlossomCommand::CloseToplevel { toplevel }])
     }
 
+    /// Emit compositor-initiated `xdg_popup.popup_done` for the popup wrapping
+    /// `wl_surface`.
+    ///
+    /// Returns `Some(commands)` when a popup role is found for the surface, or
+    /// `None` when the surface is not a popup.
+    pub fn dismiss_popup_for_surface(&self, wl_surface: SurfaceId) -> Option<Vec<BlossomCommand>> {
+        let xdg_surface = *self.surface_to_xdg.get(&wl_surface)?;
+        let surface = self.surfaces.get(&xdg_surface)?;
+        let popup_id = match surface.role {
+            Some(XdgRole::Popup(id)) => id,
+            _ => return None,
+        };
+        let popup = self.popups.get(&popup_id)?;
+        Some(vec![BlossomCommand::DismissPopup { client: popup.client, xdg_popup: popup_id }])
+    }
+
+    /// Return the `wl_surface` IDs of all xdg_surfaces that currently have a
+    /// popup role (i.e. active `xdg_popup` objects tracked by blossom).
+    pub fn active_popup_wl_surfaces(&self) -> Vec<SurfaceId> {
+        self.surfaces
+            .values()
+            .filter(|s| matches!(s.role, Some(XdgRole::Popup(_))))
+            .map(|s| s.wl_surface)
+            .collect()
+    }
+
     // ── Accessors ────────────────────────────────────────────────────────
 
     /// Read-only access to an `xdg_surface` state record.
@@ -1158,7 +1186,58 @@ mod tests {
         assert!(b.xdg_surface_for_wl_surface(SURFACE_ID).is_none());
     }
 
-    // ── multiple surfaces ────────────────────────────────────────────────
+    // ── popup dismissal ──────────────────────────────────────────────────
+
+    #[test]
+    fn dismiss_popup_for_surface_emits_popup_done() {
+        let mut b = setup();
+        make_xdg_surface(&mut b);
+        b.get_popup(CLIENT, XDG_SURF, POPUP, None, POSITIONER).unwrap();
+
+        let cmds = b.dismiss_popup_for_surface(SURFACE_ID).unwrap();
+        assert_eq!(cmds.len(), 1);
+        assert!(
+            matches!(cmds[0], BlossomCommand::DismissPopup { xdg_popup: POPUP, .. }),
+            "must emit DismissPopup for the popup object"
+        );
+    }
+
+    #[test]
+    fn dismiss_popup_for_toplevel_surface_returns_none() {
+        let mut b = setup();
+        make_xdg_surface(&mut b);
+        make_toplevel(&mut b);
+
+        // A toplevel surface is not a popup — dismiss_popup_for_surface must
+        // return None rather than panicking or emitting an event.
+        assert!(b.dismiss_popup_for_surface(SURFACE_ID).is_none());
+    }
+
+    #[test]
+    fn dismiss_popup_for_unknown_surface_returns_none() {
+        let b = setup();
+        assert!(b.dismiss_popup_for_surface(999).is_none());
+    }
+
+    #[test]
+    fn active_popup_wl_surfaces_lists_popup_surface() {
+        let mut b = setup();
+        make_xdg_surface(&mut b);
+        b.get_popup(CLIENT, XDG_SURF, POPUP, None, POSITIONER).unwrap();
+
+        let surfaces = b.active_popup_wl_surfaces();
+        assert_eq!(surfaces, vec![SURFACE_ID]);
+    }
+
+    #[test]
+    fn active_popup_wl_surfaces_empty_when_only_toplevels() {
+        let mut b = setup();
+        make_xdg_surface(&mut b);
+        make_toplevel(&mut b);
+
+        assert!(b.active_popup_wl_surfaces().is_empty());
+    }
+
 
     #[test]
     fn two_independent_xdg_surfaces_do_not_conflict() {
