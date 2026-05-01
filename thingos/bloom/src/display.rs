@@ -12,7 +12,7 @@ use abi::pixel::PixelFormat;
 use stem::syscall::vfs::{vfs_close, vfs_device_call_raw, vfs_open};
 
 use crate::render::{CursorPlane, OverlayPlane};
-use crate::scene::CompositionEntry;
+use crate::scene::{CompositionEntry, surface_visual_rect};
 
 const MAX_COMMIT_PLANES: usize = 16;
 const MAX_DAMAGE_RECTS: usize = 32;
@@ -315,54 +315,66 @@ impl DisplayBackend {
             plane_count += 1;
         }
 
-        // 1.1 Theme-owned window body. A single reused overlay keeps the
-        // compositor cheap while still letting transparent clients show the
-        // themed body underneath.
-        if let Some(overlay) = body_overlay {
+        // 2. Surface planes (interleaved with body and chrome).
+        // Each window is committed as a stack of 1-3 planes:
+        // [Body Overlay (themed background)] -> [Content] -> [Chrome Overlay (titlebar/frame)]
+        for entry in composition_list {
+            let base_z = entry.z_order.saturating_mul(4);
+
+            // 2.1 Window body (themed background under content)
+            if let Some(overlay) = body_overlay {
+                if !entry.is_fullscreen && !entry.chrome.is_empty() && plane_count < MAX_COMMIT_PLANES {
+                    let visual_rect = surface_visual_rect(entry.dest_rect, entry.chrome);
+                    planes[plane_count] = PlaneCommit {
+                        plane_id: PlaneId(plane_count as u32),
+                        buffer_id: abi::display::BufferId(overlay.buffer_id),
+                        dest_rect: visual_rect,
+                        src_rect: visual_rect,
+                        z_order: base_z,
+                        alpha: 255,
+                        _reserved: [0; 7],
+                    };
+                    plane_count += 1;
+                }
+            }
+
+            // 2.2 Content plane
             if plane_count < MAX_COMMIT_PLANES {
-                planes[plane_count] = PlaneCommit {
+                let mut plane = PlaneCommit {
                     plane_id: PlaneId(plane_count as u32),
-                    buffer_id: abi::display::BufferId(overlay.buffer_id),
-                    dest_rect: Rect {
-                        x: overlay.x.max(0) as u32,
-                        y: overlay.y.max(0) as u32,
-                        w: overlay.width,
-                        h: overlay.height,
-                    },
-                    src_rect: Rect { x: 0, y: 0, w: overlay.width, h: overlay.height },
-                    z_order: BACKGROUND_Z_ORDER.saturating_add(1),
-                    alpha: 255,
+                    buffer_id: abi::display::BufferId(entry.buffer_id),
+                    dest_rect: entry.dest_rect,
+                    src_rect: entry.src_rect,
+                    z_order: base_z.saturating_add(1),
+                    alpha: entry.alpha,
                     _reserved: [0; 7],
                 };
+                if !entry.is_fullscreen && !entry.chrome.is_empty() {
+                    plane = plane.with_rounded_clip(corner_radius);
+                }
+                planes[plane_count] = plane;
                 plane_count += 1;
-            }
-        }
-
-        // 2. Surface planes. The flat compositor chrome is drawn once into a
-        // reused full-screen overlay and committed above the clients.
-        for entry in composition_list {
-            let mut plane = PlaneCommit {
-                plane_id: PlaneId(plane_count as u32),
-                buffer_id: abi::display::BufferId(entry.buffer_id),
-                dest_rect: entry.dest_rect,
-                src_rect: entry.src_rect,
-                z_order: entry.z_order,
-                alpha: entry.alpha,
-                _reserved: [0; 7],
-            };
-            if !entry.is_fullscreen && !entry.chrome.is_empty() {
-                plane = plane.with_rounded_clip(corner_radius);
-            }
-            if plane_count >= MAX_COMMIT_PLANES {
+            } else {
                 stem::warn!("bloom: dropping display plane beyond fixed commit capacity");
                 break;
             }
-            planes[plane_count] = plane;
-            plane_count += 1;
-        }
 
-        if let Some(overlay) = chrome_overlay {
-            push_overlay_commit(&mut planes, &mut plane_count, overlay, i32::MAX - 2);
+            // 2.3 Chrome plane (interleaved)
+            if let Some(overlay) = chrome_overlay {
+                if !entry.is_fullscreen && !entry.chrome.is_empty() && plane_count < MAX_COMMIT_PLANES {
+                    let visual_rect = surface_visual_rect(entry.dest_rect, entry.chrome);
+                    planes[plane_count] = PlaneCommit {
+                        plane_id: PlaneId(plane_count as u32),
+                        buffer_id: abi::display::BufferId(overlay.buffer_id),
+                        dest_rect: visual_rect,
+                        src_rect: visual_rect,
+                        z_order: base_z.saturating_add(2),
+                        alpha: 255,
+                        _reserved: [0; 7],
+                    };
+                    plane_count += 1;
+                }
+            }
         }
 
         // 4. Diagnostic overlay. This is intentionally above the wallpaper and
