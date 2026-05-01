@@ -1070,7 +1070,12 @@ pub fn surface_visual_rect(rect: Rect, chrome: SurfaceChrome) -> Rect {
     if chrome.is_empty() {
         return rect;
     }
-    rect
+    Rect {
+        x: rect.x,
+        y: rect.y,
+        w: rect.w.saturating_add(2),
+        h: rect.h.saturating_add(2),
+    }
 }
 
 fn resize_edge_at(rect: Rect, thickness: u32, x: i32, y: i32) -> Option<ResizeEdge> {

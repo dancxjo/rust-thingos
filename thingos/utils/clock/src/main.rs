@@ -102,6 +102,7 @@ fn main(_arg: usize) -> ! {
     let mut last_serial_tick_ns = 0u64;
     let mut last_time = String::new();
     let mut last_date = String::new();
+    let mut last_am_pm = String::new();
 
     loop {
         read_events(fd, &mut pending, &mut pending_frame_callbacks);
@@ -113,12 +114,23 @@ fn main(_arg: usize) -> ! {
         }
 
         let realtime = local_datetime(tz_offset);
-        let (time_text, date_text) = match realtime {
-            Some((dt, _, _)) => (
-                format!("{:02}:{:02}", dt.hour, dt.minute),
-                format!("{:04}-{:02}-{:02} UTC{:+}", dt.year, dt.month, dt.day, tz_offset),
-            ),
-            None => ("00:00".into(), format!("WAITING FOR RTC UTC{:+}", tz_offset)),
+        let (time_text, date_text, am_pm_text) = match realtime {
+            Some((dt, _, _)) => {
+                let hour12 = if dt.hour == 0 {
+                    12
+                } else if dt.hour > 12 {
+                    dt.hour - 12
+                } else {
+                    dt.hour
+                };
+                let am_pm = if dt.hour < 12 { "AM" } else { "PM" };
+                (
+                    format!("{:02}:{:02}", hour12, dt.minute),
+                    format!("{:04}-{:02}-{:02} UTC{:+}", dt.year, dt.month, dt.day, tz_offset),
+                    String::from(am_pm),
+                )
+            }
+            None => ("00:00".into(), format!("WAITING FOR RTC UTC{:+}", tz_offset), "--".into()),
         };
 
         if now_ns.saturating_sub(last_serial_tick_ns) >= SERIAL_TICK_INTERVAL_NS {
@@ -144,10 +156,12 @@ fn main(_arg: usize) -> ! {
             last_serial_tick_ns = now_ns;
         }
 
-        let time_changed = time_text != last_time || date_text != last_date;
+        let time_changed =
+            time_text != last_time || date_text != last_date || am_pm_text != last_am_pm;
         if time_changed {
             last_time = time_text;
             last_date = date_text;
+            last_am_pm = am_pm_text;
         }
 
         let should_render = pending.configured && (pending.dirty || time_changed);
@@ -160,7 +174,7 @@ fn main(_arg: usize) -> ! {
                 pending.width,
                 pending.height,
             );
-            render_clock(buf, &last_time, &last_date, text_renderer.as_ref());
+            render_clock(buf, &last_time, &last_date, &last_am_pm, text_renderer.as_ref());
             if pending.dirty {
                 ack_configure(fd, XDG_SURFACE_ID, pending.serial.unwrap_or(0));
                 pending.dirty = false;
@@ -311,6 +325,7 @@ fn render_clock(
     buffer: BufferState,
     time_text: &str,
     date_text: &str,
+    am_pm: &str,
     text_renderer: Option<&TextRenderer>,
 ) {
     unsafe {
@@ -336,10 +351,10 @@ fn render_clock(
             text_y,
             px_size,
             "88:88",
-            0x12B58900,
+            0x12CCAA00,
         );
         for (dx, dy, color) in
-            [(-1, 0, 0x2ECB4B16), (1, 0, 0x2ECB4B16), (0, -1, 0x30B58900), (0, 1, 0x30B58900)]
+            [(-1, 0, 0x30CCAA00), (1, 0, 0x30CCAA00), (0, -1, 0x30CCAA00), (0, 1, 0x30CCAA00)]
         {
             draw_dseg7_text(
                 text_renderer,
@@ -362,11 +377,24 @@ fn render_clock(
             text_y,
             px_size,
             time_text,
-            0xFF7A431B,
+            0xFFCCAA00,
+        );
+
+        let am_pm_x = text_x + estimated_w + 12;
+        draw_dseg7_text(
+            text_renderer,
+            pixels,
+            buffer.width,
+            buffer.height,
+            am_pm_x,
+            text_y,
+            20.0,
+            am_pm,
+            0xFF859900,
         );
 
         let dot_y = body_top + 9;
-        fill_rect(pixels, buffer.width, buffer.height, 22, dot_y, 4, 4, 0xFFCB4B16);
+        fill_rect(pixels, buffer.width, buffer.height, 22, dot_y, 4, 4, 0xFFCCAA00);
         fill_rect(
             pixels,
             buffer.width,
@@ -375,7 +403,7 @@ fn render_clock(
             dot_y,
             4,
             4,
-            0xFFCB4B16,
+            0xFFCCAA00,
         );
         draw_dseg7_text(
             text_renderer,
