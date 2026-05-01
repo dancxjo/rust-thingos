@@ -32,6 +32,10 @@ pub struct SurfacePending {
     pub dest_rect: Option<Rect>,
     pub input_region: Option<Rect>,
     pub opaque_region: Option<Rect>,
+    /// When `true`, the opaque region is explicitly cleared on the next commit
+    /// (i.e. the client sent `wl_surface.set_opaque_region(null)`).
+    /// Takes precedence over `opaque_region` if both happen to be set.
+    pub clear_opaque_region: bool,
     pub z_order: Option<i32>,
 }
 
@@ -396,7 +400,23 @@ impl Scene {
         if surface.client_id != client_id {
             return false;
         }
+        surface.pending.clear_opaque_region = false;
         surface.pending.opaque_region = Some(rect);
+        true
+    }
+
+    /// Clear the pending opaque region.  On the next commit `current.opaque_region`
+    /// will be set to `None`, signalling to the compositor that the surface has
+    /// no declared opaque area (the Wayland `null` region semantics).
+    pub fn clear_pending_opaque_region(&mut self, client_id: u32, surface_id: u32) -> bool {
+        let Some(surface) = self.surfaces.get_mut(&surface_id) else {
+            return false;
+        };
+        if surface.client_id != client_id {
+            return false;
+        }
+        surface.pending.opaque_region = None;
+        surface.pending.clear_opaque_region = true;
         true
     }
 
@@ -621,7 +641,11 @@ impl Scene {
             surface.current.input_region = Some(region);
             changed = true;
         }
-        if let Some(region) = surface.pending.opaque_region.take() {
+        if surface.pending.clear_opaque_region {
+            surface.current.opaque_region = None;
+            surface.pending.clear_opaque_region = false;
+            changed = true;
+        } else if let Some(region) = surface.pending.opaque_region.take() {
             surface.current.opaque_region = Some(region);
             changed = true;
         }

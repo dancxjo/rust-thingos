@@ -1105,6 +1105,43 @@ fn dispatch_region(msg: &WireMsg, client: &mut WaylandClient, obj_id: u32) -> Ve
     vec![]
 }
 
+/// Compute the bounding rectangle of all "add" operations in a `wl_region`
+/// rect list.
+///
+/// The `rects` slice holds `(x, y, w, h, is_add)` entries as accumulated by
+/// `wl_region.add` and `wl_region.subtract`.  This function returns the
+/// axis-aligned bounding box of all add entries (subtract entries are ignored
+/// for the V1 single-rect approximation used by the compositor culling pass).
+///
+/// Returns `None` when the region contains no valid add operations.
+fn region_bounding_rect(rects: &[(i32, i32, i32, i32, bool)]) -> Option<(u32, u32, u32, u32)> {
+    let mut min_x = i32::MAX;
+    let mut min_y = i32::MAX;
+    let mut max_x = i32::MIN;
+    let mut max_y = i32::MIN;
+    let mut found = false;
+
+    for &(x, y, w, h, is_add) in rects {
+        if is_add && w > 0 && h > 0 {
+            min_x = min_x.min(x);
+            min_y = min_y.min(y);
+            max_x = max_x.max(x.saturating_add(w));
+            max_y = max_y.max(y.saturating_add(h));
+            found = true;
+        }
+    }
+
+    if !found {
+        return None;
+    }
+
+    let x = min_x.max(0) as u32;
+    let y = min_y.max(0) as u32;
+    let max_x = max_x.max(0) as u32;
+    let max_y = max_y.max(0) as u32;
+    Some((x, y, max_x.saturating_sub(x), max_y.saturating_sub(y)))
+}
+
 // ── wl_buffer ─────────────────────────────────────────────────────────────────
 
 const WL_BUFFER_DESTROY: u16 = 0;
@@ -1248,6 +1285,7 @@ fn handle_surface_commit(
         pending_buffer,
         pending_damage,
         pending_frame_cb,
+        pending_opaque_region,
     ) = {
         match client.objects.get(&wl_surface_obj) {
             Some(ObjectEntry::Surface {
@@ -1257,6 +1295,7 @@ fn handle_surface_commit(
                 pending_buffer,
                 pending_damage,
                 pending_frame_cb,
+                pending_opaque_region,
                 ..
             }) => (
                 *bloom_surface_id,
@@ -1265,6 +1304,7 @@ fn handle_surface_commit(
                 *pending_buffer,
                 *pending_damage,
                 *pending_frame_cb,
+                *pending_opaque_region,
             ),
             _ => return out,
         }
@@ -1340,6 +1380,48 @@ fn handle_surface_commit(
         out.push(ipc::encode_damage(bloom_surface_id, x, y, w, h).to_vec());
     }
 
+    // Opaque region — resolve the region object (if any) to a bounding rect
+    // and emit WCMD_SET_OPAQUE_REGION so the main thread applies it atomically
+    // with the buffer commit.  A null region_id (0) clears the opaque region.
+    {
+        let opaque_ipc_rect: Option<(u32, u32, u32, u32)> = match pending_opaque_region {
+            None => {
+                // No pending change from the client; nothing to send.
+                // (Skip emitting the IPC message entirely so that a prior
+                // committed opaque region is preserved across frames.)
+                None
+            }
+            Some(0) => {
+                // Explicit null region → clear.
+                None // send with has_region=0 below
+            }
+            Some(region_id) => {
+                // Resolve the wl_region object to a bounding rect.
+                match client.objects.get(&region_id) {
+                    Some(ObjectEntry::Region { rects }) => {
+                        region_bounding_rect(rects)
+                    }
+                    _ => None,
+                }
+            }
+        };
+
+        // If the client set a pending opaque region (even if the resolved rect
+        // is None because the region was empty / already destroyed), we must
+        // inform the main thread so it can update the scene state before the
+        // commit lands.
+        if pending_opaque_region.is_some() {
+            blossom_debug!(
+                "wayland-server: wl_surface obj={} commit opaque_region={:?}",
+                wl_surface_obj,
+                opaque_ipc_rect
+            );
+            out.push(
+                ipc::encode_set_opaque_region(bloom_surface_id, opaque_ipc_rect).to_vec(),
+            );
+        }
+    }
+
     // Register frame callback with IPC if present.
     let has_cb = pending_frame_cb.is_some();
     let cb_key = if let Some(cb_id) = pending_frame_cb {
@@ -1359,12 +1441,18 @@ fn handle_surface_commit(
     out.push(ipc::encode_commit(bloom_surface_id, has_cb, cb_key).to_vec());
 
     // Clear pending state.
-    if let Some(ObjectEntry::Surface { pending_buffer, pending_damage, pending_frame_cb, .. }) =
-        client.objects.get_mut(&wl_surface_obj)
+    if let Some(ObjectEntry::Surface {
+        pending_buffer,
+        pending_damage,
+        pending_frame_cb,
+        pending_opaque_region,
+        ..
+    }) = client.objects.get_mut(&wl_surface_obj)
     {
         *pending_buffer = None;
         *pending_damage = None;
         *pending_frame_cb = None;
+        *pending_opaque_region = None;
     }
 
     // Atomically apply pending state of any synchronized subsurface children.
@@ -2856,4 +2944,61 @@ fn dispatch_presentation_feedback(
     // wp_presentation_feedback has no requests in v1; the server initiates
     // both `presented` and `discarded` (each of which is a destructor event).
     vec![]
+}
+
+#[cfg(test)]
+mod tests {
+    use super::region_bounding_rect;
+
+    #[test]
+    fn empty_region_returns_none() {
+        assert_eq!(region_bounding_rect(&[]), None);
+    }
+
+    #[test]
+    fn subtract_only_returns_none() {
+        // Only subtract ops — no add rects, so no bounding box.
+        let rects = [(0, 0, 100, 100, false)];
+        assert_eq!(region_bounding_rect(&rects), None);
+    }
+
+    #[test]
+    fn single_add_rect() {
+        let rects = [(0, 0, 480, 320, true)];
+        assert_eq!(region_bounding_rect(&rects), Some((0, 0, 480, 320)));
+    }
+
+    #[test]
+    fn non_zero_origin_add_rect() {
+        let rects = [(10, 20, 100, 200, true)];
+        assert_eq!(region_bounding_rect(&rects), Some((10, 20, 100, 200)));
+    }
+
+    #[test]
+    fn two_add_rects_union() {
+        // Two non-overlapping rects: bounding box covers both.
+        let rects = [(0, 0, 50, 50, true), (100, 100, 50, 50, true)];
+        assert_eq!(region_bounding_rect(&rects), Some((0, 0, 150, 150)));
+    }
+
+    #[test]
+    fn subtract_ignored_in_bounding_rect() {
+        // Add covers full surface; subtract reduces visible area but we report
+        // the bounding box of add ops only (conservative V1 approximation).
+        let rects = [(0, 0, 200, 200, true), (50, 50, 100, 100, false)];
+        assert_eq!(region_bounding_rect(&rects), Some((0, 0, 200, 200)));
+    }
+
+    #[test]
+    fn negative_origin_clamped_to_zero() {
+        // Wayland allows negative coords (off-screen); clamp to 0 for scene.
+        let rects = [(-10, -20, 100, 100, true)];
+        assert_eq!(region_bounding_rect(&rects), Some((0, 0, 90, 80)));
+    }
+
+    #[test]
+    fn degenerate_zero_size_add_ignored() {
+        let rects = [(0, 0, 0, 0, true), (10, 10, 50, 50, true)];
+        assert_eq!(region_bounding_rect(&rects), Some((10, 10, 50, 50)));
+    }
 }
