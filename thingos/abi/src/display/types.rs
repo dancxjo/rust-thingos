@@ -59,6 +59,16 @@ pub struct BufferHandle {
     pub format: PixelFormat,
     /// Hardware-specific tiling/compression modifier (0 = linear).
     pub modifier: u64,
+    /// Monotonic generation counter for this logical buffer.
+    ///
+    /// Incremented by the producer each time new pixel content is written to
+    /// the backing storage before re-importing the same handle.  The display
+    /// resource cache includes this field in its lookup key so that a handle
+    /// reused with a different generation always triggers a fresh import rather
+    /// than returning a stale cached buffer id.
+    ///
+    /// A value of 0 is valid and indicates the initial (or only) generation.
+    pub generation: u64,
 }
 
 /// Description of how to display a single buffer on a plane.
@@ -274,6 +284,27 @@ impl CommitRequest {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn buffer_handle_generation_field_is_accessible() {
+        let bh = BufferHandle {
+            handle: 1,
+            offset: 0,
+            width: 640,
+            height: 480,
+            stride: 2560,
+            format: PixelFormat::Bgra8888,
+            modifier: 0,
+            generation: 0,
+        };
+        assert_eq!(bh.generation, 0);
+
+        let bh2 = BufferHandle { generation: 3, ..bh };
+        assert_eq!(bh2.generation, 3);
+
+        // Handles with different generations must compare unequal.
+        assert_ne!(bh, bh2);
+    }
 
     #[test]
     fn rounded_clip_hint_uses_reserved_plane_bytes() {

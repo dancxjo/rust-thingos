@@ -6,8 +6,9 @@
 //! # Cached resources
 //!
 //! - **Client buffers** — keyed by `(handle, format, width, height, stride,
-//!   modifier)`.  The entry is evicted when the buffer is released so that a
-//!   re-use of the same handle (with new pixel content) always triggers a fresh
+//!   modifier, generation)`.  A new entry is imported (and the old entry for
+//!   the same handle is evicted) whenever the generation counter advances,
+//!   ensuring that handle reuse with new pixel content always triggers a fresh
 //!   import.
 //! - **Wallpaper** — the path of the currently loaded background texture is
 //!   stored so callers can skip `prepare_background` when the path has not
@@ -52,7 +53,7 @@ pub struct CacheCounters {
 ///
 /// See module documentation for the caching strategy and current slot layout.
 pub struct ResourceCache {
-    /// Client buffer imports: `(handle, format, w, h, stride, modifier)` → buffer_id.
+    /// Client buffer imports: `(handle, format, w, h, stride, modifier, generation)` → buffer_id.
     client_buffers: BTreeMap<ClientBufferKey, u32>,
 
     /// Path of the wallpaper that is currently loaded as the background buffer.
@@ -79,8 +80,10 @@ pub struct ResourceCache {
 
 #[derive(Clone, Copy, Debug, PartialEq, Eq, PartialOrd, Ord)]
 struct ClientBufferKey {
-    /// 8-byte field first to avoid padding before the u32 fields.
+    /// 8-byte fields first to avoid padding before the u32 fields.
     modifier: u64,
+    /// Monotonic generation counter; advancing this forces a cache miss.
+    generation: u64,
     handle: u32,
     width: u32,
     height: u32,
@@ -108,9 +111,13 @@ impl ResourceCache {
     /// changed.
     ///
     /// A cache entry is keyed on `(handle, format, width, height, stride,
-    /// modifier)`.  If a matching entry exists its `buffer_id` is returned
-    /// directly (hit).  Otherwise [`DisplayBackend::import_buffer`] is called
-    /// and the result is cached (miss).
+    /// modifier, generation)`.  If a matching entry exists its `buffer_id` is
+    /// returned directly (hit).  Otherwise [`DisplayBackend::import_buffer`] is
+    /// called and the result is cached (miss).
+    ///
+    /// When a miss occurs for a given `handle`, any existing cache entries for
+    /// that handle (with a different generation) are evicted and their display
+    /// buffers released, ensuring stale pixel data is never reused.
     ///
     /// Returns `None` if the backend rejected the import.
     pub fn import_client_buffer(
@@ -123,14 +130,16 @@ impl ResourceCache {
         format: PixelFormat,
         offset: u64,
         modifier: u64,
+        generation: u64,
     ) -> Option<u32> {
-        let key = ClientBufferKey { modifier, handle, width, height, stride, format };
+        let key = ClientBufferKey { modifier, generation, handle, width, height, stride, format };
 
         if let Some(&buffer_id) = self.client_buffers.get(&key) {
             self.counters.hits += 1;
             stem::trace!(
-                "bloom: cache hit handle={} {}x{} buffer_id={}",
+                "bloom: cache hit handle={} gen={} {}x{} buffer_id={}",
                 handle,
+                generation,
                 width,
                 height,
                 buffer_id
@@ -138,12 +147,33 @@ impl ResourceCache {
             return Some(buffer_id);
         }
 
+        // Cache miss: evict any stale entries for this handle (different generation).
+        let mut stale_ids = alloc::vec::Vec::new();
+        self.client_buffers.retain(|k, &mut v| {
+            if k.handle == handle && k.generation != generation {
+                stale_ids.push(v);
+                false
+            } else {
+                true
+            }
+        });
+        for old_id in stale_ids {
+            display.release_buffer(old_id);
+            self.counters.invalidations += 1;
+            stem::trace!(
+                "bloom: cache evicted stale gen handle={} buffer_id={}",
+                handle,
+                old_id
+            );
+        }
+
         let buffer_id =
             display.import_buffer(handle, width, height, stride, format, offset, modifier)?;
         self.counters.misses += 1;
         stem::trace!(
-            "bloom: cache miss handle={} {}x{} → buffer_id={}",
+            "bloom: cache miss handle={} gen={} {}x{} → buffer_id={}",
             handle,
+            generation,
             width,
             height,
             buffer_id
