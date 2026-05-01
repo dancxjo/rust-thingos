@@ -229,8 +229,8 @@ impl ResourceCache {
     /// Call when the display backend reconnects or is fully reset so stale
     /// buffer_ids are not presented.
     pub fn invalidate_all(&mut self, display: &DisplayBackend) {
-        // Collect buffer_ids first then clear, since `drain()` is not
-        // available on `alloc::collections::BTreeMap` in no_std builds.
+        // Collect buffer_ids then clear, to avoid retaining any reference into
+        // the map while iterating and releasing.
         let ids: alloc::vec::Vec<u32> = self.client_buffers.values().copied().collect();
         self.client_buffers.clear();
         for buffer_id in ids {

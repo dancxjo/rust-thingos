@@ -491,7 +491,7 @@ impl BloomWorld {
         if result.success {
             self.frame_count = self.frame_count.wrapping_add(1);
             // Log cache stats once every 300 frames (~5 s at 60 fps).
-            if self.frame_count % 300 == 1 {
+            if self.frame_count % 300 == 0 {
                 self.cache.log_stats();
             }
             if !self.cursor_present_logged {

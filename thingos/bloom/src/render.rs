@@ -197,9 +197,10 @@ impl CompositorVisuals {
         }
 
         self.background = Some(ServerBuffer { _texture: texture, buffer_id });
-        // Wallpaper path is cleared here because this is a solid-colour
-        // background, not a file-backed wallpaper.  `prepare_background` sets
+        // Clear the wallpaper path because this is a solid-colour background,
+        // not a file-backed wallpaper.  `prepare_background` sets
         // `wallpaper_path` after a successful file-based load.
+        self.wallpaper_path = None;
     }
 
     /// Synchronously decode and import a wallpaper.
