@@ -29,6 +29,7 @@
 //! | `WEVT_TOPLEVEL_ACTION` | The compositor requests a toplevel action  |
 //! | `WEVT_POINTER_*` | Focused pointer events from Bristle/Bloom    |
 //! | `WEVT_KEYBOARD_*` | Focused keyboard events from Bristle/Bloom  |
+//! | `WEVT_CLOSE_LAYER_SURFACE` | Compositor closes a layer surface       |
 
 // ── Discriminants ────────────────────────────────────────────────────────────
 
@@ -55,6 +56,7 @@ pub const WEVT_KEYBOARD_ENTER: u8 = 9;
 pub const WEVT_KEYBOARD_LEAVE: u8 = 10;
 pub const WEVT_KEYBOARD_KEY: u8 = 11;
 pub const WEVT_OUTPUT_INFO: u8 = 12;
+pub const WEVT_CLOSE_LAYER_SURFACE: u8 = 13;
 
 pub const TOPLEVEL_ACTION_CLOSE: u8 = 1;
 pub const TOPLEVEL_ACTION_MINIMIZE: u8 = 2;
@@ -323,6 +325,18 @@ pub struct WEvtOutputInfo {
     pub width: u32,
     pub height: u32,
     pub refresh_mhz: u32,
+}
+
+/// [`WEVT_CLOSE_LAYER_SURFACE`] — compositor-initiated close of a layer surface.
+///
+/// The Wayland server should emit `zwlr_layer_surface_v1.closed` (opcode 1) to
+/// the client owning the surface and then remove the layer-surface object.
+#[repr(C, packed)]
+#[derive(Clone, Copy)]
+pub struct WEvtCloseLayerSurface {
+    pub msg_type: u8, // = WEVT_CLOSE_LAYER_SURFACE
+    pub _pad: [u8; 3],
+    pub bloom_surface_id: u32,
 }
 
 // ── Encoding helpers ─────────────────────────────────────────────────────────
@@ -642,5 +656,16 @@ pub fn encode_output_info(width: u32, height: u32, refresh_mhz: u32) -> [u8; 16]
     };
     let mut out = [0u8; 16];
     out.copy_from_slice(as_bytes!(msg, WEvtOutputInfo));
+    out
+}
+
+pub fn encode_close_layer_surface(bloom_surface_id: u32) -> [u8; 8] {
+    let msg = WEvtCloseLayerSurface {
+        msg_type: WEVT_CLOSE_LAYER_SURFACE,
+        _pad: [0; 3],
+        bloom_surface_id,
+    };
+    let mut out = [0u8; 8];
+    out.copy_from_slice(as_bytes!(msg, WEvtCloseLayerSurface));
     out
 }

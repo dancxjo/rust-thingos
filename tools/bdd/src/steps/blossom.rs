@@ -1460,6 +1460,21 @@ async fn compositor_sends_toplevel_close(world: &mut ThingOsWorld) -> Result<(),
     Ok(())
 }
 
+#[then("the compositor should send zwlr_layer_surface_v1.closed")]
+async fn compositor_sends_layer_surface_closed(
+    world: &mut ThingOsWorld,
+) -> Result<(), StepError> {
+    if !world
+        .wait_for_serial("wayland-server: sent zwlr_layer_surface_v1.closed", 30.0)
+        .await
+    {
+        return Err(StepError(
+            "Wayland server did not send zwlr_layer_surface_v1.closed".to_string(),
+        ));
+    }
+    Ok(())
+}
+
 /// `When the client sends xdg_toplevel.set_title "..."` (regex)
 #[when(regex = r#"^the client sends xdg_toplevel\.set_title "(.+)"$"#)]
 async fn client_sends_set_title(world: &mut ThingOsWorld, title: String) -> Result<(), StepError> {

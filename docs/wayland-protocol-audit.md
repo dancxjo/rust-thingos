@@ -259,7 +259,7 @@ Remaining open items are in the **known gaps** section below.
 | `set_layer`                 | ✅       |                                            |
 | `ack_configure`             | ✅       | Serial checked against pending queue       |
 | `configure` (event)         | ✅       | Sent on first commit; (0,0) hint           |
-| `closed` (event)            | ❌       | Not yet emitted                            |
+| `closed` (event)            | ✅       | Emitted via `WEVT_CLOSE_LAYER_SURFACE`     |
 | `get_popup`                 | ⚠️ no-op| v1 popup attachment not implemented        |
 
 ---
@@ -271,7 +271,6 @@ Remaining open items are in the **known gaps** section below.
 | `wl_pointer.axis` / `axis_source` / `frame` | Medium | Scroll-wheel events not yet forwarded         |
 | `wl_touch`                            | Low      | Touch input not yet connected                       |
 | `xdg_popup.popup_done`                | Medium   | Compositor should dismiss popups on click outside   |
-| `zwlr_layer_surface_v1.closed` event  | Low      | Needed for compositor-initiated layer surface close |
 | `zwp_linux_dmabuf_feedback_v1`        | Low      | DMABuf format/modifier feedback for v4+             |
 | `wl_pointer.frame` grouping           | Low      | Batching pointer events into frame groups           |
 | `wl_data_device` drag-and-drop        | Low      | `start_drag` is a no-op                             |
