@@ -82,7 +82,7 @@ fn main(_arg: usize) -> ! {
     create_surface(fd, COMPOSITOR_ID, SURFACE_ID);
     get_xdg_surface(fd, WM_BASE_ID, XDG_SURFACE_ID, SURFACE_ID);
     get_toplevel(fd, XDG_SURFACE_ID, TOPLEVEL_ID);
-    set_toplevel_title(fd, TOPLEVEL_ID, "Terminal");
+    set_toplevel_title(fd, TOPLEVEL_ID, "Leaf");
     set_toplevel_app_id(fd, TOPLEVEL_ID, "thingos.leaf");
     commit_surface(fd, SURFACE_ID);
 
