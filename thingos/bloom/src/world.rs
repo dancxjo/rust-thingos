@@ -368,6 +368,7 @@ impl BloomWorld {
     /// present it.  Returns the composition list on success so frame callbacks
     /// can be sent, or `None` on failure (damage is restored internally).
     pub fn try_present(&mut self) -> Option<Vec<CompositionEntry>> {
+        self.input.flush_pointer_grab(&mut self.scene, &mut self.damage, self.wayland_evt_write);
         let composition = self.scene.collect_composition();
         // Flush coalesced pointer motion: deliver the latest position to
         // clients once per frame rather than per raw sample.

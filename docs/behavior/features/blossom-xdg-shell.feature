@@ -94,12 +94,13 @@ Feature: blossom xdg-shell lifecycle
     When I click inside the Wayland hello client and press A
     Then the Wayland hello client should receive pointer and keyboard input
 
-  @pointer-debug
+  @pointer-debug @titlebar-drag
   Scenario: dragging the title bar moves a toplevel window
     Given the client has an xdg_toplevel
     Then the Wayland hello client should be visible
     When I drag the Wayland hello title bar
     Then the compositor should move the toplevel window
+    And the dragged window should keep a stable cursor offset
 
   @pointer-debug
   Scenario: dragging the frame resizes a toplevel window

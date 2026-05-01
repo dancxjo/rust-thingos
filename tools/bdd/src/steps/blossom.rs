@@ -942,6 +942,54 @@ async fn compositor_moves_toplevel_window(world: &mut ThingOsWorld) -> Result<()
     Ok(())
 }
 
+#[then("the dragged window should keep a stable cursor offset")]
+async fn dragged_window_keeps_stable_cursor_offset(
+    world: &mut ThingOsWorld,
+) -> Result<(), StepError> {
+    let log = world.get_serial_log().await;
+    let start_re = regex::Regex::new(
+        r"bloom: window drag started surface=(\d+) pointer=(-?\d+),(-?\d+) offset=(-?\d+),(-?\d+)",
+    )
+    .unwrap();
+    let move_re = regex::Regex::new(
+        r"bloom: window drag moved surface=(\d+) to (-?\d+),(-?\d+) pointer=(-?\d+),(-?\d+) offset=(-?\d+),(-?\d+)",
+    )
+    .unwrap();
+
+    let start = start_re
+        .captures_iter(&log)
+        .last()
+        .ok_or_else(|| StepError("No drag-start offset log found".to_string()))?;
+    let surface_id = start[1].to_string();
+    let start_offset_x = start[4]
+        .parse::<i32>()
+        .map_err(|e| StepError(format!("Invalid drag-start x offset: {}", e)))?;
+    let start_offset_y = start[5]
+        .parse::<i32>()
+        .map_err(|e| StepError(format!("Invalid drag-start y offset: {}", e)))?;
+
+    let moved = move_re
+        .captures_iter(&log)
+        .filter(|caps| caps.get(1).map(|m| m.as_str()) == Some(surface_id.as_str()))
+        .last()
+        .ok_or_else(|| StepError("No drag-move offset log found".to_string()))?;
+    let move_offset_x = moved[6]
+        .parse::<i32>()
+        .map_err(|e| StepError(format!("Invalid drag-move x offset: {}", e)))?;
+    let move_offset_y = moved[7]
+        .parse::<i32>()
+        .map_err(|e| StepError(format!("Invalid drag-move y offset: {}", e)))?;
+
+    if (move_offset_x, move_offset_y) != (start_offset_x, start_offset_y) {
+        return Err(StepError(format!(
+            "Dragged window cursor offset changed from {},{} to {},{}",
+            start_offset_x, start_offset_y, move_offset_x, move_offset_y
+        )));
+    }
+
+    Ok(())
+}
+
 #[when("I click inside the Wayland hello client and press A")]
 async fn click_wayland_hello_client_and_press_a(world: &mut ThingOsWorld) -> Result<(), StepError> {
     if world.qmp_control.is_none() {

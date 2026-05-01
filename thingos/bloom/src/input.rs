@@ -25,6 +25,7 @@ const CURSOR_HOTSPOT_X: i32 = 96;
 const CURSOR_HOTSPOT_Y: i32 = 96;
 const MIN_RESIZE_W: u32 = 160;
 const MIN_RESIZE_H: u32 = 96;
+const TITLEBAR_DRAG_MAX_DELTA: i32 = 24;
 static POINTER_MOVE_LOGS: AtomicU32 = AtomicU32::new(0);
 static CURSOR_SMOOTHING_LOGS: AtomicU32 = AtomicU32::new(0);
 /// Counts every raw PointerMove event received (pre-coalesce).
@@ -226,6 +227,18 @@ impl InputState {
         }
     }
 
+    pub fn flush_pointer_grab(
+        &mut self,
+        scene: &mut Scene,
+        damage: &mut DamageTracker,
+        wayland_evt_write: Option<u32>,
+    ) {
+        let Some(PointerGrab { kind: PointerGrabKind::Move { .. }, .. }) = self.pointer_grab else {
+            return;
+        };
+        self.update_pointer_grab(scene, damage, wayland_evt_write);
+    }
+
     pub fn flush_resizes(&mut self, wayland_evt_write: Option<u32>) {
         self.resize_sent_this_frame = false;
         let Some((surface_id, width, height)) = self.pending_resize.take() else {
@@ -257,22 +270,32 @@ impl InputState {
                 let mut p = [0u8; PointerMovePayload::SIZE];
                 p.copy_from_slice(&payload[..PointerMovePayload::SIZE]);
                 let move_ev = PointerMovePayload::from_bytes(&p);
-                let dx = move_ev.dx;
-                let dy = move_ev.dy;
+                let mut dx = move_ev.dx as i32;
+                let mut dy = move_ev.dy as i32;
+                if matches!(
+                    self.pointer_grab,
+                    Some(PointerGrab { kind: PointerGrabKind::Move { .. }, .. })
+                ) {
+                    dx = dx.clamp(-TITLEBAR_DRAG_MAX_DELTA, TITLEBAR_DRAG_MAX_DELTA);
+                    dy = dy.clamp(-TITLEBAR_DRAG_MAX_DELTA, TITLEBAR_DRAG_MAX_DELTA);
+                }
                 let old_x = self.pointer_x;
                 let old_y = self.pointer_y;
-                self.pointer_x = self
-                    .pointer_x
-                    .saturating_add(dx as i32)
-                    .clamp(0, self.output_w.saturating_sub(1));
-                self.pointer_y = self
-                    .pointer_y
-                    .saturating_add(dy as i32)
-                    .clamp(0, self.output_h.saturating_sub(1));
+                self.pointer_x =
+                    self.pointer_x.saturating_add(dx).clamp(0, self.output_w.saturating_sub(1));
+                self.pointer_y =
+                    self.pointer_y.saturating_add(dy).clamp(0, self.output_h.saturating_sub(1));
                 if self.pointer_x == old_x && self.pointer_y == old_y {
                     return false;
                 }
                 self.pending_cursor_motion = true;
+                if matches!(
+                    self.pointer_grab,
+                    Some(PointerGrab { kind: PointerGrabKind::Move { .. }, .. })
+                ) {
+                    self.pending_motion_ts = Some(header.timestamp_ns);
+                    return true;
+                }
                 if self.update_pointer_grab(scene, damage, wayland_evt_write) {
                     return true;
                 }
@@ -628,19 +651,20 @@ impl InputState {
         match scene.hit_test(self.pointer_x, self.pointer_y)? {
             HitTarget::TitleBar { surface_id } => {
                 let rect = scene.surface_rect(surface_id)?;
+                let offset_x = self.pointer_x.saturating_sub(rect.x as i32);
+                let offset_y = self.pointer_y.saturating_sub(rect.y as i32);
                 self.pointer_grab = Some(PointerGrab {
                     surface_id,
-                    kind: PointerGrabKind::Move {
-                        offset_x: self.pointer_x.saturating_sub(rect.x as i32),
-                        offset_y: self.pointer_y.saturating_sub(rect.y as i32),
-                    },
+                    kind: PointerGrabKind::Move { offset_x, offset_y },
                 });
                 self.set_cursor_kind(CursorKind::Move, damage);
                 stem::info!(
-                    "bloom: window drag started surface={} pointer={},{}",
+                    "bloom: window drag started surface={} pointer={},{} offset={},{}",
                     surface_id,
                     self.pointer_x,
-                    self.pointer_y
+                    self.pointer_y,
+                    offset_x,
+                    offset_y
                 );
                 Some(surface_id)
             }
@@ -843,11 +867,17 @@ impl InputState {
                 if moved.changed {
                     mark_surface_visual_damage(scene, damage, grab.surface_id, moved.old_rect);
                     mark_surface_visual_damage(scene, damage, grab.surface_id, moved.new_rect);
+                    let cursor_offset_x = self.pointer_x.saturating_sub(moved.new_rect.x as i32);
+                    let cursor_offset_y = self.pointer_y.saturating_sub(moved.new_rect.y as i32);
                     stem::info!(
-                        "bloom: window drag moved surface={} to {},{}",
+                        "bloom: window drag moved surface={} to {},{} pointer={},{} offset={},{}",
                         grab.surface_id,
                         moved.new_rect.x,
-                        moved.new_rect.y
+                        moved.new_rect.y,
+                        self.pointer_x,
+                        self.pointer_y,
+                        cursor_offset_x,
+                        cursor_offset_y
                     );
                 }
                 true

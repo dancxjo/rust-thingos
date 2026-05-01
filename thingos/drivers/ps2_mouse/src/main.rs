@@ -465,7 +465,21 @@ fn flush_motion_if_due(bristle_pid: u32, motion: &mut MotionCoalescer, drop_coun
     if !motion.due(now_ns) {
         return;
     }
+    flush_one_motion(bristle_pid, motion, drop_counter, now_ns);
+}
 
+fn flush_motion_now(bristle_pid: u32, motion: &mut MotionCoalescer, drop_counter: &mut u32) {
+    if motion.has_pending() {
+        flush_one_motion(bristle_pid, motion, drop_counter, stem::monotonic_ns());
+    }
+}
+
+fn flush_one_motion(
+    bristle_pid: u32,
+    motion: &mut MotionCoalescer,
+    drop_counter: &mut u32,
+    now_ns: u64,
+) {
     let (dx, dy) = motion.take(now_ns);
     if dx == 0 && dy == 0 {
         return;
@@ -493,7 +507,7 @@ fn send_mouse_events(
                     flush_motion_if_due(bristle_pid, motion, drop_counter);
                 }
                 PointerEvent::ButtonDown { button } => {
-                    flush_motion_if_due(bristle_pid, motion, drop_counter);
+                    flush_motion_now(bristle_pid, motion, drop_counter);
                     let payload = PointerButtonPayload { button, _pad: 0 };
                     if !send_pointer_event(
                         bristle_pid,
@@ -504,7 +518,7 @@ fn send_mouse_events(
                     }
                 }
                 PointerEvent::ButtonUp { button } => {
-                    flush_motion_if_due(bristle_pid, motion, drop_counter);
+                    flush_motion_now(bristle_pid, motion, drop_counter);
                     let payload = PointerButtonPayload { button, _pad: 0 };
                     if !send_pointer_event(
                         bristle_pid,
