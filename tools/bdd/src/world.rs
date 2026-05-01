@@ -67,6 +67,8 @@ pub enum QmpEndpoint {
 #[derive(Clone, Copy, Debug, Default)]
 struct BootOptions {
     qemu_xhci: bool,
+    /// Attach a freshly-created FAT disk image via the xHCI USB controller.
+    usb_fat_image: bool,
 }
 
 pub(crate) trait QmpStream: AsyncRead + AsyncWrite {}
@@ -225,7 +227,19 @@ impl ThingOsWorld {
         &mut self,
         arch: &str,
     ) -> Result<(), Box<dyn std::error::Error>> {
-        self.boot_with_options(arch, BootOptions { qemu_xhci: true }).await
+        self.boot_with_options(arch, BootOptions { qemu_xhci: true, usb_fat_image: false }).await
+    }
+
+    /// Boot the OS with a USB FAT disk image attached via the xHCI controller.
+    ///
+    /// Creates a small MBR-partitioned FAT16 disk image containing a single
+    /// `hello.txt` file in the work directory, then passes it to QEMU as a
+    /// USB mass-storage device.
+    pub async fn boot_with_usb_fat_image(
+        &mut self,
+        arch: &str,
+    ) -> Result<(), Box<dyn std::error::Error>> {
+        self.boot_with_options(arch, BootOptions { qemu_xhci: true, usb_fat_image: true }).await
     }
 
     async fn boot_with_options(
@@ -325,6 +339,16 @@ impl ThingOsWorld {
         self.iso_path = Some(iso_path.clone());
         eprintln!("[bdd] ISO ready: {}", iso_path.display());
 
+        // Optionally build a USB FAT disk image before starting QEMU.
+        let usb_fat_path = if options.usb_fat_image {
+            let fat_img = self.work_dir.join("usb.img");
+            Self::create_usb_fat_image(&fat_img)?;
+            eprintln!("[bdd] USB FAT image ready: {}", fat_img.display());
+            Some(fat_img)
+        } else {
+            None
+        };
+
         let ovmf_code = format!("vendor/ovmf/ovmf-code-{}.fd", arch);
         let ovmf_vars = format!("vendor/ovmf/ovmf-vars-{}.fd", arch);
 
@@ -366,7 +390,20 @@ impl ThingOsWorld {
                 cmd.args(["-device", "virtio-vga"]);
                 if options.qemu_xhci {
                     cmd.args(["-device", "qemu-xhci,id=xhci"]);
-                    cmd.args(["-blockdev", "driver=null-co,node-name=usbdisk,size=1073741824"]);
+                    if let Some(ref fat_path) = usb_fat_path {
+                        cmd.args([
+                            "-blockdev",
+                            &format!(
+                                "driver=raw,node-name=usbdisk,file.driver=file,file.filename={}",
+                                fat_path.to_string_lossy()
+                            ),
+                        ]);
+                    } else {
+                        cmd.args([
+                            "-blockdev",
+                            "driver=null-co,node-name=usbdisk,size=1073741824",
+                        ]);
+                    }
                     cmd.args(["-device", "usb-storage,bus=xhci.0,drive=usbdisk"]);
                 }
                 cmd.args([
@@ -839,6 +876,224 @@ impl ThingOsWorld {
             tokio::time::sleep(std::time::Duration::from_millis(100)).await;
         }
     }
+
+    /// Create a small MBR-partitioned FAT16 disk image at `path`.
+    ///
+    /// The image contains a single FAT partition and a `hello.txt` file with
+    /// the text "hello from USB\n".  Uses Linux utilities (`mkdosfs`,
+    /// `mtools`) when available; falls back to writing a pre-built raw
+    /// image when they are not.
+    fn create_usb_fat_image(path: &Path) -> Result<(), Box<dyn std::error::Error>> {
+        // Image size: 16 MiB
+        const IMG_SIZE: u64 = 16 * 1024 * 1024;
+        // Partition starts at LBA 2048 (1 MiB alignment)
+        const PART_START_LBA: u64 = 2048;
+        const SECTOR_SIZE: u64 = 512;
+
+        // Try using mkdosfs + mtools if available
+        if std::process::Command::new("mkdosfs").arg("--help").output().is_ok() {
+            if let Ok(()) =
+                Self::create_usb_fat_image_with_tools(path, IMG_SIZE, PART_START_LBA)
+            {
+                return Ok(());
+            }
+        }
+        // Fall back to a manually built minimal FAT16 image
+        Self::create_usb_fat_image_minimal(path, IMG_SIZE, PART_START_LBA, SECTOR_SIZE)
+    }
+
+    /// Create a USB FAT disk image using standard Linux disk utilities.
+    fn create_usb_fat_image_with_tools(
+        path: &Path,
+        img_size: u64,
+        part_start_lba: u64,
+    ) -> Result<(), Box<dyn std::error::Error>> {
+        const SECTOR_SIZE: u64 = 512;
+        let part_start_bytes = part_start_lba * SECTOR_SIZE;
+        let part_size_bytes = img_size - part_start_bytes;
+
+        // Create sparse image file
+        let out = std::process::Command::new("dd")
+            .args([
+                "if=/dev/zero",
+                &format!("of={}", path.display()),
+                "bs=512",
+                "count=0",
+                &format!("seek={}", img_size / SECTOR_SIZE),
+            ])
+            .output()?;
+        if !out.status.success() {
+            return Err(
+                format!("dd failed: {}", String::from_utf8_lossy(&out.stderr)).into(),
+            );
+        }
+
+        // Write MBR with one partition entry
+        {
+            use std::io::{Seek, Write};
+            let mut f = std::fs::OpenOptions::new().read(true).write(true).open(path)?;
+            let mut mbr = [0u8; 512];
+            let p = &mut mbr[446..462];
+            p[4] = 0x06; // FAT16 >= 32 MiB
+            // CHS start/end: set to maximum (0xFE/0xFF) for LBA-only addressing
+            p[1] = 0xFE; p[2] = 0xFF; p[3] = 0xFF;
+            p[5] = 0xFE; p[6] = 0xFF; p[7] = 0xFF;
+            let start = part_start_lba as u32;
+            let size = (part_size_bytes / SECTOR_SIZE) as u32;
+            p[8..12].copy_from_slice(&start.to_le_bytes());
+            p[12..16].copy_from_slice(&size.to_le_bytes());
+            mbr[510] = 0x55;
+            mbr[511] = 0xAA;
+            f.seek(std::io::SeekFrom::Start(0))?;
+            f.write_all(&mbr)?;
+        }
+
+        // Format partition
+        let offset_arg = format!("--offset={}", part_start_lba);
+        let mkdosfs_out = std::process::Command::new("mkdosfs")
+            .args(["-F", "16", "-n", "USBVOL", &offset_arg, &path.to_string_lossy()])
+            .output()?;
+        if !mkdosfs_out.status.success() {
+            return Err(format!(
+                "mkdosfs failed: {}",
+                String::from_utf8_lossy(&mkdosfs_out.stderr)
+            )
+            .into());
+        }
+
+        // Write hello.txt via mcopy
+        let drive_spec = format!("-i{}@@{}", path.to_string_lossy(), part_start_lba * 512);
+        let mut child = std::process::Command::new("mcopy")
+            .args([&drive_spec, "-", "::hello.txt"])
+            .stdin(std::process::Stdio::piped())
+            .spawn()?;
+        {
+            use std::io::Write;
+            child.stdin.as_mut().unwrap().write_all(b"hello from USB\n")?;
+        }
+        let mcopy_out = child.wait_with_output()?;
+        if !mcopy_out.status.success() {
+            eprintln!(
+                "[bdd] mcopy warning: {}",
+                String::from_utf8_lossy(&mcopy_out.stderr)
+            );
+        }
+
+        Ok(())
+    }
+
+    /// Build a minimal FAT16 disk image in pure Rust without external tools.
+    fn create_usb_fat_image_minimal(
+        path: &Path,
+        img_size: u64,
+        part_start_lba: u64,
+        sector_size: u64,
+    ) -> Result<(), Box<dyn std::error::Error>> {
+        use std::io::Write;
+
+        const SECTORS_PER_CLUSTER: u32 = 4;
+        const RESERVED_SECTORS: u32 = 4;
+        const NUM_FATS: u32 = 2;
+        const ROOT_ENTRY_COUNT: u32 = 512;
+        const MEDIA_BYTE: u8 = 0xF8;
+
+        let total_lba = (img_size / sector_size) as u32;
+        let part_sectors = total_lba - part_start_lba as u32;
+        let root_dir_sectors =
+            (ROOT_ENTRY_COUNT * 32 + sector_size as u32 - 1) / sector_size as u32;
+        // Rough FAT size estimate
+        let fat_size: u32 = {
+            let data_sectors = part_sectors
+                .saturating_sub(RESERVED_SECTORS + NUM_FATS * 8 + root_dir_sectors);
+            let n_clusters = data_sectors / SECTORS_PER_CLUSTER;
+            (n_clusters * 2 + sector_size as u32 - 1) / sector_size as u32
+        };
+        let data_start_lba =
+            RESERVED_SECTORS + NUM_FATS * fat_size + root_dir_sectors;
+
+        let mut img = vec![0u8; img_size as usize];
+
+        // MBR
+        {
+            let p = &mut img[446..462];
+            p[4] = 0x06; // FAT16 >= 32 MiB partition type
+            // CHS start/end: set to maximum (0xFE/0xFF) for LBA-only addressing
+            p[1] = 0xFE; p[2] = 0xFF; p[3] = 0xFF;
+            p[5] = 0xFE; p[6] = 0xFF; p[7] = 0xFF;
+            p[8..12].copy_from_slice(&(part_start_lba as u32).to_le_bytes());
+            p[12..16].copy_from_slice(&part_sectors.to_le_bytes());
+        }
+        img[510] = 0x55;
+        img[511] = 0xAA;
+
+        // Boot sector
+        let bs = part_start_lba as usize * sector_size as usize;
+        {
+            let s = &mut img[bs..bs + sector_size as usize];
+            s[0] = 0xEB; s[1] = 0x58; s[2] = 0x90;
+            s[3..11].copy_from_slice(b"MSWIN4.1");
+            s[11..13].copy_from_slice(&(sector_size as u16).to_le_bytes());
+            s[13] = SECTORS_PER_CLUSTER as u8;
+            s[14..16].copy_from_slice(&(RESERVED_SECTORS as u16).to_le_bytes());
+            s[16] = NUM_FATS as u8;
+            s[17..19].copy_from_slice(&(ROOT_ENTRY_COUNT as u16).to_le_bytes());
+            let ts16: u16 = if part_sectors < 0x10000 { part_sectors as u16 } else { 0 };
+            s[19..21].copy_from_slice(&ts16.to_le_bytes());
+            s[21] = MEDIA_BYTE;
+            s[22..24].copy_from_slice(&(fat_size as u16).to_le_bytes());
+            s[24..26].copy_from_slice(&63u16.to_le_bytes()); // sectors-per-track (legacy CHS)
+            s[26..28].copy_from_slice(&255u16.to_le_bytes()); // number of heads (legacy CHS)
+            s[28..32].copy_from_slice(&(part_start_lba as u32).to_le_bytes());
+            if ts16 == 0 {
+                s[32..36].copy_from_slice(&part_sectors.to_le_bytes());
+            }
+            s[36] = 0x80; // drive number: first hard disk
+            s[38] = 0x29; // extended boot record signature
+            // Volume serial number: fixed value (arbitrary, non-zero)
+            s[39..43].copy_from_slice(&0xDEAD_BEEFu32.to_le_bytes());
+            s[43..54].copy_from_slice(b"USBVOL     ");
+            s[54..62].copy_from_slice(b"FAT16   ");
+            s[510] = 0x55;
+            s[511] = 0xAA;
+        }
+
+        // FAT1
+        let fat1 = (part_start_lba as u32 + RESERVED_SECTORS) as usize * sector_size as usize;
+        img[fat1] = MEDIA_BYTE; img[fat1 + 1] = 0xFF;
+        img[fat1 + 2] = 0xFF; img[fat1 + 3] = 0xFF;
+        // Cluster 2: end-of-chain
+        img[fat1 + 4] = 0xFF; img[fat1 + 5] = 0xFF;
+
+        // FAT2 mirror
+        let fat2 = fat1 + fat_size as usize * sector_size as usize;
+        img.copy_within(fat1..fat1 + fat_size as usize * sector_size as usize, fat2);
+
+        // Root directory
+        let root =
+            (part_start_lba as u32 + RESERVED_SECTORS + NUM_FATS * fat_size) as usize
+                * sector_size as usize;
+        // Volume label entry
+        img[root..root + 11].copy_from_slice(b"USBVOL     ");
+        img[root + 11] = 0x08;
+        // hello.txt entry at +32
+        let e = root + 32;
+        img[e..e + 8].copy_from_slice(b"HELLO   ");
+        img[e + 8..e + 11].copy_from_slice(b"TXT");
+        img[e + 11] = 0x20;
+        let content = b"hello from USB\n";
+        img[e + 26] = 2; // first cluster low
+        img[e + 27] = 0;
+        let fsz = content.len() as u32;
+        img[e + 28..e + 32].copy_from_slice(&fsz.to_le_bytes());
+
+        // File data at cluster 2
+        let data = (part_start_lba as u32 + data_start_lba) as usize * sector_size as usize;
+        img[data..data + content.len()].copy_from_slice(content);
+
+        let mut f = std::fs::File::create(path)?;
+        f.write_all(&img)?;
+        Ok(())
+    }
 }
 
 /// Strip ANSI escape sequences and carriage returns from a string.
@@ -868,5 +1123,67 @@ mod tests {
         assert_eq!(ThingOsWorld::parse_timeout_tag("smoke"), None);
         assert_eq!(ThingOsWorld::parse_timeout_tag("timeout.0s"), None);
         assert_eq!(ThingOsWorld::parse_timeout_tag("timeout.bad"), None);
+    }
+
+    /// Smoke-test the minimal FAT image builder: write the image to a temp
+    /// file, parse the MBR and the FAT16 boot sector, and verify the
+    /// `hello.txt` directory entry is present.
+    #[test]
+    fn create_usb_fat_image_minimal_produces_valid_fat16() {
+        let dir = std::env::temp_dir().join("fat_image_test");
+        std::fs::create_dir_all(&dir).unwrap();
+        let path = dir.join("usb.img");
+
+        ThingOsWorld::create_usb_fat_image_minimal(
+            &path,
+            16 * 1024 * 1024, // 16 MiB
+            2048,              // partition LBA
+            512,               // sector size
+        )
+        .expect("create_usb_fat_image_minimal should succeed");
+
+        let img = std::fs::read(&path).expect("image file should exist");
+        assert_eq!(img.len(), 16 * 1024 * 1024);
+
+        // MBR signature
+        assert_eq!(img[510], 0x55);
+        assert_eq!(img[511], 0xAA);
+
+        // Partition entry 0 should point to LBA 2048
+        let start_lba =
+            u32::from_le_bytes(img[446 + 8..446 + 12].try_into().unwrap());
+        assert_eq!(start_lba, 2048);
+
+        // Boot sector of the partition
+        let bs = 2048 * 512;
+        assert_eq!(img[bs + 510], 0x55);
+        assert_eq!(img[bs + 511], 0xAA);
+
+        // bytes_per_sector == 512
+        let bps = u16::from_le_bytes([img[bs + 11], img[bs + 12]]);
+        assert_eq!(bps, 512);
+
+        // FAT type string
+        assert_eq!(&img[bs + 54..bs + 62], b"FAT16   ");
+
+        // Find "HELLO   TXT" in the root directory (somewhere after the FATs)
+        let reserved = u16::from_le_bytes([img[bs + 14], img[bs + 15]]) as usize;
+        let num_fats = img[bs + 16] as usize;
+        let fat_size = u16::from_le_bytes([img[bs + 22], img[bs + 23]]) as usize;
+        let root_off = (2048 + reserved + num_fats * fat_size) * 512;
+        let found_hello = (0..512 / 32).any(|i| {
+            let e = &img[root_off + i * 32..root_off + (i + 1) * 32];
+            &e[0..8] == b"HELLO   " && &e[8..11] == b"TXT"
+        });
+        assert!(found_hello, "HELLO.TXT entry not found in root directory");
+
+        // File content
+        let root_entry_count =
+            u16::from_le_bytes([img[bs + 17], img[bs + 18]]) as usize;
+        let root_dir_sectors_count = root_entry_count * 32 / 512;
+        let cluster2_sector =
+            2048 + reserved + num_fats * fat_size + root_dir_sectors_count;
+        let file_data_off = cluster2_sector * 512;
+        assert_eq!(&img[file_data_off..file_data_off + 15], b"hello from USB\n");
     }
 }
