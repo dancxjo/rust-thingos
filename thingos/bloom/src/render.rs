@@ -273,8 +273,11 @@ impl CompositorVisuals {
     /// The call is a no-op when the requested path matches the path of the
     /// wallpaper that is already loaded, avoiding redundant decode+import work
     /// when the watch service fires but the path has not changed.
+    ///
+    /// `wallpaper_path` is only set after a successful `prepare_background`
+    /// call, so a `Some` value here implies the background buffer is loaded.
     pub fn start_background_load(&mut self, display: &DisplayBackend, wallpaper_path: &str) {
-        if self.wallpaper_path.as_deref() == Some(wallpaper_path) && self.background.is_some() {
+        if self.wallpaper_path.as_deref() == Some(wallpaper_path) {
             stem::debug!(
                 "bloom: wallpaper '{}' already loaded, skipping reload",
                 wallpaper_path
