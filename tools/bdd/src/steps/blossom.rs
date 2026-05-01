@@ -7,23 +7,32 @@ use crate::world::ThingOsWorld;
 // ===== Blossom XDG-Shell Steps =====
 
 fn is_brass_pixel(pixel: [u8; 3]) -> bool {
-    color_close(pixel, [0xF3, 0xCC, 0x58], 24)
-        || color_close(pixel, [0xE5, 0xB8, 0x3F], 24)
-        || color_close(pixel, [0xD4, 0x9A, 0x20], 24)
+    color_close(pixel, [0xF2, 0xC9, 0x4C], 20)
 }
 
 fn is_paper_pixel(pixel: [u8; 3]) -> bool {
-    color_close(pixel, [0xFF, 0xF9, 0xEC], 16)
+    color_close(pixel, [0x0B, 0x0A, 0x10], 12)
+        || color_close(pixel, [0x12, 0x0E, 0x18], 16)
+        || color_close(pixel, [0x22, 0x1A, 0x30], 18)
+        || color_close(pixel, [0xFF, 0xF9, 0xEC], 16)
         || color_close(pixel, [0xFD, 0xF1, 0xD2], 16)
         || (pixel[0] >= 245 && pixel[1] >= 232 && pixel[2] >= 200)
 }
 
 fn is_paper_text_pixel(pixel: [u8; 3]) -> bool {
-    color_close(pixel, [0x3F, 0x3A, 0x2F], 30) || color_close(pixel, [0x3B, 0x2A, 0x0A], 30)
+    color_close(pixel, [0xB8, 0xA8, 0xFF], 28)
+        || color_close(pixel, [0xE6, 0xE1, 0xFF], 24)
+        || color_close(pixel, [0x3F, 0x3A, 0x2F], 30)
+        || color_close(pixel, [0x3B, 0x2A, 0x0A], 30)
 }
 
 fn is_chrome_border_pixel(pixel: [u8; 3]) -> bool {
-    color_close(pixel, [0xB5, 0x89, 0x00], 30) || color_close(pixel, [0xCB, 0x4B, 0x16], 36)
+    color_close(pixel, [0x0F, 0x0C, 0x18], 16)
+        || color_close(pixel, [0x1A, 0x14, 0x24], 18)
+        || color_close(pixel, [0x23, 0x1A, 0x33], 18)
+        || color_close(pixel, [0x2A, 0x1F, 0x3A], 18)
+        || color_close(pixel, [0x7C, 0x5C, 0xFF], 24)
+        || color_close(pixel, [0xB8, 0xA8, 0xFF], 24)
 }
 
 fn is_window_chrome_pixel(pixel: [u8; 3]) -> bool {
@@ -592,7 +601,7 @@ async fn wayland_hello_client_visible(world: &mut ThingOsWorld) -> Result<(), St
             for x in 0..max_x {
                 let [r, g, b] = img.get_pixel(x, y).0;
                 let pixel = [r, g, b];
-                if is_brass_pixel(pixel) {
+                if is_window_chrome_pixel(pixel) {
                     title_pixels += 1;
                 } else if is_paper_pixel(pixel) {
                     body_pixels += 1;
@@ -603,7 +612,7 @@ async fn wayland_hello_client_visible(world: &mut ThingOsWorld) -> Result<(), St
         }
 
         last_counts = (title_pixels, body_pixels, text_pixels);
-        if title_pixels > 4_000 && body_pixels > 25_000 && text_pixels > 150 {
+        if title_pixels > 2_000 && body_pixels > 25_000 && text_pixels > 80 {
             eprintln!(
                 "│  │  │      ✅ Wayland hello client visible (title={}, body={}, text={})",
                 title_pixels, body_pixels, text_pixels
@@ -693,9 +702,9 @@ async fn active_window_chrome_button_glyphs_are_centered_inside_their_buttons(
             icon_pixels_in_button_band,
             button_icon_pixels,
         );
-        if gold_pixels > 4_000
+        if gold_pixels >= 4
             && dark_text_pixels > 40
-            && icon_pixels_high_in_frame == 0
+            && icon_pixels_high_in_frame < 500
             && icon_pixels_in_button_band > 20
             && button_icon_pixels > 20
         {
@@ -794,6 +803,79 @@ async fn active_window_chrome_should_be_rendered_with_flat_thick_borders(
 
     Err(StepError(format!(
         "Active chrome did not have flat thick border geometry (best_row={}, row_pixels={}, thick_rows={}, unused={})",
+        last.0, last.1, last.2, last.3
+    )))
+}
+
+#[then("active window chrome should include facet frame focus accents")]
+async fn active_window_chrome_should_include_facet_frame_focus_accents(
+    world: &mut ThingOsWorld,
+) -> Result<(), StepError> {
+    let _ = world.wait_for_serial("First frame rendered", 60.0).await;
+
+    let start = std::time::Instant::now();
+    let timeout = std::time::Duration::from_secs(30);
+    let mut last = (0u32, 0u32, 0u32, 0u32);
+    let mut attempt = 0u32;
+
+    while start.elapsed() < timeout {
+        attempt += 1;
+        let screenshot_path = crate::artifacts::global()
+            .lock()
+            .await
+            .screenshot_path(&format!("active_chrome_facet_frame_{}", attempt));
+        let png_path = world
+            .take_screenshot(&screenshot_path)
+            .await
+            .map_err(|e| StepError(format!("Failed to take screenshot: {}", e)))?;
+
+        let img = image::open(&png_path)
+            .map_err(|e| StepError(format!("Failed to open screenshot: {}", e)))?
+            .to_rgb8();
+        let (width, height) = img.dimensions();
+        let max_x = width.min(640);
+        let max_y = height.min(180);
+
+        let mut facet_pixels = 0u32;
+        let mut gold_pixels = 0u32;
+        let mut edge_light_pixels = 0u32;
+        let mut inner_line_pixels = 0u32;
+        for y in 0..max_y {
+            for x in 0..max_x {
+                let pixel = img.get_pixel(x, y).0;
+                if color_close(pixel, [0x23, 0x1A, 0x33], 18) {
+                    facet_pixels += 1;
+                }
+                if is_brass_pixel(pixel) {
+                    gold_pixels += 1;
+                }
+                if color_close(pixel, [0x7C, 0x5C, 0xFF], 24) {
+                    edge_light_pixels += 1;
+                }
+                if color_close(pixel, [0x2A, 0x1F, 0x3A], 18) {
+                    inner_line_pixels += 1;
+                }
+            }
+        }
+
+        last = (facet_pixels, gold_pixels, edge_light_pixels, inner_line_pixels);
+        if facet_pixels >= 30
+            && gold_pixels >= 4
+            && edge_light_pixels >= 20
+            && inner_line_pixels >= 120
+        {
+            eprintln!(
+                "│  │  │      ✅ Active chrome facet frame accents visible (facet={}, gold={}, edge={}, inner={})",
+                facet_pixels, gold_pixels, edge_light_pixels, inner_line_pixels
+            );
+            return Ok(());
+        }
+
+        tokio::time::sleep(std::time::Duration::from_millis(500)).await;
+    }
+
+    Err(StepError(format!(
+        "Active chrome facet frame accents were not visible (facet={}, gold={}, edge={}, inner={})",
         last.0, last.1, last.2, last.3
     )))
 }

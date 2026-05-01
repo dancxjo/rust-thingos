@@ -105,6 +105,9 @@ impl BloomWorld {
             ClientRequest::DestroySurface(req) => {
                 let client_id = req.client_id;
                 let surface_id = req.surface_id;
+                if let Some(rect) = self.scene.surface_visual_rect(surface_id) {
+                    self.damage.mark_rect(rect);
+                }
                 let Some(release_ids) = self.scene.destroy_surface(client_id, surface_id) else {
                     send_ack(req.reply_port, 1, 0, 0);
                     return false;
@@ -113,7 +116,6 @@ impl BloomWorld {
                     self.display.release_buffer(id);
                 }
                 send_ack(req.reply_port, 0, surface_id, 0);
-                self.damage.mark_dirty();
                 self.remove_wayland_session_surface(
                     surface_id,
                     alloc::format!("surface_destroyed id={}\n", surface_id),
@@ -209,7 +211,12 @@ impl BloomWorld {
             ClientRequest::Commit(req) => {
                 let client_id = req.client_id;
                 let surface_id = req.surface_id;
-                let Some(result) = self.scene.commit_surface(client_id, surface_id) else {
+                let Some(result) = self.scene.commit_surface(
+                    client_id,
+                    surface_id,
+                    self.primary.width,
+                    self.primary.height,
+                ) else {
                     send_ack(req.reply_port, 1, 0, 0);
                     return false;
                 };
@@ -331,8 +338,13 @@ impl BloomWorld {
             None
         };
         let cursor_kind = self.input.visible_cursor_kind();
-        let (body_overlay, chrome_overlay) =
-            self.visuals.chrome_overlay_plane(&self.display, &composition);
+        let (body_overlay, chrome_overlay) = self.visuals.chrome_overlay_plane(
+            &self.display,
+            &composition,
+            pointer_x,
+            pointer_y,
+            self.input.primary_button_down(),
+        );
         let cursor = self.visuals.cursor_plane(&self.display, cursor_kind, pointer_x, pointer_y);
 
         let mut flags = if self.vsync_enabled {

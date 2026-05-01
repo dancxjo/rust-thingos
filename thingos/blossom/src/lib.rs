@@ -56,7 +56,7 @@ pub type ClientId = u32;
 pub type ConfigureSerial = u32;
 
 /// Initial compositor-known title bar height for v1 toplevel chrome.
-pub const DEFAULT_TITLEBAR_HEIGHT: u32 = 30;
+pub const DEFAULT_TITLEBAR_HEIGHT: u32 = 28;
 /// Initial compositor-known frame thickness for v1 toplevel chrome.
 pub const DEFAULT_FRAME_THICKNESS: u32 = 6;
 

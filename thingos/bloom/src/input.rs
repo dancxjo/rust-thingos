@@ -51,6 +51,7 @@ pub struct InputState {
     /// frame rather than per sample.  `None` means no motion since last flush.
     pending_motion_ts: Option<u64>,
     pointer_overlay_enabled: bool,
+    primary_button_down: bool,
     pointer_grab: Option<PointerGrab>,
     cursor_kind: CursorKind,
     visible_cursor_kind: CursorKind,
@@ -90,6 +91,7 @@ impl InputState {
             pending_cursor_motion: false,
             pending_motion_ts: None,
             pointer_overlay_enabled: false,
+            primary_button_down: false,
             pointer_grab: None,
             cursor_kind: CursorKind::Default,
             visible_cursor_kind: CursorKind::Default,
@@ -132,6 +134,10 @@ impl InputState {
 
     pub fn pointer_overlay_enabled(&self) -> bool {
         self.pointer_overlay_enabled
+    }
+
+    pub fn primary_button_down(&self) -> bool {
+        self.primary_button_down
     }
 
     pub fn visible_cursor_kind(&self) -> CursorKind {
@@ -298,6 +304,9 @@ impl InputState {
                     self.pointer_y,
                     btn.button
                 );
+                if btn.button == 0 {
+                    self.primary_button_down = true;
+                }
                 // Flush any pending coalesced motion so clients see the latest
                 // position before the button event (preserves ordering).
                 // flush_pointer_motion calls update_pointer_focus internally
@@ -384,6 +393,9 @@ impl InputState {
                 let mut p = [0u8; PointerButtonPayload::SIZE];
                 p.copy_from_slice(&payload[..PointerButtonPayload::SIZE]);
                 let btn = PointerButtonPayload::from_bytes(&p);
+                if btn.button == 0 {
+                    self.primary_button_down = false;
+                }
                 // Flush any pending coalesced motion before the button-up event.
                 // flush_pointer_motion calls update_pointer_focus internally
                 // when motion was pending; only call it directly when there

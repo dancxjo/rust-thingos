@@ -107,7 +107,7 @@ fn main(_arg: usize) -> ! {
     let initial_theme = ensure_theme_config(THEME_PATH);
     let applied_theme = visuals.set_theme_by_name(&initial_theme);
     stem::info!("bloom: initial theme configured {}", applied_theme);
-    visuals.prepare_solid_background(&display, 0xFFCCCCFF);
+    visuals.prepare_solid_background(&display, 0xFF0B0A10);
     let initial_wallpaper = ensure_wallpaper_config(WP_PATH);
     stem::info!("bloom: initial wallpaper configured {}", initial_wallpaper);
     visuals.prepare_cursor(&display);

@@ -70,6 +70,7 @@ Feature: blossom xdg-shell lifecycle
     And the compositor should render themed window bodies
     And active window chrome button glyphs should be centered inside their buttons
     And active window chrome should be rendered with flat thick borders
+    And active window chrome should include facet frame focus accents
 
   @wayland-visible @wayland-fs
   Scenario: displayed Wayland windows are visible through the session filesystem

@@ -526,8 +526,14 @@ impl Scene {
         Some(SurfaceToggle { old_rect, new_rect, changed, active: surface.is_fullscreen })
     }
 
-    pub fn commit_surface(&mut self, client_id: u32, surface_id: u32) -> Option<CommitResult> {
-        let existing_standalone_windows = self
+    pub fn commit_surface(
+        &mut self,
+        client_id: u32,
+        surface_id: u32,
+        screen_w: u32,
+        screen_h: u32,
+    ) -> Option<CommitResult> {
+        let existing_rects: Vec<Rect> = self
             .surfaces
             .values()
             .filter(|surface| {
@@ -537,7 +543,9 @@ impl Scene {
                     && surface.mapped
                     && surface.current.buffer.is_some()
             })
-            .count() as u32;
+            .map(|s| s.current.dest_rect)
+            .collect();
+
         let next_z = self
             .surfaces
             .values()
@@ -575,8 +583,10 @@ impl Scene {
                         h: pending_buf.height,
                     }
                 } else {
-                    cascaded_window_rect(
-                        existing_standalone_windows,
+                    airy_window_rect(
+                        screen_w,
+                        screen_h,
+                        &existing_rects,
                         pending_buf.width,
                         pending_buf.height,
                     )
@@ -889,6 +899,115 @@ impl Scene {
 
         (old_focus, new_focus)
     }
+}
+
+fn airy_window_rect(
+    screen_w: u32,
+    screen_h: u32,
+    existing_windows: &[Rect],
+    width: u32,
+    height: u32,
+) -> Rect {
+    let padding_x = 40;
+    let padding_y = 60; // Leave space for a top bar / menu
+
+    // If no windows, start at top-left
+    if existing_windows.is_empty() {
+        return Rect { x: padding_x, y: padding_y, w: width, h: height };
+    }
+
+    // Candidates for "urinal etiquette" placement:
+    // Prefer corners and edges, maximizing distance from neighbors.
+    let mut candidates = Vec::new();
+
+    // 1. The four corners
+    candidates.push((padding_x, padding_y));
+    candidates.push((screen_w.saturating_sub(width).saturating_sub(padding_x), padding_y));
+    candidates.push((padding_x, screen_h.saturating_sub(height).saturating_sub(padding_x)));
+    candidates.push((
+        screen_w.saturating_sub(width).saturating_sub(padding_x),
+        screen_h.saturating_sub(height).saturating_sub(padding_x),
+    ));
+
+    // 2. The center
+    candidates.push((
+        screen_w.saturating_sub(width) / 2,
+        (screen_h.saturating_sub(height).saturating_add(padding_y)) / 2,
+    ));
+
+    // 3. Edge midpoints
+    candidates.push((screen_w.saturating_sub(width) / 2, padding_y));
+    candidates.push((
+        screen_w.saturating_sub(width) / 2,
+        screen_h.saturating_sub(height).saturating_sub(padding_x),
+    ));
+    candidates.push((padding_x, screen_h.saturating_sub(height) / 2));
+    candidates.push((
+        screen_w.saturating_sub(width).saturating_sub(padding_x),
+        screen_h.saturating_sub(height) / 2,
+    ));
+
+    let mut best_pos = candidates[0];
+    let mut max_min_dist_sq = -1i64;
+
+    for (cx, cy) in candidates {
+        let cand = Rect { x: cx, y: cy, w: width, h: height };
+
+        // Check for overlap with existing windows
+        let mut overlaps = false;
+        let mut min_dist_sq = i64::MAX;
+
+        for w in existing_windows {
+            if rect_overlaps(cand, *w) {
+                overlaps = true;
+                break;
+            }
+
+            let d_sq = rect_center_dist_sq(cand, *w);
+            if d_sq < min_dist_sq {
+                min_dist_sq = d_sq;
+            }
+        }
+
+        if overlaps {
+            continue;
+        }
+
+        if min_dist_sq > max_min_dist_sq {
+            max_min_dist_sq = min_dist_sq;
+            best_pos = (cx, cy);
+        }
+    }
+
+    if max_min_dist_sq >= 0 {
+        Rect { x: best_pos.0, y: best_pos.1, w: width, h: height }
+    } else {
+        // Fallback to a simple offset cascade if all ideal spots overlap
+        let slot = (existing_windows.len() as u32) % CASCADE_SLOTS;
+        Rect {
+            x: CASCADE_START_X.saturating_add(slot.saturating_mul(CASCADE_STEP_X)),
+            y: CASCADE_START_Y.saturating_add(slot.saturating_mul(CASCADE_STEP_Y)),
+            w: width,
+            h: height,
+        }
+    }
+}
+
+fn rect_overlaps(a: Rect, b: Rect) -> bool {
+    a.x < b.x.saturating_add(b.w)
+        && a.x.saturating_add(a.w) > b.x
+        && a.y < b.y.saturating_add(b.h)
+        && a.y.saturating_add(a.h) > b.y
+}
+
+fn rect_center_dist_sq(a: Rect, b: Rect) -> i64 {
+    let ax = a.x as i64 + (a.w as i64 / 2);
+    let ay = a.y as i64 + (a.h as i64 / 2);
+    let bx = b.x as i64 + (b.w as i64 / 2);
+    let by = b.y as i64 + (b.h as i64 / 2);
+    let dx = ax - bx;
+    let dy = ay - by;
+    dx * dx + dy * dy
 }
 
 fn cascaded_window_rect(existing_standalone_windows: u32, width: u32, height: u32) -> Rect {

@@ -154,6 +154,7 @@ fn main(_arg: usize) -> ! {
                 }
                 (TOPLEVEL_ID, 1) => {
                     info!("wayland_hello: compositor requested close; exiting");
+                    vfs_write(1, b"wayland_hello: explicit exit(0) call\n").ok();
                     exit(0);
                 }
                 (POINTER_ID, 0) if payload.len() >= 16 => {

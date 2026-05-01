@@ -109,6 +109,9 @@ impl WaylandCommandService {
             return false;
         }
         let bloom_surface_id = u32::from_ne_bytes(data[4..8].try_into().unwrap_or([0; 4]));
+        if let Some(rect) = world.scene.surface_visual_rect(bloom_surface_id) {
+            world.damage.mark_rect(rect);
+        }
         if let Some(released) =
             world.scene.destroy_surface(self.wayland_client_id, bloom_surface_id)
         {
@@ -199,7 +202,12 @@ impl WaylandCommandService {
         }
         let bloom_surface_id = u32::from_ne_bytes(data[4..8].try_into().unwrap_or([0; 4]));
 
-        let result = match world.scene.commit_surface(self.wayland_client_id, bloom_surface_id) {
+        let result = match world.scene.commit_surface(
+            self.wayland_client_id,
+            bloom_surface_id,
+            world.primary.width,
+            world.primary.height,
+        ) {
             Some(r) => r,
             None => {
                 warn!("wayland-cmd: commit_surface({}) failed", bloom_surface_id);
@@ -348,7 +356,10 @@ impl WaylandCommandService {
         let layer_enum = match blossom::LayerShellLayer::from_wire(layer) {
             Some(l) => l,
             None => {
-                warn!("wayland-cmd: invalid layer-shell layer value={} (surface={})", layer, bloom_surface_id);
+                warn!(
+                    "wayland-cmd: invalid layer-shell layer value={} (surface={})",
+                    layer, bloom_surface_id
+                );
                 return false;
             }
         };

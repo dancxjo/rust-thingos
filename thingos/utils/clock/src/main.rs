@@ -255,6 +255,7 @@ fn read_events(fd: u32, pending: &mut PendingSurface, pending_frame_callbacks: &
             }
             (TOPLEVEL_ID, 1) => {
                 info!("clock: compositor requested close; exiting");
+                stem::syscall::vfs_write(1, b"clock: explicit exit(0) call\n").ok();
                 exit(0);
             }
             (_, 0) if pending_frame_callbacks.iter().any(|&id| id == object_id) => {
