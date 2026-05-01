@@ -10,7 +10,7 @@ use crate::input::{
     WindowInfo, drag_pointer, find_window, move_pointer_to, parse_wayland_windows, qmp_left_button,
     qmp_mouse_rel, send_combo, send_key_tap, send_qmp_sequence, type_serial_command,
 };
-use crate::world::ThingOsWorld;
+use crate::world::{DESKTOP_READY_SIGNALS, ThingOsWorld, missing_required_signals};
 
 pub type HunterResult<T> = Result<T, Box<dyn std::error::Error + Send + Sync>>;
 
@@ -18,6 +18,7 @@ pub type HunterResult<T> = Result<T, Box<dyn std::error::Error + Send + Sync>>;
 pub struct FreezeHunterConfig {
     pub arch: String,
     pub timeout: Duration,
+    pub desktop_ready_timeout: Duration,
     pub loglevel: String,
     pub action_interval: Duration,
     pub sessions: Option<u64>,
@@ -30,6 +31,7 @@ impl Default for FreezeHunterConfig {
         Self {
             arch: "x86_64".to_string(),
             timeout: Duration::from_secs(15),
+            desktop_ready_timeout: Duration::from_secs(180),
             loglevel: "5".to_string(),
             action_interval: Duration::from_millis(900),
             sessions: None,
@@ -55,8 +57,8 @@ pub async fn run(config: FreezeHunterConfig) -> HunterResult<()> {
 
     eprintln!("=== ThingOS Rust Freeze Hunter ===");
     eprintln!(
-        "[hunter] arch={} timeout={:?} loglevel={}",
-        config.arch, config.timeout, config.loglevel
+        "[hunter] arch={} timeout={:?} desktop_ready_timeout={:?} loglevel={}",
+        config.arch, config.timeout, config.desktop_ready_timeout, config.loglevel
     );
     eprintln!("[hunter] action_interval={:?} seed={}", config.action_interval, seed);
     eprintln!("[hunter] logs={}", config.log_dir.display());
@@ -87,8 +89,8 @@ async fn run_session(
     write_hunter_event(
         &mut log_file,
         format_args!(
-            "session={session_id:04} arch={} timeout={:?} loglevel={}",
-            config.arch, config.timeout, config.loglevel
+            "session={session_id:04} arch={} timeout={:?} desktop_ready_timeout={:?} loglevel={}",
+            config.arch, config.timeout, config.desktop_ready_timeout, config.loglevel
         ),
     )?;
 
@@ -100,7 +102,22 @@ async fn run_session(
 
     let mut last_len = 0usize;
     let mut last_output = Instant::now();
-    let mut next_action = Instant::now() + Duration::from_secs(2);
+    if !wait_for_desktop_readiness(
+        session_id,
+        config,
+        &mut world,
+        &mut log_file,
+        &mut last_len,
+        &mut last_output,
+    )
+    .await?
+    {
+        world.shutdown().await;
+        return Ok(());
+    }
+
+    last_output = Instant::now();
+    let mut next_action = Instant::now() + Duration::from_millis(500);
 
     loop {
         tokio::time::sleep(Duration::from_millis(100)).await;
@@ -140,6 +157,90 @@ async fn run_session(
             write_hunter_event(&mut log_file, format_args!("qemu exited"))?;
             world.shutdown().await;
             return Ok(());
+        }
+    }
+}
+
+async fn wait_for_desktop_readiness(
+    session_id: u64,
+    config: &FreezeHunterConfig,
+    world: &mut ThingOsWorld,
+    log_file: &mut File,
+    last_len: &mut usize,
+    last_output: &mut Instant,
+) -> HunterResult<bool> {
+    write_hunter_event(
+        log_file,
+        format_args!(
+            "waiting for desktop readiness before random actions: {}",
+            DESKTOP_READY_SIGNALS
+                .iter()
+                .map(|group| group.join(" AND "))
+                .collect::<Vec<_>>()
+                .join(", ")
+        ),
+    )?;
+
+    let deadline = Instant::now() + config.desktop_ready_timeout;
+    let mut last_status = Instant::now();
+
+    loop {
+        tokio::time::sleep(Duration::from_millis(100)).await;
+
+        let log = world.get_serial_log().await;
+        if append_serial_delta(log_file, &log, last_len)? {
+            *last_output = Instant::now();
+        }
+
+        let missing = missing_required_signals(&log, DESKTOP_READY_SIGNALS);
+        if missing.is_empty() {
+            write_hunter_event(
+                log_file,
+                format_args!("desktop ready; starting random actions in session {session_id:04}"),
+            )?;
+            return Ok(true);
+        }
+
+        if last_status.elapsed() >= Duration::from_secs(5) {
+            write_hunter_event(
+                log_file,
+                format_args!("desktop readiness pending; missing={missing:?}"),
+            )?;
+            last_status = Instant::now();
+        }
+
+        if last_output.elapsed() > config.timeout {
+            let message = format!(
+                "[hunter] pre-desktop silence detected after {:.1}s in session {session_id:04}; missing={missing:?}",
+                last_output.elapsed().as_secs_f64()
+            );
+            eprintln!("{message}");
+            write_hunter_event(log_file, format_args!("{message}"))?;
+            capture_freeze_artifacts(world, config, session_id).await;
+            return Ok(false);
+        }
+
+        if Instant::now() >= deadline {
+            let message = format!(
+                "[hunter] desktop readiness timed out after {:.1}s in session {session_id:04}; missing={missing:?}",
+                config.desktop_ready_timeout.as_secs_f64()
+            );
+            eprintln!("{message}");
+            write_hunter_event(log_file, format_args!("{message}"))?;
+            capture_freeze_artifacts(world, config, session_id).await;
+            return Ok(false);
+        }
+
+        if world.qemu.as_mut().is_some_and(|child| child.try_wait().ok().flatten().is_some()) {
+            let log = world.get_serial_log().await;
+            append_serial_delta(log_file, &log, last_len)?;
+            write_hunter_event(
+                log_file,
+                format_args!(
+                    "qemu exited while waiting for desktop readiness; missing={missing:?}"
+                ),
+            )?;
+            return Ok(false);
         }
     }
 }

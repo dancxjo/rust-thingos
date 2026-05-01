@@ -935,6 +935,33 @@ pub const REQUIRED_BOOT_SIGNALS: &[&[&str]] = &[
 pub const LIVENESS_SIGNALS: &[&str] =
     &["A: tick", "B: tick", "threads_demo", "BOOT: heartbeat", "BOOT: ready"];
 
+/// Desktop readiness signals shared by BDD scenarios and freeze-hunter.
+///
+/// This is stricter than kernel boot readiness: it means Bloom has presented a first frame,
+/// Wayland is accepting clients, and the input path has registered with the compositor.
+pub const DESKTOP_READY_SIGNALS: &[&[&str]] = &[
+    &["bloom: service loop started"],
+    &["bloom: output0"],
+    &["bloom: cursor ready"],
+    &["First frame rendered"],
+    &["wayland-server: listening on /run/wayland-0"],
+    &["bloom: registered bristle pointer sink"],
+];
+
+pub fn missing_required_signals(log: &str, required: &[&[&str]]) -> Vec<String> {
+    let clean_log = strip_ansi(log).to_lowercase();
+    required
+        .iter()
+        .filter(|alts| {
+            !alts.iter().all(|sig| {
+                let clean_sig = strip_ansi(sig).to_lowercase();
+                clean_log.contains(&clean_sig)
+            })
+        })
+        .map(|alts| alts.join(" AND "))
+        .collect()
+}
+
 impl ThingOsWorld {
     /// Wait until all required signals are found in the log (unordered).
     /// Returns Ok(()) if all found within timeout, Err with missing signals otherwise.
@@ -948,16 +975,7 @@ impl ThingOsWorld {
 
         loop {
             let log = self.serial_log.lock().await;
-            let missing: Vec<String> = required
-                .iter()
-                .filter(|alts| {
-                    !alts.iter().all(|sig| {
-                        let clean_sig = strip_ansi(sig);
-                        log.contains(&clean_sig)
-                    })
-                })
-                .map(|alts| alts.join(" AND "))
-                .collect();
+            let missing = missing_required_signals(&log, required);
 
             if missing.is_empty() {
                 return Ok(());
@@ -971,6 +989,11 @@ impl ThingOsWorld {
 
             tokio::time::sleep(std::time::Duration::from_millis(100)).await;
         }
+    }
+
+    /// Wait for the graphical desktop to be ready for input-driven stress tests.
+    pub async fn wait_for_desktop_ready(&self, timeout_secs: f64) -> Result<(), Vec<String>> {
+        self.wait_for_all_signals(DESKTOP_READY_SIGNALS, timeout_secs).await
     }
 
     /// Check if any liveness signal is present.
@@ -1245,7 +1268,10 @@ pub fn shell_prompt_present(clean: &str) -> bool {
 
 #[cfg(test)]
 mod tests {
-    use super::{ThingOsWorld, shell_prompt_present, strip_ansi};
+    use super::{
+        DESKTOP_READY_SIGNALS, ThingOsWorld, missing_required_signals, shell_prompt_present,
+        strip_ansi,
+    };
 
     #[test]
     fn parses_supported_timeout_tags() {
@@ -1265,6 +1291,32 @@ mod tests {
         assert_eq!(ThingOsWorld::parse_timeout_tag("smoke"), None);
         assert_eq!(ThingOsWorld::parse_timeout_tag("timeout.0s"), None);
         assert_eq!(ThingOsWorld::parse_timeout_tag("timeout.bad"), None);
+    }
+
+    #[test]
+    fn desktop_readiness_contract_matches_interactive_desktop_logs() {
+        let log = "\
+            [INFO] [bloom] bloom: service loop started\n\
+            [INFO] [bloom] bloom: output0 1280x800 @ 60000mHz ready\n\
+            [INFO] [bloom::render] bloom: cursor ready buffer=2 size=48x48\n\
+            [INFO] [bloom::loop_types] First frame rendered\n\
+            [INFO] [bloom::wayland] wayland-server: listening on /run/wayland-0\n\
+            [INFO] [bloom::services::input_service] bloom: registered bristle pointer sink\n";
+
+        assert!(missing_required_signals(log, DESKTOP_READY_SIGNALS).is_empty());
+    }
+
+    #[test]
+    fn desktop_readiness_reports_missing_input_registration() {
+        let log = "\
+            bloom: service loop started\n\
+            bloom: output0 1280x800 @ 60000mHz ready\n\
+            bloom: cursor ready buffer=2 size=48x48\n\
+            First frame rendered\n\
+            wayland-server: listening on /run/wayland-0\n";
+
+        let missing = missing_required_signals(log, DESKTOP_READY_SIGNALS);
+        assert_eq!(missing, vec!["bloom: registered bristle pointer sink"]);
     }
 
     /// Smoke-test the minimal FAT image builder: write the image to a temp

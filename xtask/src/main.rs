@@ -186,6 +186,9 @@ enum Commands {
         /// Kernel serial silence timeout before a freeze is reported
         #[arg(long, default_value_t = 15)]
         timeout_secs: u64,
+        /// Maximum time to wait for desktop readiness before randomized input starts
+        #[arg(long, default_value_t = 180)]
+        desktop_ready_timeout_secs: u64,
         /// Kernel log level
         #[arg(long, default_value = "5")]
         loglevel: String,
@@ -295,16 +298,18 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
         Commands::FreezeHunter {
             arch,
             timeout_secs,
+            desktop_ready_timeout_secs,
             loglevel,
             action_interval_ms,
             sessions,
             seed,
         } => {
             let timeout_secs = timeout_secs.to_string();
+            let desktop_ready_timeout_secs = desktop_ready_timeout_secs.to_string();
             let action_interval_ms = action_interval_ms.to_string();
             let mut cmd = xshell::cmd!(
                 sh,
-                "cargo run -p bdd --bin freeze_hunter -- --arch {arch} --timeout-secs {timeout_secs} --loglevel {loglevel} --action-interval-ms {action_interval_ms}"
+                "cargo run -p bdd --bin freeze_hunter -- --arch {arch} --timeout-secs {timeout_secs} --desktop-ready-timeout-secs {desktop_ready_timeout_secs} --loglevel {loglevel} --action-interval-ms {action_interval_ms}"
             );
             if let Some(sessions) = sessions {
                 cmd = cmd.arg("--sessions").arg(sessions.to_string());

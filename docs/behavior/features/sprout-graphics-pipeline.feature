@@ -10,6 +10,7 @@ Feature: Sprout desktop session orchestration
     And the serial output should contain "bloom: compositor service starting" within 120s
     And the serial output should contain "bloom: service loop started" within 180s
     And the serial output should contain "First frame rendered" within 180s
+    And the desktop should be ready for stress input within 180s
     And the serial output should contain "wayland-server: listening on /run/wayland-0" within 180s
     And the serial output should contain "SPROUT: Spawned wayland_hello" within 180s
     And the serial output should contain "wayland_hello: connected to /run/wayland-0" within 180s

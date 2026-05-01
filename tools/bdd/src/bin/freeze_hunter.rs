@@ -12,6 +12,8 @@ struct Args {
     arch: String,
     #[arg(long, default_value = "15")]
     timeout_secs: u64,
+    #[arg(long, default_value = "180")]
+    desktop_ready_timeout_secs: u64,
     #[arg(long, default_value = "5")]
     loglevel: String,
     #[arg(long, default_value = "900")]
@@ -30,6 +32,7 @@ async fn main() {
     let config = FreezeHunterConfig {
         arch: args.arch,
         timeout: Duration::from_secs(args.timeout_secs),
+        desktop_ready_timeout: Duration::from_secs(args.desktop_ready_timeout_secs),
         loglevel: args.loglevel,
         action_interval: Duration::from_millis(args.action_interval_ms),
         sessions: args.sessions,
