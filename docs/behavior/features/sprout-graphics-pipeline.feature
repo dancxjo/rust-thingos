@@ -38,6 +38,7 @@ Feature: Sprout graphics pipeline orchestration
     Then the serial output should contain "SPROUT: Spawned leaf" within 180s
     And the serial output should contain "leaf: connected to /run/wayland-0" within 180s
     And the serial output should contain "leaf: spawned shell pid=" within 180s
+    And the serial output should contain "leaf: pipe-backed shell input uses local echo" within 180s
 
   Scenario: rtc anchors the system clock before the Wayland clock displays realtime
     Given the machine is booted

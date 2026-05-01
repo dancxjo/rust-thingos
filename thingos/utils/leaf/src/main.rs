@@ -288,6 +288,8 @@ mod thingos_app {
     const INITIAL_HEIGHT: u32 = 460;
     const SHELL_PATH: &str = "/bin/sh";
     const FONT_PATH: &str = "/share/fonts/unifont.hex";
+    const CURSOR_BLINK_NS: u64 = 500_000_000;
+    const MAX_WAYLAND_RX_BYTES: usize = 64 * 1024;
 
     #[derive(Clone, Copy)]
     struct BufferState {
@@ -310,6 +312,7 @@ mod thingos_app {
         stdin_write: u32,
         stdout_read: u32,
         stderr_read: u32,
+        input_line: Vec<u8>,
     }
 
     #[derive(Default)]
@@ -355,20 +358,39 @@ mod thingos_app {
         let mut buffer: Option<BufferState> = None;
         let mut next_callback_id = 1000u32;
         let mut pending_frame_callbacks: Vec<u32> = Vec::new();
+        let mut wayland_rx: Vec<u8> = Vec::new();
         let mut keyboard = KeyboardState::default();
+        let mut cursor_blink_on = true;
+        let mut last_cursor_blink_ns = stem::monotonic_ns();
 
         loop {
             let mut needs_render = false;
             if drain_shell(&mut shell, &mut model, &font) {
                 needs_render = true;
+                cursor_blink_on = true;
+                last_cursor_blink_ns = stem::monotonic_ns();
             }
             if read_wayland_events(
                 fd,
+                &mut wayland_rx,
                 &mut pending,
                 &mut pending_frame_callbacks,
                 &mut keyboard,
                 &mut shell,
+                &mut model,
+                &font,
             ) {
+                needs_render = true;
+                cursor_blink_on = true;
+                last_cursor_blink_ns = stem::monotonic_ns();
+            }
+
+            let now_ns = stem::monotonic_ns();
+            if model.cursor_visible
+                && now_ns.saturating_sub(last_cursor_blink_ns) >= CURSOR_BLINK_NS
+            {
+                cursor_blink_on = !cursor_blink_on;
+                last_cursor_blink_ns = now_ns;
                 needs_render = true;
             }
 
@@ -393,7 +415,7 @@ mod thingos_app {
                     pending.width,
                     pending.height,
                 );
-                render_terminal(buf, &mut model, &font);
+                render_terminal(buf, &mut model, &font, cursor_blink_on);
                 if pending.dirty {
                     ack_configure(fd, XDG_SURFACE_ID, pending.serial.unwrap_or(0));
                     pending.dirty = false;
@@ -456,10 +478,12 @@ mod thingos_app {
         ) {
             Ok(resp) => {
                 stem::info!("leaf: spawned shell pid={}", resp.child_pid);
+                stem::info!("leaf: pipe-backed shell input uses local echo");
                 ShellPipes {
                     stdin_write: resp.stdin_pipe as u32,
                     stdout_read: resp.stdout_pipe as u32,
                     stderr_read: resp.stderr_pipe as u32,
+                    input_line: Vec::new(),
                 }
             }
             Err(e) => {
@@ -523,10 +547,13 @@ mod thingos_app {
 
     fn read_wayland_events(
         fd: u32,
+        rx: &mut Vec<u8>,
         pending: &mut PendingSurface,
         pending_frame_callbacks: &mut Vec<u32>,
         keyboard: &mut KeyboardState,
         shell: &mut ShellPipes,
+        model: &mut TermModel,
+        font: &Font,
     ) -> bool {
         let mut pollfd = [PollHandle { handle: fd as i32, events: poll_flags::POLLIN, revents: 0 }];
         if !matches!(vfs_poll(&mut pollfd, 0), Ok(n) if n > 0)
@@ -541,14 +568,25 @@ mod thingos_app {
             Ok(n) if n > 0 => n,
             _ => return false,
         };
+        rx.extend_from_slice(&in_buf[..len]);
+        if rx.len() > MAX_WAYLAND_RX_BYTES {
+            stem::warn!("leaf: dropping oversized Wayland receive buffer len={}", rx.len());
+            rx.clear();
+            return true;
+        }
 
         let mut offset = 0usize;
-        while offset + 8 <= len {
-            let (object_id, opcode, size) = decode_header(&in_buf[offset..len]);
-            if size < 8 || offset + size as usize > len {
+        while offset + 8 <= rx.len() {
+            let (object_id, opcode, size) = decode_header(&rx[offset..]);
+            if size < 8 {
+                stem::warn!("leaf: invalid Wayland message size {}", size);
+                rx.clear();
+                return true;
+            }
+            if offset + size as usize > rx.len() {
                 break;
             }
-            let payload = &in_buf[offset + 8..offset + size as usize];
+            let payload = &rx[offset + 8..offset + size as usize];
             match (object_id, opcode) {
                 (WM_BASE_ID, 0) if payload.len() >= 4 => {
                     send_pong(fd, WM_BASE_ID, read_u32(payload, 0))
@@ -579,7 +617,9 @@ mod thingos_app {
                     let pressed = read_u32(payload, 12) == 1;
                     if pressed {
                         if let Some(bytes) = key_to_bytes(key, keyboard) {
-                            let _ = vfs_write(shell.stdin_write, bytes);
+                            if handle_shell_input(shell, model, font, bytes) {
+                                changed = true;
+                            }
                         }
                     }
                 }
@@ -594,6 +634,61 @@ mod thingos_app {
                 _ => {}
             }
             offset += size as usize;
+        }
+        if offset > 0 {
+            rx.drain(0..offset);
+        }
+        changed
+    }
+
+    fn handle_shell_input(
+        shell: &mut ShellPipes,
+        model: &mut TermModel,
+        font: &Font,
+        bytes: &[u8],
+    ) -> bool {
+        if bytes.first().copied() == Some(0x1b) {
+            return false;
+        }
+
+        let mut changed = false;
+        for &byte in bytes {
+            match byte {
+                b'\r' | b'\n' => {
+                    model.putc('\n', font);
+                    shell.input_line.push(b'\n');
+                    let _ = vfs_write(shell.stdin_write, &shell.input_line);
+                    shell.input_line.clear();
+                    changed = true;
+                }
+                0x08 | 0x7f => {
+                    if shell.input_line.pop().is_some() {
+                        model.putc('\x08', font);
+                        model.putc(' ', font);
+                        model.putc('\x08', font);
+                        changed = true;
+                    }
+                }
+                b'\t' => {
+                    shell.input_line.push(byte);
+                    model.putc('\t', font);
+                    changed = true;
+                }
+                0x03 => {
+                    shell.input_line.clear();
+                    model.write_str("^C\n", font);
+                    let _ = vfs_write(shell.stdin_write, &[byte]);
+                    changed = true;
+                }
+                b if b >= 0x20 => {
+                    shell.input_line.push(b);
+                    model.write_bytes_lossy(&[b], font);
+                    changed = true;
+                }
+                b => {
+                    let _ = vfs_write(shell.stdin_write, &[b]);
+                }
+            }
         }
         changed
     }
@@ -707,7 +802,12 @@ mod thingos_app {
         out
     }
 
-    fn render_terminal(buffer: BufferState, model: &mut TermModel, font: &Font) {
+    fn render_terminal(
+        buffer: BufferState,
+        model: &mut TermModel,
+        font: &Font,
+        cursor_blink_on: bool,
+    ) {
         unsafe {
             let pixels = core::slice::from_raw_parts_mut(
                 buffer.ptr as *mut u32,
@@ -728,7 +828,7 @@ mod thingos_app {
                     );
                 }
             }
-            if model.cursor_visible {
+            if model.cursor_visible && cursor_blink_on {
                 draw_cursor(
                     pixels,
                     buffer.width,
