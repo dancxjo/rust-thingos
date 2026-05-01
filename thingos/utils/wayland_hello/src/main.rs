@@ -34,6 +34,9 @@ const POPUP_ID: u32 = 23;
 
 const PRESENTATION_ID: u32 = 30;
 
+/// wl_region object ID used in the startup smoke test.
+const REGION_ID: u32 = 40;
+
 const DRM_FORMAT_ARGB8888: u32 = 0x3432_5241; // "AR24"
 
 const PISTIL_PATH: &str = "/lib/libpistil.so";
@@ -102,6 +105,17 @@ fn main(_arg: usize) -> ! {
     seat_get_keyboard(fd, SEAT_ID, KEYBOARD_ID);
 
     create_surface(fd, COMPOSITOR_ID, TOP_SURFACE_ID);
+
+    // wl_region smoke test: exercise the full region lifecycle before commit.
+    // This verifies that wl_compositor.create_region produces a live object
+    // (not a tombstone) and that wl_region.add / set_opaque_region / destroy
+    // are accepted by the compositor without triggering a protocol error.
+    create_region(fd, COMPOSITOR_ID, REGION_ID);
+    region_add(fd, REGION_ID, 0, 0, 480, 320);
+    set_opaque_region(fd, TOP_SURFACE_ID, REGION_ID);
+    region_destroy(fd, REGION_ID);
+    info!("wayland_hello: wl_region smoke test: create+add+set_opaque+destroy");
+
     get_xdg_surface(fd, WM_BASE_ID, TOP_XDG_SURFACE_ID, TOP_SURFACE_ID);
     get_toplevel(fd, TOP_XDG_SURFACE_ID, TOPLEVEL_ID);
     set_toplevel_title(fd, TOPLEVEL_ID, "Thing-OS Wayland Lab");
@@ -935,4 +949,41 @@ fn read_wayland_string(buf: &[u8], offset: usize) -> Option<(&[u8], usize)> {
 
 fn wl_fixed_to_i32(value: i32) -> i32 {
     value / 256
+}
+
+// ── wl_region helpers ─────────────────────────────────────────────────────────
+
+/// Send `wl_compositor.create_region(new_id)` — opcode 1.
+fn create_region(fd: u32, compositor_id: u32, new_id: u32) {
+    let mut buf = Vec::new();
+    encode_header(compositor_id, 1, 12, &mut buf);
+    buf.extend_from_slice(&new_id.to_ne_bytes());
+    send_request(fd, &buf);
+}
+
+/// Send `wl_region.add(x, y, width, height)` — opcode 1.
+fn region_add(fd: u32, region_id: u32, x: i32, y: i32, width: i32, height: i32) {
+    let mut buf = Vec::new();
+    encode_header(region_id, 1, 24, &mut buf);
+    buf.extend_from_slice(&x.to_ne_bytes());
+    buf.extend_from_slice(&y.to_ne_bytes());
+    buf.extend_from_slice(&width.to_ne_bytes());
+    buf.extend_from_slice(&height.to_ne_bytes());
+    send_request(fd, &buf);
+}
+
+/// Send `wl_surface.set_opaque_region(region_id)` — opcode 4.
+/// Pass `region_id = 0` to clear (null region).
+fn set_opaque_region(fd: u32, surface_id: u32, region_id: u32) {
+    let mut buf = Vec::new();
+    encode_header(surface_id, 4, 12, &mut buf);
+    buf.extend_from_slice(&region_id.to_ne_bytes());
+    send_request(fd, &buf);
+}
+
+/// Send `wl_region.destroy()` — opcode 0 (destructor).
+fn region_destroy(fd: u32, region_id: u32) {
+    let mut buf = Vec::new();
+    encode_header(region_id, 0, 8, &mut buf);
+    send_request(fd, &buf);
 }

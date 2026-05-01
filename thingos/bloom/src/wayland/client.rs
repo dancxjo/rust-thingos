@@ -78,6 +78,14 @@ pub enum ObjectEntry {
         /// subsurfaces of this surface.  Order is bottom-to-top stacking
         /// (manipulated by `wl_subsurface.place_above` / `place_below`).
         subsurface_children: Vec<u32>,
+        /// Pending opaque region object ID (set by wl_surface.set_opaque_region).
+        /// `None` means no region is pending (i.e. the entire surface is not
+        /// marked opaque or the opaque region is being cleared with a null id).
+        pending_opaque_region: Option<u32>,
+        /// Pending input region object ID (set by wl_surface.set_input_region).
+        /// `None` means no region is pending (entire surface accepts input,
+        /// matching the Wayland default).
+        pending_input_region: Option<u32>,
     },
     /// wl_callback — frame done callback.
     Callback,
@@ -152,6 +160,17 @@ pub enum ObjectEntry {
     /// either `presented` or `discarded` (both destructor events), the object
     /// is destroyed by the server.
     PresentationFeedback,
+    /// wl_region — an accumulation of rectangles used by wl_surface for
+    /// opaque and input region configuration.
+    ///
+    /// The region is a simple rect list.  Rectangles added via `wl_region.add`
+    /// are appended; rectangles removed via `wl_region.subtract` are subtracted
+    /// by appending a negative-weight entry that is stored as `(x, y, w, h,
+    /// false)`.  The second bool field is `true` for add, `false` for subtract.
+    Region {
+        /// Accumulated operations: `(x, y, w, h, is_add)`.
+        rects: Vec<(i32, i32, i32, i32, bool)>,
+    },
     /// Object has been destroyed (tombstone).
     Destroyed,
 }

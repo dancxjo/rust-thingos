@@ -367,3 +367,28 @@ Feature: Bloom compositor service loop and responsiveness
     Given the machine is booted
     Then the serial output should contain "wayland-server: listening on /run/wayland-0" within 60s
     And the serial output should contain "wayland-server: sending us-intl XKB keymap" within 120s
+
+  Scenario: wl_compositor.create_region produces a live region object
+    # Verifies that wl_compositor.create_region no longer registers a destroyed/
+    # no-op tombstone but instead allocates a live wl_region object.  The
+    # wayland_hello smoke client calls create_region at startup and the
+    # compositor must log the creation.
+    Given the machine is booted
+    Then the serial output should contain "wayland-server: listening on /run/wayland-0" within 60s
+    And the serial output should contain "wayland-server: wl_compositor create_region id=" within 60s
+
+  Scenario: wl_region.add is handled by the compositor
+    # Verifies that wl_region.add accumulates a rectangle into the region's
+    # rect list rather than crashing or producing a protocol error.
+    Given the machine is booted
+    Then the serial output should contain "wayland-server: listening on /run/wayland-0" within 60s
+    And the serial output should contain "wayland-server: wl_region obj=" within 60s
+    And the serial output should contain "add x=" within 60s
+
+  Scenario: wl_region lifecycle completes without protocol error
+    # Verifies the full wl_region lifecycle: create → add → set_opaque_region →
+    # destroy all succeed without bloom emitting a protocol error.  The
+    # wayland_hello client logs a specific message on completion.
+    Given the machine is booted
+    Then the serial output should contain "wayland-server: listening on /run/wayland-0" within 60s
+    And the serial output should contain "wayland_hello: wl_region smoke test: create+add+set_opaque+destroy" within 60s

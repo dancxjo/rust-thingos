@@ -106,6 +106,7 @@ pub fn dispatch(
         ObjKind::PresentationFeedback => dispatch_presentation_feedback(msg, client, obj_id),
         ObjKind::LayerShell => dispatch_layer_shell(msg, client, obj_id, output),
         ObjKind::LayerSurface => dispatch_layer_surface(msg, client, obj_id, cmd_write, output),
+        ObjKind::Region => dispatch_region(msg, client, obj_id),
         ObjKind::Destroyed | ObjKind::Unknown => vec![],
     }
 }
@@ -143,6 +144,7 @@ enum ObjKind {
     PresentationFeedback,
     LayerShell,
     LayerSurface,
+    Region,
     Destroyed,
     Unknown,
 }
@@ -178,6 +180,7 @@ fn classify(e: &ObjectEntry) -> ObjKind {
         ObjectEntry::PresentationFeedback => ObjKind::PresentationFeedback,
         ObjectEntry::LayerShell => ObjKind::LayerShell,
         ObjectEntry::LayerSurface { .. } => ObjKind::LayerSurface,
+        ObjectEntry::Region { .. } => ObjKind::Region,
         ObjectEntry::Destroyed => ObjKind::Destroyed,
     }
 }
@@ -723,13 +726,15 @@ fn dispatch_compositor(
                     pending_presentation_feedback: alloc::vec::Vec::new(),
                     subsurface_obj: None,
                     subsurface_children: alloc::vec::Vec::new(),
+                    pending_opaque_region: None,
+                    pending_input_region: None,
                 },
             );
         }
         WL_COMPOSITOR_CREATE_REGION => {
-            // Regions are not used by the renderer; just register as Unknown.
             if let Some(new_id) = read_u32(&msg.data, 0) {
-                client.insert(new_id, ObjectEntry::Destroyed);
+                blossom_debug!("wayland-server: wl_compositor create_region id={}", new_id);
+                client.insert(new_id, ObjectEntry::Region { rects: alloc::vec::Vec::new() });
             }
         }
         _ => {}
@@ -1045,6 +1050,57 @@ fn dispatch_shm_pool(msg: &WireMsg, client: &mut WaylandClient, obj_id: u32) -> 
     vec![]
 }
 
+// ── wl_region ─────────────────────────────────────────────────────────────────
+
+const WL_REGION_DESTROY: u16 = 0;
+const WL_REGION_ADD: u16 = 1;
+const WL_REGION_SUBTRACT: u16 = 2;
+
+fn dispatch_region(msg: &WireMsg, client: &mut WaylandClient, obj_id: u32) -> Vec<Vec<u8>> {
+    match msg.opcode {
+        WL_REGION_DESTROY => {
+            // wl_region.destroy — destructor; replace the entry with a tombstone.
+            blossom_debug!("wayland-server: wl_region obj={} destroyed", obj_id);
+            client.destroy(obj_id);
+        }
+        WL_REGION_ADD => {
+            // add(x: int, y: int, width: int, height: int)
+            let x = read_i32(&msg.data, 0).unwrap_or(0);
+            let y = read_i32(&msg.data, 4).unwrap_or(0);
+            let w = read_i32(&msg.data, 8).unwrap_or(0);
+            let h = read_i32(&msg.data, 12).unwrap_or(0);
+            // Ignore degenerate rects (non-positive dimensions).
+            if w > 0 && h > 0 {
+                if let Some(ObjectEntry::Region { rects }) = client.objects.get_mut(&obj_id) {
+                    rects.push((x, y, w, h, true));
+                    blossom_debug!(
+                        "wayland-server: wl_region obj={} add x={} y={} w={} h={} rects={}",
+                        obj_id, x, y, w, h, rects.len()
+                    );
+                }
+            }
+        }
+        WL_REGION_SUBTRACT => {
+            // subtract(x: int, y: int, width: int, height: int)
+            let x = read_i32(&msg.data, 0).unwrap_or(0);
+            let y = read_i32(&msg.data, 4).unwrap_or(0);
+            let w = read_i32(&msg.data, 8).unwrap_or(0);
+            let h = read_i32(&msg.data, 12).unwrap_or(0);
+            if w > 0 && h > 0 {
+                if let Some(ObjectEntry::Region { rects }) = client.objects.get_mut(&obj_id) {
+                    rects.push((x, y, w, h, false));
+                    blossom_debug!(
+                        "wayland-server: wl_region obj={} subtract x={} y={} w={} h={} rects={}",
+                        obj_id, x, y, w, h, rects.len()
+                    );
+                }
+            }
+        }
+        _ => {}
+    }
+    vec![]
+}
+
 // ── wl_buffer ─────────────────────────────────────────────────────────────────
 
 const WL_BUFFER_DESTROY: u16 = 0;
@@ -1136,9 +1192,27 @@ fn dispatch_surface(
             }
         }
 
-        WL_SURFACE_SET_OPAQUE_REGION
-        | WL_SURFACE_SET_INPUT_REGION
-        | WL_SURFACE_SET_BUFFER_TRANSFORM
+        WL_SURFACE_SET_OPAQUE_REGION => {
+            // set_opaque_region(region: object<wl_region> or null)
+            let region_id = read_u32(&msg.data, 0).unwrap_or(0);
+            if let Some(ObjectEntry::Surface { pending_opaque_region, .. }) =
+                client.objects.get_mut(&obj_id)
+            {
+                *pending_opaque_region = if region_id == 0 { None } else { Some(region_id) };
+            }
+        }
+
+        WL_SURFACE_SET_INPUT_REGION => {
+            // set_input_region(region: object<wl_region> or null)
+            let region_id = read_u32(&msg.data, 0).unwrap_or(0);
+            if let Some(ObjectEntry::Surface { pending_input_region, .. }) =
+                client.objects.get_mut(&obj_id)
+            {
+                *pending_input_region = if region_id == 0 { None } else { Some(region_id) };
+            }
+        }
+
+        WL_SURFACE_SET_BUFFER_TRANSFORM
         | WL_SURFACE_SET_BUFFER_SCALE => {
             // Accepted as no-ops.
         }
