@@ -1,6 +1,6 @@
 # Feature: Alt+Tab window cycling
 
-> Last run: 2026-05-01 13:05:42
+> Last run: 2026-05-01 13:12:24
 
 ## Scenarios
 
