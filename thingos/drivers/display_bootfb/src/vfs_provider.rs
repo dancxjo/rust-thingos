@@ -16,11 +16,11 @@ use abi::attrs::{
     AttrType, AttrValueHeader,
 };
 use abi::device::{DeviceCall, DeviceKind};
-use abi::display::accel2d::{ACCEL2D_COMMAND_SIZE, Accel2dBatch, Accel2dCommand};
 use abi::display::{
     BufferHandle, BufferId, CommitRequest, DISPLAY_OP_ACCEL2D, DISPLAY_OP_COMMIT,
     DISPLAY_OP_GET_INFO, DISPLAY_OP_IMPORT_BUFFER, DISPLAY_OP_MOVE_CURSOR,
     DISPLAY_OP_RELEASE_BUFFER, DISPLAY_OP_SET_CURSOR, PlaneCommit,
+    accel2d::{Accel2dBatch, Accel2dCommand, ACCEL2D_COMMAND_SIZE},
 };
 use abi::errors::Errno;
 use abi::vfs_rpc::VfsRpcOp;

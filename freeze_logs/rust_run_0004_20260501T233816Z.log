@@ -7980,3 +7980,30 @@ k[129976527021] [[35mTRACE[0m] [kernel::vfs::devfs] [CPU3] vfs: /dev/console r
 [148073612808] [[35mTRACE[0m] [display_virtio_gpu] [CPU3] DISP: DISPLAY_OP_GET_INFO requested
 [148074586638] [[35mTRACE[0m] [display_virti
 [hunter] running random action
+
+[hunter] running random action
+
+[hunter] running random action
+
+[hunter] running random action
+
+[hunter] running random action
+
+[hunter] running random action
+
+[hunter] running random action
+
+[hunter] running random action
+
+[hunter] running random action
+
+[hunter] [hunter] serial output stalled after 15.8s in session 0004; phase=stalled_after_kernel classification=os_freeze
+
+[freeze_summary]
+  last_serial_ago_secs: 15.8
+  kernel_marker_observed: true
+  userspace_observed: true
+  desktop_observed: true
+  guest_phase_at_capture: stalled_after_kernel
+  classification: os_freeze
+  last_serial_wall_elapsed_secs: 15.8
