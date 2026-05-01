@@ -402,3 +402,14 @@ Feature: Bloom compositor service loop and responsiveness
     Given the machine is booted
     Then the serial output should contain "wayland-server: listening on /run/wayland-0" within 60s
     And the serial output should contain "wayland_hello: wl_region smoke test: create+add+set_opaque+destroy" within 60s
+
+  Scenario: wl_surface.set_opaque_region is committed to the scene
+    # Verifies that the opaque region set by a Wayland client via
+    # wl_surface.set_opaque_region is resolved from the wl_region object and
+    # propagated to the compositor's scene at commit time.  bloom logs a debug
+    # message including the resolved bounding rect when the IPC command is
+    # emitted.
+    Given the machine is booted
+    Then the serial output should contain "wayland-server: listening on /run/wayland-0" within 60s
+    And the serial output should contain "wayland-server: wl_surface obj=" within 60s
+    And the serial output should contain "commit opaque_region=Some(" within 60s
