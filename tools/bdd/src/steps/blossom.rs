@@ -2,6 +2,10 @@ use cucumber::{given, then, when};
 
 use super::basic::turn_on_machine;
 use super::helpers::{StepError, capture_failure_diagnostics, color_close};
+use crate::input::{
+    WindowInfo, drag_pointer, find_window as find_shared_window, qmp_mouse_rel,
+    read_wayland_windows as read_shared_wayland_windows, send_qmp_sequence,
+};
 use crate::world::ThingOsWorld;
 
 // ===== Blossom XDG-Shell Steps =====
@@ -39,15 +43,6 @@ fn is_window_chrome_pixel(pixel: [u8; 3]) -> bool {
     is_brass_pixel(pixel) || is_chrome_border_pixel(pixel)
 }
 
-#[derive(Clone, Debug)]
-struct WindowInfo {
-    x: i32,
-    y: i32,
-    w: u32,
-    h: u32,
-    title: String,
-}
-
 #[derive(Clone, Copy)]
 struct TestRect {
     x: i32,
@@ -56,63 +51,14 @@ struct TestRect {
     h: u32,
 }
 
-async fn type_serial_command(world: &mut ThingOsWorld, command: &str) -> Result<String, StepError> {
-    world.serial_checkpoint = world.get_serial_log().await.len();
-    world.last_typed_command = Some(command.to_string());
-
-    let mut data = command.as_bytes().to_vec();
-    if !data.ends_with(b"\n") {
-        data.push(b'\n');
-    }
-    for b in data {
-        world
-            .serial_write(&[b])
-            .await
-            .map_err(|e| StepError(format!("Failed to write to serial: {}", e)))?;
-        tokio::time::sleep(std::time::Duration::from_millis(15)).await;
-    }
-
-    let start = std::time::Instant::now();
-    let timeout = std::time::Duration::from_secs(30);
-    loop {
-        let log = world.get_serial_log().await;
-        let start_offset = world.serial_checkpoint.min(log.len());
-        let recent = &log[start_offset..];
-        if recent.contains(" > ") {
-            return Ok(recent.to_string());
-        }
-        if start.elapsed() >= timeout {
-            return Err(StepError(format!(
-                "Timeout waiting for command '{}' to complete",
-                command
-            )));
-        }
-        tokio::time::sleep(std::time::Duration::from_millis(50)).await;
-    }
-}
-
 async fn read_wayland_windows(world: &mut ThingOsWorld) -> Result<Vec<WindowInfo>, StepError> {
     let _ = world.wait_for_serial(" > ", 60.0).await;
-    let re = regex::Regex::new(
-        r#"(?m)^\s*\d+\s+(\d+)x(\d+)\+(\d+),(\d+)\s+z=(-?\d+)\s+title="([^"]*)""#,
-    )
-    .unwrap();
-    let mut last = String::new();
+    let mut last = Vec::new();
     for _ in 0..8 {
-        let recent = type_serial_command(world, "cat /session/wayland/windows/index").await?;
-        last = recent.clone();
-        let windows: Vec<WindowInfo> = re
-            .captures_iter(&recent)
-            .filter_map(|caps| {
-                Some(WindowInfo {
-                    w: caps.get(1)?.as_str().parse().ok()?,
-                    h: caps.get(2)?.as_str().parse().ok()?,
-                    x: caps.get(3)?.as_str().parse().ok()?,
-                    y: caps.get(4)?.as_str().parse().ok()?,
-                    title: caps.get(6)?.as_str().to_string(),
-                })
-            })
-            .collect();
+        let windows = read_shared_wayland_windows(world)
+            .await
+            .map_err(|e| StepError(format!("Could not read Wayland windows: {}", e)))?;
+        last = windows.clone();
         if windows.iter().any(|w| w.title.contains("Thing-OS Wayland Lab"))
             && windows.iter().any(|w| w.title.contains("Clock"))
         {
@@ -121,15 +67,13 @@ async fn read_wayland_windows(world: &mut ThingOsWorld) -> Result<Vec<WindowInfo
         tokio::time::sleep(std::time::Duration::from_millis(500)).await;
     }
     Err(StepError(format!(
-        "Could not read Wayland hello and Clock windows from /session/wayland/windows/index: {}",
+        "Could not read Wayland hello and Clock windows from /session/wayland/windows/index: {:?}",
         last
     )))
 }
 
 fn find_window<'a>(windows: &'a [WindowInfo], title: &str) -> Result<&'a WindowInfo, StepError> {
-    windows
-        .iter()
-        .find(|window| window.title.contains(title))
+    find_shared_window(windows, title)
         .ok_or_else(|| StepError(format!("Window titled '{}' was not present", title)))
 }
 
@@ -143,20 +87,6 @@ fn intersect_test_rect(a: TestRect, b: TestRect) -> Option<TestRect> {
     } else {
         Some(TestRect { x: x0, y: y0, w: (x1 - x0) as u32, h: (y1 - y0) as u32 })
     }
-}
-
-fn qmp_mouse_rel(dx: i32, dy: i32) -> String {
-    format!(
-        r#"{{"execute": "input-send-event", "arguments": {{"events": [{{"type": "rel", "data": {{"axis": "x", "value": {}}}}}, {{"type": "rel", "data": {{"axis": "y", "value": {}}}}}]}}}}"#,
-        dx, dy
-    )
-}
-
-fn qmp_mouse_button(down: bool) -> String {
-    format!(
-        r#"{{"execute": "input-send-event", "arguments": {{"events": [{{"type": "btn", "data": {{"down": {}, "button": "left"}}}}]}}}}"#,
-        if down { "true" } else { "false" }
-    )
 }
 
 /// Background: `Given the bloom compositor is running with blossom support`
@@ -1024,24 +954,10 @@ async fn drag_clock_window_over_wayland_hello_title_bar(
     let target_y = hello.y.saturating_sub(20);
     let start_x = clock.x.saturating_add(24);
     let start_y = clock.y.saturating_add(14);
-    let dx = target_x.saturating_sub(clock.x);
-    let dy = target_y.saturating_sub(clock.y);
-
-    let commands = [
-        qmp_mouse_rel(-10000, -10000),
-        qmp_mouse_rel(start_x, start_y),
-        qmp_mouse_button(true),
-        qmp_mouse_rel(dx, dy),
-        qmp_mouse_button(false),
-    ];
-    let delays = [1_000u64, 500, 200, 700, 200];
-    for (command, settle_ms) in commands.iter().zip(delays) {
-        world
-            .execute_qmp_control(command)
-            .await
-            .map_err(|e| StepError(format!("QMP clock-window drag failed: {}", e)))?;
-        tokio::time::sleep(std::time::Duration::from_millis(settle_ms)).await;
-    }
+    let commands = drag_pointer(start_x, start_y, target_x, target_y, 1);
+    send_qmp_sequence(world, &commands, "clock-window drag")
+        .await
+        .map_err(|e| StepError(e.to_string()))?;
     tokio::time::sleep(std::time::Duration::from_millis(1_500)).await;
     Ok(())
 }
