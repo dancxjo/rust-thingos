@@ -524,7 +524,12 @@ fn vfs_device_call(driver: &mut VirtioGpuDriver, payload: &[u8]) -> ProviderResp
     match call.op {
         DISPLAY_OP_GET_INFO => {
             stem::trace!("DISP: DISPLAY_OP_GET_INFO requested");
-            let mut caps = DisplayCaps::ATOMIC | DisplayCaps::DMABUF_IMPORT;
+            let mut caps = DisplayCaps::ATOMIC
+                | DisplayCaps::DMABUF_IMPORT
+                | DisplayCaps::GPU_BLIT
+                | DisplayCaps::DIRECT_SCANOUT
+                | DisplayCaps::PARTIAL_FLUSH
+                | DisplayCaps::RESOURCE_CACHE;
             // Only advertise hardware cursor if the cursor queue is available
             // AND the DMA pixel buffer was successfully allocated at init time.
             if driver.gpu.has_cursorq() && driver.cursor_dma_buf != 0 && driver.cursor_dma_phys != 0

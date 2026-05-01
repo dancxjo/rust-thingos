@@ -199,6 +199,34 @@ Feature: Bloom compositor service loop and responsiveness
     Then the serial output should contain "bloom: output0" within 60s
     And the serial output should contain "bloom: display driver does not support VBLANK" within 60s
 
+  Scenario: virtio GPU driver advertises GPU blit and direct scanout capabilities
+    # display_virtio_gpu uses GPU transfer/flush commands (GPU_BLIT) and
+    # sets up a scanout resource (DIRECT_SCANOUT). Bloom must log both
+    # after reading DISPLAY_OP_GET_INFO so capability-gated code paths can
+    # be selected at runtime.
+    Given the machine is booted
+    Then the serial output should contain "bloom: output0" within 60s
+    And the serial output should contain "bloom: display driver supports GPU blit (hardware transfer/flush)" within 60s
+    And the serial output should contain "bloom: display driver supports direct scanout (zero-copy path to display)" within 60s
+
+  Scenario: virtio GPU driver advertises partial flush and resource cache capabilities
+    # display_virtio_gpu processes client damage rects (PARTIAL_FLUSH) and
+    # maintains a pre-allocated frame pool (RESOURCE_CACHE). Bloom logs both
+    # after reading DISPLAY_OP_GET_INFO.
+    Given the machine is booted
+    Then the serial output should contain "bloom: output0" within 60s
+    And the serial output should contain "bloom: display driver supports partial flush (damage regions)" within 60s
+    And the serial output should contain "bloom: display driver supports resource cache (pre-allocated buffer pool)" within 60s
+
+  @bootfb
+  Scenario: boot framebuffer driver advertises partial flush capability
+    # display_bootfb blits only the client-supplied damage rectangles on each
+    # commit, so it correctly advertises PARTIAL_FLUSH. It must not advertise
+    # any GPU_* capabilities because all rendering is done in software on the CPU.
+    Given the machine is booted with framebuffer display
+    Then the serial output should contain "bloom: output0" within 60s
+    And the serial output should contain "bloom: display driver supports partial flush (damage regions)" within 60s
+
   Scenario: desktop clock runs below compositor input priority
     # The clock is a decorative Wayland client. It should not compete with
     # Bloom's cursor/input path at normal scheduler priority.

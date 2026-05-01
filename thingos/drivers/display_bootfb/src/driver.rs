@@ -61,7 +61,9 @@ impl BootFbDriver {
             // This provider replies to DISPLAY_OP_COMMIT synchronously.
             // Advertising VBLANK would make clients sleep inside the VFS RPC
             // response path instead of returning to their event loops.
-            caps: abi::display::DisplayCaps::empty(),
+            // PARTIAL_FLUSH: commit() clips blits to client-supplied damage
+            // rectangles, so only the damaged regions are updated each frame.
+            caps: abi::display::DisplayCaps::PARTIAL_FLUSH,
         }
     }
 
