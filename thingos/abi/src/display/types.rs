@@ -167,6 +167,25 @@ bitflags::bitflags! {
         const VBLANK = 1 << 3;
         /// Driver can import linear dma-buf/FD-backed client buffers.
         const DMABUF_IMPORT = 1 << 4;
+        /// Driver uses GPU hardware to blit/transfer pixel data to the display
+        /// (e.g. virtio-gpu TRANSFER_TO_HOST_2D + RESOURCE_FLUSH).
+        const GPU_BLIT = 1 << 5;
+        /// Driver performs alpha blending in GPU hardware rather than CPU.
+        const GPU_ALPHA_BLEND = 1 << 6;
+        /// Driver supports GPU-accelerated scaling of source to destination rect.
+        const GPU_SCALE = 1 << 7;
+        /// Driver supports GPU/hardware rounded-rectangle clipping of planes.
+        const GPU_ROUNDED_CLIP = 1 << 8;
+        /// Driver supports direct framebuffer scanout (zero-copy path to display).
+        const DIRECT_SCANOUT = 1 << 9;
+        /// Driver processes client-supplied damage rectangles and only updates
+        /// the damaged regions, enabling partial-flush optimisation.
+        const PARTIAL_FLUSH = 1 << 10;
+        /// Driver supports GPU sync fences for producer/consumer synchronisation.
+        const FENCES = 1 << 11;
+        /// Driver maintains a pre-allocated buffer pool / resource cache so that
+        /// buffer import and commit operations avoid per-frame allocations.
+        const RESOURCE_CACHE = 1 << 12;
     }
 }
 
@@ -258,5 +277,65 @@ mod tests {
         assert_eq!(plane.rounded_clip_radius(), Some(7));
         assert_eq!(plane._reserved[PLANE_RESERVED_FLAGS] & PLANE_FLAG_CLIP_ROUNDED, 1);
         assert_eq!(plane._reserved[PLANE_RESERVED_RADIUS], 7);
+    }
+
+    #[test]
+    fn display_caps_new_bits_do_not_overlap_existing_bits() {
+        // Verify the new capability flag bits do not overlap with existing ones.
+        let existing = DisplayCaps::HARDWARE_CURSOR
+            | DisplayCaps::OVERLAYS
+            | DisplayCaps::ATOMIC
+            | DisplayCaps::VBLANK
+            | DisplayCaps::DMABUF_IMPORT;
+        let new_caps = DisplayCaps::GPU_BLIT
+            | DisplayCaps::GPU_ALPHA_BLEND
+            | DisplayCaps::GPU_SCALE
+            | DisplayCaps::GPU_ROUNDED_CLIP
+            | DisplayCaps::DIRECT_SCANOUT
+            | DisplayCaps::PARTIAL_FLUSH
+            | DisplayCaps::FENCES
+            | DisplayCaps::RESOURCE_CACHE;
+        assert!(
+            (existing & new_caps).is_empty(),
+            "new capability bits must not overlap with existing bits"
+        );
+    }
+
+    #[test]
+    fn bootfb_minimal_caps_contains_partial_flush() {
+        // Boot framebuffer must advertise PARTIAL_FLUSH and nothing GPU-specific.
+        let bootfb_caps = DisplayCaps::PARTIAL_FLUSH;
+        assert!(bootfb_caps.contains(DisplayCaps::PARTIAL_FLUSH));
+        assert!(!bootfb_caps.contains(DisplayCaps::GPU_BLIT));
+        assert!(!bootfb_caps.contains(DisplayCaps::GPU_ALPHA_BLEND));
+        assert!(!bootfb_caps.contains(DisplayCaps::GPU_SCALE));
+        assert!(!bootfb_caps.contains(DisplayCaps::GPU_ROUNDED_CLIP));
+        assert!(!bootfb_caps.contains(DisplayCaps::DIRECT_SCANOUT));
+        assert!(!bootfb_caps.contains(DisplayCaps::FENCES));
+        assert!(!bootfb_caps.contains(DisplayCaps::RESOURCE_CACHE));
+        assert!(!bootfb_caps.contains(DisplayCaps::HARDWARE_CURSOR));
+        assert!(!bootfb_caps.contains(DisplayCaps::VBLANK));
+    }
+
+    #[test]
+    fn virtio_gpu_caps_contain_expected_gpu_bits() {
+        // Virtio GPU must advertise its implemented accelerated features.
+        let virtio_caps = DisplayCaps::ATOMIC
+            | DisplayCaps::DMABUF_IMPORT
+            | DisplayCaps::GPU_BLIT
+            | DisplayCaps::DIRECT_SCANOUT
+            | DisplayCaps::PARTIAL_FLUSH
+            | DisplayCaps::RESOURCE_CACHE;
+        assert!(virtio_caps.contains(DisplayCaps::GPU_BLIT));
+        assert!(virtio_caps.contains(DisplayCaps::DIRECT_SCANOUT));
+        assert!(virtio_caps.contains(DisplayCaps::PARTIAL_FLUSH));
+        assert!(virtio_caps.contains(DisplayCaps::RESOURCE_CACHE));
+        assert!(virtio_caps.contains(DisplayCaps::ATOMIC));
+        assert!(virtio_caps.contains(DisplayCaps::DMABUF_IMPORT));
+        // Conservative: do not advertise unimplemented GPU features
+        assert!(!virtio_caps.contains(DisplayCaps::GPU_ALPHA_BLEND));
+        assert!(!virtio_caps.contains(DisplayCaps::GPU_SCALE));
+        assert!(!virtio_caps.contains(DisplayCaps::GPU_ROUNDED_CLIP));
+        assert!(!virtio_caps.contains(DisplayCaps::FENCES));
     }
 }

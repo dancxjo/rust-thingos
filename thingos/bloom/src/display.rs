@@ -165,6 +165,54 @@ impl DisplayBackend {
         self.info.caps.contains(abi::display::DisplayCaps::VBLANK)
     }
 
+    /// Returns `true` when the driver uses GPU hardware for pixel transfer/blit
+    /// (`DisplayCaps::GPU_BLIT`).
+    pub fn supports_gpu_blit(&self) -> bool {
+        self.info.caps.contains(abi::display::DisplayCaps::GPU_BLIT)
+    }
+
+    /// Returns `true` when the driver performs alpha blending in GPU hardware
+    /// (`DisplayCaps::GPU_ALPHA_BLEND`).
+    pub fn supports_gpu_alpha_blend(&self) -> bool {
+        self.info.caps.contains(abi::display::DisplayCaps::GPU_ALPHA_BLEND)
+    }
+
+    /// Returns `true` when the driver supports GPU-accelerated plane scaling
+    /// (`DisplayCaps::GPU_SCALE`).
+    pub fn supports_gpu_scale(&self) -> bool {
+        self.info.caps.contains(abi::display::DisplayCaps::GPU_SCALE)
+    }
+
+    /// Returns `true` when the driver supports GPU/hardware rounded-rect clipping
+    /// (`DisplayCaps::GPU_ROUNDED_CLIP`).
+    pub fn supports_gpu_rounded_clip(&self) -> bool {
+        self.info.caps.contains(abi::display::DisplayCaps::GPU_ROUNDED_CLIP)
+    }
+
+    /// Returns `true` when the driver supports direct framebuffer scanout
+    /// (`DisplayCaps::DIRECT_SCANOUT`).
+    pub fn supports_direct_scanout(&self) -> bool {
+        self.info.caps.contains(abi::display::DisplayCaps::DIRECT_SCANOUT)
+    }
+
+    /// Returns `true` when the driver processes client damage rects and only
+    /// flushes the damaged regions (`DisplayCaps::PARTIAL_FLUSH`).
+    pub fn supports_partial_flush(&self) -> bool {
+        self.info.caps.contains(abi::display::DisplayCaps::PARTIAL_FLUSH)
+    }
+
+    /// Returns `true` when the driver supports GPU sync fences
+    /// (`DisplayCaps::FENCES`).
+    pub fn supports_fences(&self) -> bool {
+        self.info.caps.contains(abi::display::DisplayCaps::FENCES)
+    }
+
+    /// Returns `true` when the driver maintains a pre-allocated resource cache
+    /// (`DisplayCaps::RESOURCE_CACHE`).
+    pub fn supports_resource_cache(&self) -> bool {
+        self.info.caps.contains(abi::display::DisplayCaps::RESOURCE_CACHE)
+    }
+
     pub fn enumerate_outputs(&self) -> Vec<OutputInfo> {
         alloc::vec![OutputInfo {
             output_id: 0,

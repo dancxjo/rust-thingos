@@ -85,6 +85,30 @@ fn main(_arg: usize) -> ! {
     if primary.supports_dmabuf {
         info!("bloom: display driver supports linear dmabuf import");
     }
+    if display.supports_gpu_blit() {
+        info!("bloom: display driver supports GPU blit (hardware transfer/flush)");
+    }
+    if display.supports_direct_scanout() {
+        info!("bloom: display driver supports direct scanout (zero-copy path to display)");
+    }
+    if display.supports_partial_flush() {
+        info!("bloom: display driver supports partial flush (damage regions)");
+    }
+    if display.supports_resource_cache() {
+        info!("bloom: display driver supports resource cache (pre-allocated buffer pool)");
+    }
+    if display.supports_gpu_alpha_blend() {
+        info!("bloom: display driver supports GPU alpha blending (hardware plane blending)");
+    }
+    if display.supports_gpu_scale() {
+        info!("bloom: display driver supports GPU scaling (hardware src-to-dst scaling)");
+    }
+    if display.supports_gpu_rounded_clip() {
+        info!("bloom: display driver supports GPU rounded clip (hardware corner clipping)");
+    }
+    if display.supports_fences() {
+        info!("bloom: display driver supports GPU sync fences (producer/consumer sync)");
+    }
 
     // ── Create and publish the service port ───────────────────────────────────
     info!("bloom: creating service port...");
