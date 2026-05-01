@@ -403,7 +403,7 @@ struct VirtioGpuDriver {
     cpu_fallback_planes: u64,
     /// virgl 3D context ID used for GPU alpha blending (0 = not available).
     ///
-    /// Initialised once at driver startup when the virtio-gpu device advertises
+    /// Initialized once at driver startup when the virtio-gpu device advertises
     /// the `VIRTIO_GPU_F_VIRGL` feature bit.  All virgl operations for alpha
     /// blending use this single context.
     virgl_ctx_id: u32,
@@ -553,7 +553,7 @@ fn rounded_clip_coverage(radius: u32, x: u32, y: u32, w: u32, h: u32) -> u8 {
 // Virgl GPU Alpha Blending Path
 // ============================================================================
 
-/// Initialise the virgl GPU alpha-blending subsystem.
+/// Initialize the virgl GPU alpha-blending subsystem.
 ///
 /// Returns `(ctx_id, staging_buf_virt, staging_buf_phys, staging_size,
 /// src_res_id)`.  All values are 0 / empty on failure.  The caller stores
@@ -2786,7 +2786,7 @@ fn main(boot_arg: usize) -> ! {
     // are always available; virgl 3D extends the GPU acceleration surface.
     info!("display_virtio_gpu: composition paths: gpu_opaque_copy=enabled cpu_alpha_blend=enabled");
     if gpu.has_3d_feature() {
-        debug!("display_virtio_gpu: Virgl 3D supported — GPU alpha blend path will be initialised");
+        debug!("display_virtio_gpu: Virgl 3D supported — GPU alpha blend path will be initialized");
     } else {
         debug!("display_virtio_gpu: Virgl 3D not supported, using 2D only");
     }
@@ -2863,7 +2863,7 @@ fn main(boot_arg: usize) -> ! {
     };
 
     // ── Virgl GPU Alpha Blend Context ─────────────────────────────────────────
-    // Attempt to initialise the virgl 3D rendering context and DMA staging
+    // Attempt to initialize the virgl 3D rendering context and DMA staging
     // buffer for GPU-backed alpha blending.  Failures are non-fatal; the
     // driver falls back to the CPU blend path.
     let (virgl_ctx_id, virgl_blend_staging_buf, virgl_blend_staging_phys, virgl_blend_staging_size, virgl_src_res_id) =
