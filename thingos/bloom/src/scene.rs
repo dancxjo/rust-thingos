@@ -31,6 +31,11 @@ pub struct SurfacePending {
     pub damage: Vec<Rect>,
     pub dest_rect: Option<Rect>,
     pub input_region: Option<Rect>,
+    /// When `true`, the input region is explicitly cleared on the next commit
+    /// (i.e. the client sent `wl_surface.set_input_region(null)`).
+    /// A cleared input region means the entire surface receives input (default).
+    /// Takes precedence over `input_region` if both happen to be set.
+    pub clear_input_region: bool,
     pub opaque_region: Option<Rect>,
     /// When `true`, the opaque region is explicitly cleared on the next commit
     /// (i.e. the client sent `wl_surface.set_opaque_region(null)`).
@@ -384,7 +389,27 @@ impl Scene {
         if surface.client_id != client_id {
             return false;
         }
+        // Reset the clear flag so that setting a new rect never leaves the two
+        // fields in a contradictory state (clear=true, rect=Some).  This also
+        // handles the case where a client calls set_input_region(null) and then
+        // set_input_region(region) before the next commit — the latter wins.
+        surface.pending.clear_input_region = false;
         surface.pending.input_region = Some(rect);
+        true
+    }
+
+    /// Clear the pending input region.  On the next commit `current.input_region`
+    /// will be set to `None`, restoring the default where the entire surface
+    /// receives pointer input (Wayland `null` region semantics).
+    pub fn clear_pending_input_region(&mut self, client_id: u32, surface_id: u32) -> bool {
+        let Some(surface) = self.surfaces.get_mut(&surface_id) else {
+            return false;
+        };
+        if surface.client_id != client_id {
+            return false;
+        }
+        surface.pending.input_region = None;
+        surface.pending.clear_input_region = true;
         true
     }
 
@@ -639,7 +664,15 @@ impl Scene {
             changed = true;
             visual_full_damage = true;
         }
-        if let Some(region) = surface.pending.input_region.take() {
+        if surface.pending.clear_input_region {
+            debug_assert!(
+                surface.pending.input_region.is_none(),
+                "clear_input_region and input_region should not both be set"
+            );
+            surface.current.input_region = None;
+            surface.pending.clear_input_region = false;
+            changed = true;
+        } else if let Some(region) = surface.pending.input_region.take() {
             surface.current.input_region = Some(region);
             changed = true;
         }

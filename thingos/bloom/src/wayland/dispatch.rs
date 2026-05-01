@@ -1299,6 +1299,7 @@ fn handle_surface_commit(
         pending_damage,
         pending_frame_cb,
         pending_opaque_region,
+        pending_input_region,
     ) = {
         match client.objects.get(&wl_surface_obj) {
             Some(ObjectEntry::Surface {
@@ -1309,6 +1310,7 @@ fn handle_surface_commit(
                 pending_damage,
                 pending_frame_cb,
                 pending_opaque_region,
+                pending_input_region,
                 ..
             }) => (
                 *bloom_surface_id,
@@ -1318,6 +1320,7 @@ fn handle_surface_commit(
                 *pending_damage,
                 *pending_frame_cb,
                 *pending_opaque_region,
+                *pending_input_region,
             ),
             _ => return out,
         }
@@ -1439,6 +1442,51 @@ fn handle_surface_commit(
         }
     }
 
+    // Input region — resolve the region object (if any) to a bounding rect
+    // and emit WCMD_SET_INPUT_REGION so the main thread applies it atomically
+    // with the buffer commit.  A null region_id (0) clears the input region,
+    // restoring the default where the entire surface receives pointer input.
+    {
+        // The resolved bounding rect (in surface-local coords, clamped to
+        // non-negative).  `None` means either "no pending change" (when
+        // `pending_input_region` is `None`) or "explicit clear" (when the
+        // client passed a null wl_region ID or the region has no add ops).
+        let resolved_input_rect: Option<(u32, u32, u32, u32)> = match pending_input_region {
+            None => {
+                // No pending change from the client; nothing to send.
+                // (Skip emitting the IPC message entirely so that a prior
+                // committed input region is preserved across frames.)
+                None
+            }
+            Some(0) => {
+                // Explicit null region → clear (entire surface receives input).
+                None // send with has_region=0 below
+            }
+            Some(region_id) => {
+                // Resolve the wl_region object to a bounding rect.
+                match client.objects.get(&region_id) {
+                    Some(ObjectEntry::Region { rects }) => region_bounding_rect(rects),
+                    _ => None,
+                }
+            }
+        };
+
+        // If the client set a pending input region (even if the resolved rect
+        // is None because the region was empty / already destroyed), we must
+        // inform the main thread so it can update the scene state before the
+        // commit lands.
+        if pending_input_region.is_some() {
+            blossom_debug!(
+                "wayland-server: wl_surface obj={} commit input_region={:?}",
+                wl_surface_obj,
+                resolved_input_rect
+            );
+            out.push(
+                ipc::encode_set_input_region(bloom_surface_id, resolved_input_rect).to_vec(),
+            );
+        }
+    }
+
     // Register frame callback with IPC if present.
     let has_cb = pending_frame_cb.is_some();
     let cb_key = if let Some(cb_id) = pending_frame_cb {
@@ -1463,6 +1511,7 @@ fn handle_surface_commit(
         pending_damage,
         pending_frame_cb,
         pending_opaque_region,
+        pending_input_region,
         ..
     }) = client.objects.get_mut(&wl_surface_obj)
     {
@@ -1470,6 +1519,7 @@ fn handle_surface_commit(
         *pending_damage = None;
         *pending_frame_cb = None;
         *pending_opaque_region = None;
+        *pending_input_region = None;
     }
 
     // Atomically apply pending state of any synchronized subsurface children.
