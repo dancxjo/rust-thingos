@@ -315,8 +315,21 @@ fn read_minimal_boot_mode() -> bool {
         return false;
     };
     let mut buf = [0u8; 512];
-    let n = vfs_read(fd, &mut buf).unwrap_or(0);
+    let n = match vfs_read(fd, &mut buf) {
+        Ok(n) => n,
+        Err(e) => {
+            stem::warn!("bloom: failed to read /dev/cmdline: {:?}", e);
+            let _ = vfs_close(fd);
+            return false;
+        }
+    };
     let _ = vfs_close(fd);
-    let cmdline = core::str::from_utf8(&buf[..n]).unwrap_or("");
+    let cmdline = match core::str::from_utf8(&buf[..n]) {
+        Ok(s) => s,
+        Err(_) => {
+            stem::warn!("bloom: /dev/cmdline contains invalid UTF-8; ignoring bloom.minimal check");
+            return false;
+        }
+    };
     cmdline.contains("bloom.minimal=1")
 }

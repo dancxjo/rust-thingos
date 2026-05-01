@@ -1448,11 +1448,6 @@ fn vfs_device_call(driver: &mut VirtioGpuDriver, payload: &[u8]) -> ProviderResp
                         stem::error!("DISP: transfer_to_host failed: {}", e);
                         command_ok = false;
                     }
-                    stem::trace!(
-                        "DISP: COMMIT transfer end seq={} res_id={}",
-                        driver.present_seq.saturating_add(1),
-                        res_id
-                    );
                     stem::debug!(
                         "display.phase=transfer_to_host_done seq={} res_id={}",
                         driver.present_seq.saturating_add(1),
