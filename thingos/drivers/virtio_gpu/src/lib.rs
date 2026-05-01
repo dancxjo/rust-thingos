@@ -46,6 +46,15 @@ pub struct VirtioGpu {
     controlq_notify_off: u16,
     controlq_faulted: bool,
 
+    /// Cursor virtqueue (queue index 1). Optional: some QEMU configurations
+    /// may not expose a cursor queue.
+    cursorq: Option<Virtqueue>,
+    cursorq_notify_off: u16,
+    /// Separate DMA buffer used exclusively for cursor queue commands so
+    /// cursor traffic does not interfere with ongoing controlq transactions.
+    cursor_cmd_buf: u64,
+    cursor_cmd_buf_phys: u64,
+
     // Display info
     display_width: u32,
     display_height: u32,
@@ -115,6 +124,12 @@ impl VirtioGpu {
         let cmd_buf = device_alloc_dma(claim_handle, 1).map_err(|_| Errno::ENOMEM)?;
         let cmd_buf_phys = device_dma_phys(cmd_buf).map_err(|_| Errno::EFAULT)?;
 
+        // Allocate a separate DMA page for cursor queue commands so they don't
+        // share storage with in-flight controlq transactions.
+        let cursor_cmd_buf = device_alloc_dma(claim_handle, 1).unwrap_or(0);
+        let cursor_cmd_buf_phys =
+            if cursor_cmd_buf != 0 { device_dma_phys(cursor_cmd_buf).unwrap_or(0) } else { 0 };
+
         Ok(Self {
             claim_handle,
             common_cfg,
@@ -123,6 +138,10 @@ impl VirtioGpu {
             controlq: None,
             controlq_notify_off: 0,
             controlq_faulted: false,
+            cursorq: None,
+            cursorq_notify_off: 0,
+            cursor_cmd_buf,
+            cursor_cmd_buf_phys,
             display_width: 1024,
             display_height: 768,
             framebuffer: 0,
@@ -186,6 +205,9 @@ impl VirtioGpu {
 
         // 8. Setup virtqueues
         self.setup_controlq()?;
+        // Queue 1 is the cursor queue; ignore failure — not all QEMU
+        // configurations expose it, and display still works without it.
+        let _ = self.setup_cursorq();
 
         // 9. Set DRIVER_OK
         let status = self.read_common_u8(virtio::VIRTIO_COMMON_STATUS);
@@ -744,7 +766,184 @@ impl VirtioGpu {
         Ok(())
     }
 
-    fn read_common(&self, offset: u32) -> u32 {
+    /// Set up the cursor virtqueue (queue index 1).
+    ///
+    /// Returns `Ok(())` on success, `Err` if the device does not support a
+    /// cursor queue.  The result is intentionally ignored by `init_virtio`.
+    fn setup_cursorq(&mut self) -> Result<(), &'static str> {
+        use stem::syscall::{device_alloc_dma, device_dma_phys};
+
+        // Only set up the cursor queue if we successfully allocated a dedicated
+        // DMA buffer for it.
+        if self.cursor_cmd_buf == 0 || self.cursor_cmd_buf_phys == 0 {
+            return Err("No cursor DMA buffer");
+        }
+
+        let vq_virt =
+            device_alloc_dma(self.claim_handle, 4).map_err(|_| "Failed to alloc cursor vq")?;
+        let vq_phys =
+            device_dma_phys(vq_virt).map_err(|_| "Failed to get cursor vq phys")?;
+
+        let vq = Virtqueue::new(vq_virt, vq_phys, 16);
+
+        // Select queue 1 (cursor queue)
+        self.write_common_u16(virtio::VIRTIO_COMMON_QUEUE_SELECT, 1);
+
+        // Check the device actually exposes a second queue.
+        let max_size = self.read_common_u16(virtio::VIRTIO_COMMON_QUEUE_SIZE);
+        if max_size == 0 {
+            return Err("Device has no cursor queue");
+        }
+
+        let size = max_size.min(16);
+        self.write_common_u16(virtio::VIRTIO_COMMON_QUEUE_SIZE, size);
+        self.cursorq_notify_off = self.read_common_u16(virtio::VIRTIO_COMMON_QUEUE_NOTIFY_OFF);
+
+        self.write_common(virtio::VIRTIO_COMMON_QUEUE_DESC_LO, (vq_phys & 0xFFFFFFFF) as u32);
+        self.write_common(virtio::VIRTIO_COMMON_QUEUE_DESC_HI, (vq_phys >> 32) as u32);
+
+        let avail_offset = (size as usize) * 16;
+        let avail_phys = vq_phys + avail_offset as u64;
+        self.write_common(virtio::VIRTIO_COMMON_QUEUE_AVAIL_LO, (avail_phys & 0xFFFFFFFF) as u32);
+        self.write_common(virtio::VIRTIO_COMMON_QUEUE_AVAIL_HI, (avail_phys >> 32) as u32);
+
+        let used_unaligned = avail_offset + 6 + (size as usize) * 2;
+        let used_offset = (used_unaligned + 3) & !3;
+        let used_phys = vq_phys + used_offset as u64;
+        self.write_common(virtio::VIRTIO_COMMON_QUEUE_USED_LO, (used_phys & 0xFFFFFFFF) as u32);
+        self.write_common(virtio::VIRTIO_COMMON_QUEUE_USED_HI, (used_phys >> 32) as u32);
+
+        self.write_common_u16(virtio::VIRTIO_COMMON_QUEUE_ENABLE, 1);
+
+        self.cursorq = Some(vq);
+        stem::info!("virtio_gpu: cursor queue (queue 1) configured");
+        Ok(())
+    }
+
+    /// Returns `true` when the cursor virtqueue is available and ready.
+    pub fn has_cursorq(&self) -> bool {
+        self.cursorq.is_some()
+    }
+
+    /// Upload a new cursor image to the hardware cursor plane.
+    ///
+    /// - `resource_id`: ID of a 2D resource (created with
+    ///   [`create_resource_2d`] and backed via [`attach_backing`]) that holds
+    ///   the ARGB cursor pixels.  Pass `0` to hide the cursor.
+    /// - `hot_x`, `hot_y`: hotspot within the image (pixels from top-left).
+    /// - `pos_x`, `pos_y`: initial screen position of the hotspot.
+    pub fn update_cursor(
+        &mut self,
+        resource_id: u32,
+        hot_x: u32,
+        hot_y: u32,
+        pos_x: u32,
+        pos_y: u32,
+    ) -> Result<(), &'static str> {
+        self.send_cursor_cmd(resource_id, hot_x, hot_y, pos_x, pos_y, false)
+    }
+
+    /// Move the hardware cursor hotspot to a new screen position.
+    ///
+    /// Faster than [`update_cursor`]: no image data is transferred.
+    pub fn move_cursor_hw(
+        &mut self,
+        pos_x: u32,
+        pos_y: u32,
+    ) -> Result<(), &'static str> {
+        self.send_cursor_cmd(0, 0, 0, pos_x, pos_y, true)
+    }
+
+    /// Send an `UPDATE_CURSOR` or `MOVE_CURSOR` command on the cursor queue.
+    ///
+    /// When `move_only` is true `VIRTIO_GPU_CMD_MOVE_CURSOR` is sent (only the
+    /// position changes; `resource_id`/hotspot are ignored by the host).
+    fn send_cursor_cmd(
+        &mut self,
+        resource_id: u32,
+        hot_x: u32,
+        hot_y: u32,
+        pos_x: u32,
+        pos_y: u32,
+        move_only: bool,
+    ) -> Result<(), &'static str> {
+        if self.cursor_cmd_buf == 0 || self.cursor_cmd_buf_phys == 0 {
+            return Err("No cursor DMA buffer");
+        }
+
+        let cmd_type = if move_only {
+            VIRTIO_GPU_CMD_MOVE_CURSOR
+        } else {
+            VIRTIO_GPU_CMD_UPDATE_CURSOR
+        };
+
+        let cmd = VirtioGpuUpdateCursor {
+            hdr: VirtioGpuCtrlHdr {
+                type_: cmd_type,
+                flags: 0,
+                fence_id: 0,
+                ctx_id: 0,
+                padding: 0,
+            },
+            pos: VirtioGpuCursorPos {
+                scanout_id: 0,
+                x: pos_x,
+                y: pos_y,
+                padding: 0,
+            },
+            resource_id,
+            hot_x,
+            hot_y,
+            padding: 0,
+        };
+
+        let cmd_size = core::mem::size_of::<VirtioGpuUpdateCursor>();
+        let resp_size = core::mem::size_of::<VirtioGpuCtrlHdr>();
+        let resp_offset = ((cmd_size + 15) / 16) * 16;
+        if resp_offset.saturating_add(resp_size) > DMA_PAGE_SIZE {
+            return Err("Cursor command too large");
+        }
+
+        let cmd_bytes =
+            unsafe { core::slice::from_raw_parts(&cmd as *const _ as *const u8, cmd_size) };
+
+        let cmd_ptr = self.cursor_cmd_buf as *mut u8;
+        let resp_ptr = (self.cursor_cmd_buf + resp_offset as u64) as *mut u8;
+        unsafe {
+            for (i, byte) in cmd_bytes.iter().enumerate() {
+                write_volatile(cmd_ptr.add(i), *byte);
+            }
+            for i in 0..resp_size {
+                write_volatile(resp_ptr.add(i), 0);
+            }
+        }
+
+        let resp_phys = self.cursor_cmd_buf_phys + resp_offset as u64;
+
+        // Drain any previously completed cursor descriptors so the queue does
+        // not fill up over time.
+        if let Some(vq) = self.cursorq.as_mut() {
+            while vq.poll_used().is_some() {}
+        }
+
+        {
+            let vq = self.cursorq.as_mut().ok_or("No cursorq")?;
+            let bufs = [
+                (self.cursor_cmd_buf_phys, cmd_size as u32, false),
+                (resp_phys, resp_size as u32, true),
+            ];
+            vq.add_buffer(&bufs).ok_or("Cursor queue full")?;
+        }
+
+        // Notify cursor queue (queue index 1).
+        let notify_off = self.cursorq_notify_off;
+        let notify_addr =
+            self.notify_cfg + (notify_off as u64 * self.notify_off_multiplier as u64);
+        unsafe { write_volatile(notify_addr as *mut u16, 1u16) }
+
+        Ok(())
+    }
+
         unsafe { read_volatile((self.common_cfg + offset as u64) as *const u32) }
     }
 
@@ -770,7 +969,11 @@ impl VirtioGpu {
 
     fn notify_queue(&self, queue_idx: u16) {
         // Write queue index to notify register
-        let notify_off = if queue_idx == 0 { self.controlq_notify_off } else { queue_idx };
+        let notify_off = if queue_idx == 0 {
+            self.controlq_notify_off
+        } else {
+            self.cursorq_notify_off
+        };
         let notify_addr = self.notify_cfg + (notify_off as u64 * self.notify_off_multiplier as u64);
         unsafe { write_volatile(notify_addr as *mut u16, queue_idx) }
     }

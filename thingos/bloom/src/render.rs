@@ -93,10 +93,16 @@ struct ServerBuffer {
 #[derive(Clone, Copy)]
 pub struct CursorPlane {
     pub buffer_id: u32,
+    /// Top-left X of the cursor image in screen coordinates (= pointer_x - hotspot_x).
     pub x: i32,
+    /// Top-left Y of the cursor image in screen coordinates (= pointer_y - hotspot_y).
     pub y: i32,
     pub width: u32,
     pub height: u32,
+    /// Horizontal hotspot offset within the cursor image.
+    pub hotspot_x: u32,
+    /// Vertical hotspot offset within the cursor image.
+    pub hotspot_y: u32,
 }
 
 #[derive(Clone, Copy)]
@@ -344,6 +350,8 @@ impl CompositorVisuals {
             y: pointer_y.saturating_sub(cursor.hotspot_y as i32),
             width: cursor.width,
             height: cursor.height,
+            hotspot_x: cursor.hotspot_x,
+            hotspot_y: cursor.hotspot_y,
         })
     }
 

@@ -4,7 +4,8 @@ use core::sync::atomic::{AtomicU32, Ordering};
 use abi::device::{DeviceCall, DeviceKind};
 use abi::display::{
     BufferHandle, CommitFlags, CommitRequest, DISPLAY_OP_COMMIT, DISPLAY_OP_GET_INFO,
-    DISPLAY_OP_IMPORT_BUFFER, DISPLAY_OP_RELEASE_BUFFER, DisplayInfo, PlaneCommit, PlaneId,
+    DISPLAY_OP_IMPORT_BUFFER, DISPLAY_OP_MOVE_CURSOR, DISPLAY_OP_RELEASE_BUFFER,
+    DISPLAY_OP_SET_CURSOR, DisplayInfo, MoveCursorRequest, PlaneCommit, PlaneId, SetCursorRequest,
 };
 use abi::display_protocol::Rect;
 use abi::pixel::PixelFormat;
@@ -111,9 +112,53 @@ impl DisplayBackend {
         Some(())
     }
 
-    /// Returns `true` when the connected display driver supports blocking vsync
-    /// (`DisplayCaps::VBLANK`).
-    pub fn supports_vblank(&self) -> bool {
+    /// Returns `true` when the connected display driver supports hardware cursor
+    /// planes (`DisplayCaps::HARDWARE_CURSOR`).
+    pub fn supports_hw_cursor(&self) -> bool {
+        self.info.caps.contains(abi::display::DisplayCaps::HARDWARE_CURSOR)
+    }
+
+    /// Upload a cursor image and configure its hotspot on the display driver.
+    ///
+    /// Returns `true` on success.  Only meaningful when
+    /// [`Self::supports_hw_cursor`] is `true`.
+    pub fn set_cursor_image(
+        &self,
+        buffer_id: u32,
+        width: u32,
+        height: u32,
+        hotspot_x: u32,
+        hotspot_y: u32,
+        visible: bool,
+    ) -> bool {
+        let req = SetCursorRequest {
+            buffer_id: abi::display::BufferId(buffer_id),
+            width,
+            height,
+            hotspot_x,
+            hotspot_y,
+            visible: if visible { 1 } else { 0 },
+            _pad: 0,
+        };
+        device_call(self.fd, DISPLAY_OP_SET_CURSOR, &req, None::<&mut u32>).is_some()
+    }
+
+    /// Move the hardware cursor hotspot to a new screen position without a
+    /// full scene recomposition.
+    ///
+    /// Returns `true` on success.  Only meaningful when
+    /// [`Self::supports_hw_cursor`] is `true`.
+    pub fn move_cursor(&self, x: i32, y: i32, visible: bool) -> bool {
+        let req = MoveCursorRequest {
+            x,
+            y,
+            visible: if visible { 1 } else { 0 },
+            _pad: 0,
+        };
+        device_call(self.fd, DISPLAY_OP_MOVE_CURSOR, &req, None::<&mut u32>).is_some()
+    }
+
+
         self.info.caps.contains(abi::display::DisplayCaps::VBLANK)
     }
 

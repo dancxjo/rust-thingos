@@ -5,8 +5,9 @@ extern crate alloc;
 
 use abi::display::{
     BufferHandle, BufferId, CommitFlags, CommitRequest, DEFAULT_REFRESH_MHZ, DISPLAY_OP_COMMIT,
-    DISPLAY_OP_GET_INFO, DISPLAY_OP_IMPORT_BUFFER, DISPLAY_OP_RELEASE_BUFFER, DisplayCaps,
-    DisplayInfo, DisplayMode, PlaneCommit,
+    DISPLAY_OP_GET_INFO, DISPLAY_OP_IMPORT_BUFFER, DISPLAY_OP_MOVE_CURSOR,
+    DISPLAY_OP_RELEASE_BUFFER, DISPLAY_OP_SET_CURSOR, DisplayCaps, DisplayInfo, DisplayMode,
+    MoveCursorRequest, PlaneCommit, SetCursorRequest,
 };
 use abi::display_driver_protocol as drvproto;
 use abi::driver_frame::FrameReader;
@@ -296,6 +297,12 @@ struct VirtioGpuDriver {
     current_res_id: u32,
     first_commit_logged: bool,
     cursor_commit_logged: bool,
+    /// virtio-gpu resource ID reserved for the hardware cursor image, or 0 if
+    /// no cursor resource has been allocated yet.
+    cursor_resource_id: u32,
+    /// Buffer ID of the cursor image that is currently loaded on the hardware
+    /// cursor, or `None` if no cursor has been set.
+    cursor_buffer_id: Option<BufferId>,
 }
 
 /// Dispatch one VFS RPC request to the appropriate handler.
@@ -455,6 +462,10 @@ fn vfs_device_call(driver: &mut VirtioGpuDriver, payload: &[u8]) -> ProviderResp
     match call.op {
         DISPLAY_OP_GET_INFO => {
             stem::trace!("DISP: DISPLAY_OP_GET_INFO requested");
+            let mut caps = DisplayCaps::ATOMIC | DisplayCaps::DMABUF_IMPORT;
+            if driver.gpu.has_cursorq() {
+                caps |= DisplayCaps::HARDWARE_CURSOR;
+            }
             let info = DisplayInfo {
                 card_id: 0,
                 preferred_mode: DisplayMode {
@@ -469,7 +480,7 @@ fn vfs_device_call(driver: &mut VirtioGpuDriver, payload: &[u8]) -> ProviderResp
                 // This provider replies to DISPLAY_OP_COMMIT synchronously.
                 // Advertising VBLANK would make clients sleep inside the VFS
                 // RPC response path instead of returning to their event loops.
-                caps: DisplayCaps::ATOMIC | DisplayCaps::DMABUF_IMPORT,
+                caps,
             };
             stem::trace!("DISP: Returning dimensions {}x{}", driver.disp_width, driver.disp_height);
             let out_bytes = unsafe {
@@ -953,6 +964,123 @@ fn vfs_device_call(driver: &mut VirtioGpuDriver, payload: &[u8]) -> ProviderResp
                 }
             }
 
+            ProviderResponse::ok_device_call(0, &[])
+        }
+        DISPLAY_OP_SET_CURSOR => {
+            // Upload a cursor image and configure the hardware cursor hotspot.
+            if call_payload.len() < core::mem::size_of::<SetCursorRequest>() {
+                return ProviderResponse::err(Errno::EINVAL);
+            }
+            let req: SetCursorRequest = unsafe {
+                core::ptr::read_unaligned(call_payload.as_ptr() as *const _)
+            };
+
+            if !driver.gpu.has_cursorq() {
+                return ProviderResponse::err(Errno::ENOSYS);
+            }
+
+            // Look up the imported buffer backing the cursor image.
+            let (src_fd, src_stride, src_width, src_height) = {
+                let src = match driver.imported_buffers.get(&req.buffer_id) {
+                    Some(s) => s,
+                    None => return ProviderResponse::err(Errno::ENOENT),
+                };
+                (src.fd, src.stride, src.width, src.height)
+            };
+
+            // Allocate a virtio resource for the cursor if not yet done, or
+            // if the cursor size has changed.
+            if driver.cursor_resource_id == 0 {
+                let res_id = driver.gpu.alloc_resource_id();
+                driver.gpu.set_dimensions(req.width, req.height);
+                if let Err(e) = driver.gpu.create_resource_2d(res_id) {
+                    stem::warn!("display_virtio_gpu: cursor resource create failed: {}", e);
+                    return ProviderResponse::err(Errno::ENOMEM);
+                }
+                // Get the contiguous physical address of the shared-memory
+                // backing the imported cursor buffer.
+                let phys = match stem::syscall::shared_memory_phys(src_fd) {
+                    Ok(p) => p,
+                    Err(e) => {
+                        stem::warn!(
+                            "display_virtio_gpu: shared_memory_phys for cursor fd={} failed: {:?}",
+                            src_fd, e,
+                        );
+                        return ProviderResponse::err(Errno::ENXIO);
+                    }
+                };
+                let size = src_height as usize * src_stride as usize;
+                if let Err(e) = driver.gpu.attach_backing(res_id, phys, size, src_stride) {
+                    stem::warn!("display_virtio_gpu: cursor attach_backing failed: {}", e);
+                    return ProviderResponse::err(Errno::ENOMEM);
+                }
+                driver.cursor_resource_id = res_id;
+            }
+
+            let res_id = driver.cursor_resource_id;
+            // Transfer cursor pixels from host memory to the GPU resource.
+            let transfer_rect = virtio_gpu::Rect { x: 0, y: 0, w: src_width, h: src_height };
+            if let Err(e) = driver.gpu.transfer_to_host(res_id, transfer_rect) {
+                stem::warn!("display_virtio_gpu: cursor transfer failed: {}", e);
+                return ProviderResponse::err(Errno::EIO);
+            }
+
+            let resource_id = if req.visible != 0 { res_id } else { 0 };
+            if let Err(e) =
+                driver.gpu.update_cursor(resource_id, req.hotspot_x, req.hotspot_y, 0, 0)
+            {
+                stem::warn!("display_virtio_gpu: update_cursor failed: {}", e);
+                return ProviderResponse::err(Errno::EIO);
+            }
+
+            driver.cursor_buffer_id = Some(req.buffer_id);
+            stem::debug!(
+                "display_virtio_gpu: hw cursor set buffer={} size={}x{} hotspot={},{} visible={}",
+                req.buffer_id.0,
+                req.width,
+                req.height,
+                req.hotspot_x,
+                req.hotspot_y,
+                req.visible,
+            );
+            ProviderResponse::ok_device_call(0, &[])
+        }
+        DISPLAY_OP_MOVE_CURSOR => {
+            // Move the hardware cursor hotspot without a full scene commit.
+            if call_payload.len() < core::mem::size_of::<MoveCursorRequest>() {
+                return ProviderResponse::err(Errno::EINVAL);
+            }
+            let req: MoveCursorRequest = unsafe {
+                core::ptr::read_unaligned(call_payload.as_ptr() as *const _)
+            };
+
+            if !driver.gpu.has_cursorq() {
+                return ProviderResponse::err(Errno::ENOSYS);
+            }
+
+            // Clamp to screen bounds; saturating cast to u32 handles negatives.
+            let pos_x = req.x.max(0) as u32;
+            let pos_y = req.y.max(0) as u32;
+
+            if req.visible != 0 {
+                if let Err(e) = driver.gpu.move_cursor_hw(pos_x, pos_y) {
+                    stem::warn!("display_virtio_gpu: move_cursor_hw failed: {}", e);
+                    return ProviderResponse::err(Errno::EIO);
+                }
+            } else {
+                // Hide cursor by sending UPDATE_CURSOR with resource_id = 0.
+                if let Err(e) = driver.gpu.update_cursor(0, 0, 0, pos_x, pos_y) {
+                    stem::warn!("display_virtio_gpu: cursor hide failed: {}", e);
+                    return ProviderResponse::err(Errno::EIO);
+                }
+            }
+
+            stem::trace!(
+                "display_virtio_gpu: hw cursor moved to {},{} visible={}",
+                req.x,
+                req.y,
+                req.visible,
+            );
             ProviderResponse::ok_device_call(0, &[])
         }
         _ => ProviderResponse::err(Errno::ENOSYS),
@@ -1451,6 +1579,8 @@ fn main(boot_arg: usize) -> ! {
         current_res_id: 1,
         first_commit_logged: false,
         cursor_commit_logged: false,
+        cursor_resource_id: 0,
+        cursor_buffer_id: None,
     };
 
     // ProviderLoop handles VFS RPC framing and correctly prefixes every
