@@ -43,3 +43,12 @@ Feature: Bristle HID broker — ServiceLoop-based fanout
   Scenario: ps2_mouse completes shared-controller initialization
     # Mouse init must not spin forever behind keyboard bytes in the shared i8042 FIFO.
     Then the log should match pattern "ps2_mouse: init done"
+
+  Scenario: ps2_mouse emits ordered phase markers through ready
+    # Phase markers must appear in the log so the hunter and operators can
+    # observe exactly where in PS/2 init a stall occurs.
+    Then the log should match pattern "ps2.phase=aux_enable_begin"
+    And the log should match pattern "ps2.phase=mouse_reset_begin"
+    And the log should match pattern "ps2.phase=mouse_sample_rate_begin"
+    And the log should match pattern "ps2.phase=irq_enable_begin"
+    And the log should match pattern "ps2.phase=ready"
