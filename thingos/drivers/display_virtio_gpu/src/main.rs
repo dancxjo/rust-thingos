@@ -1036,10 +1036,22 @@ fn vfs_device_call(driver: &mut VirtioGpuDriver, payload: &[u8]) -> ProviderResp
             // the pre-allocated DMA buffer so the GPU reads from physically
             // contiguous, device-accessible memory.
             let bpp = CURSOR_BPP;
-            let dst_stride = req.width as usize * bpp;
+            // Use checked arithmetic so malformed dimensions cannot cause
+            // integer overflow and a subsequent out-of-bounds write.
+            let dst_stride = match (req.width as usize).checked_mul(bpp) {
+                Some(s) => s,
+                None => return ProviderResponse::err(Errno::EINVAL),
+            };
+            let dma_size = match (req.height as usize).checked_mul(dst_stride) {
+                Some(s) => s,
+                None => return ProviderResponse::err(Errno::EINVAL),
+            };
+            // Guard: computed size must not exceed the pre-allocated DMA buffer.
+            if dma_size > MAX_CURSOR_BYTES {
+                return ProviderResponse::err(Errno::EINVAL);
+            }
             let copy_w = req.width.min(src_width) as usize;
             let copy_h = req.height.min(src_height) as usize;
-            let dma_size = req.height as usize * dst_stride;
 
             // Zero the DMA buffer first (handles transparent padding rows).
             unsafe {

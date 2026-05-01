@@ -31,6 +31,9 @@ pub struct Rect {
 const DMA_PAGE_SIZE: usize = 4096;
 const COMMAND_TIMEOUT_NS: u64 = 500_000_000;
 const COMMAND_SLEEP_NS: u64 = 50_000;
+/// Alignment requirement for virtio descriptor buffers per the virtio spec
+/// (§2.7.2 Virtqueue Descriptor Format) and QEMU's DMA engine.
+const VIRTIO_DESCRIPTOR_ALIGNMENT: usize = 16;
 
 /// Virtio GPU driver state
 pub struct VirtioGpu {
@@ -909,9 +912,10 @@ impl VirtioGpu {
 
         let cmd_size = core::mem::size_of::<VirtioGpuUpdateCursor>();
         let resp_size = core::mem::size_of::<VirtioGpuCtrlHdr>();
-        // Align response offset to 16 bytes — virtio descriptor buffers must
-        // be naturally aligned per the virtio spec and QEMU's DMA engine.
-        let resp_offset = ((cmd_size + 15) / 16) * 16;
+        // Align response offset per VIRTIO_DESCRIPTOR_ALIGNMENT.
+        let resp_offset = ((cmd_size + VIRTIO_DESCRIPTOR_ALIGNMENT - 1)
+            / VIRTIO_DESCRIPTOR_ALIGNMENT)
+            * VIRTIO_DESCRIPTOR_ALIGNMENT;
         if resp_offset.saturating_add(resp_size) > DMA_PAGE_SIZE {
             return Err("Cursor command too large");
         }
@@ -999,7 +1003,9 @@ impl VirtioGpu {
         let cmd_type = unsafe { *(cmd.as_ptr() as *const u32) };
         // stem::info!("VirtioGpu: sending cmd type=0x{:x}", cmd_type);
 
-        let resp_offset = ((cmd.len() + 15) / 16) * 16; // Align to 16 bytes
+        let resp_offset = ((cmd.len() + VIRTIO_DESCRIPTOR_ALIGNMENT - 1)
+            / VIRTIO_DESCRIPTOR_ALIGNMENT)
+            * VIRTIO_DESCRIPTOR_ALIGNMENT;
         if resp_offset.saturating_add(resp_size) > DMA_PAGE_SIZE {
             return Err("Command too large");
         }

@@ -375,7 +375,8 @@ impl BloomWorld {
                 // resetting the tracker's dirty flag; the individual rects are
                 // not needed because the hardware cursor is positioned directly
                 // via DISPLAY_OP_MOVE_CURSOR without a framebuffer upload.
-                let _ = self.damage.take();
+                // Reset dirty flag; cursor positioning is direct via hardware.
+                let _ = self.damage.take(); // Side-effect only: clears dirty state.
                 let moved = self.display.move_cursor(pointer_x, pointer_y, cursor.is_some());
                 if moved {
                     stem::trace!(
