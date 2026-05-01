@@ -213,6 +213,58 @@ bitflags::bitflags! {
     }
 }
 
+/// Descriptor for an imported buffer's pixel-layout contract.
+///
+/// Used by `DISPLAY_OP_ACCEL2D` handlers to validate that a source buffer
+/// meets requirements before any pixel operation is performed.
+///
+/// # v1 Rules
+///
+/// - `format` must be [`PixelFormat::Bgra8888`] or [`PixelFormat::Bgrx8888`]
+///   (4 bytes per pixel; the canonical Thing-OS display format).
+/// - `stride` must be ≥ `width × format.bytes_per_pixel()`.
+/// - `modifier` must be `0` (linear, tightly-packed rows; no hardware tiling).
+/// - Only [`BufferId(0)`][BufferId] is a valid *destination* buffer; writing to
+///   any other buffer ID returns [`Errno::EINVAL`].
+///
+/// # Future (multi-buffer GPU path)
+///
+/// TODO: A future GPU acceleration path will lift the `BufferId(0)`-only
+/// restriction and extend this descriptor with import/fence metadata.
+/// Until then, every ACCEL2D command must target `BufferId(0)`.
+#[repr(C)]
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub struct DisplayBufferDesc {
+    /// Pixel format; must be `Bgra8888` or `Bgrx8888` for ACCEL2D v1.
+    pub format: PixelFormat,
+    /// Width in pixels.
+    pub width: u32,
+    /// Height in pixels.
+    pub height: u32,
+    /// Bytes between the start of consecutive rows.
+    ///
+    /// Must satisfy `stride >= width * format.bytes_per_pixel()`.
+    pub stride: u32,
+    /// Tiling/compression modifier; `0` = linear (the only value supported in
+    /// v1).
+    pub modifier: u64,
+}
+
+impl DisplayBufferDesc {
+    /// Returns `true` if this descriptor satisfies the v1 ACCEL2D
+    /// source-buffer contract:
+    ///
+    /// 1. `format` is 4 bytes per pixel (`Bgra8888` or `Bgrx8888`).
+    /// 2. `stride >= width * 4`.
+    /// 3. `modifier == 0` (linear).
+    pub const fn is_valid_accel2d_src(&self) -> bool {
+        let bpp = self.format.bytes_per_pixel();
+        bpp == 4
+            && self.stride as usize >= self.width as usize * bpp
+            && self.modifier == 0
+    }
+}
+
 /// Request to upload a hardware cursor image and configure its hotspot.
 ///
 /// Sent with [`DISPLAY_OP_SET_CURSOR`][super::ioctl::DISPLAY_OP_SET_CURSOR].
@@ -454,5 +506,90 @@ mod tests {
         // CPU fallback does not imply GPU acceleration
         assert!(!expected.contains(DisplayCaps::GPU_BLIT));
         assert!(!expected.contains(DisplayCaps::GPU_ALPHA_BLEND));
+    }
+
+    #[test]
+    fn display_buffer_desc_valid_bgra8888() {
+        let desc = DisplayBufferDesc {
+            format: PixelFormat::Bgra8888,
+            width: 1920,
+            height: 1080,
+            stride: 1920 * 4,
+            modifier: 0,
+        };
+        assert!(desc.is_valid_accel2d_src());
+    }
+
+    #[test]
+    fn display_buffer_desc_valid_bgrx8888() {
+        let desc = DisplayBufferDesc {
+            format: PixelFormat::Bgrx8888,
+            width: 1280,
+            height: 720,
+            stride: 1280 * 4,
+            modifier: 0,
+        };
+        assert!(desc.is_valid_accel2d_src());
+    }
+
+    #[test]
+    fn display_buffer_desc_rejects_rgb565() {
+        let desc = DisplayBufferDesc {
+            format: PixelFormat::Rgb565,
+            width: 1920,
+            height: 1080,
+            stride: 1920 * 2,
+            modifier: 0,
+        };
+        assert!(!desc.is_valid_accel2d_src());
+    }
+
+    #[test]
+    fn display_buffer_desc_rejects_unknown_format() {
+        let desc = DisplayBufferDesc {
+            format: PixelFormat::Unknown,
+            width: 100,
+            height: 100,
+            stride: 400,
+            modifier: 0,
+        };
+        assert!(!desc.is_valid_accel2d_src());
+    }
+
+    #[test]
+    fn display_buffer_desc_rejects_nonlinear_modifier() {
+        let desc = DisplayBufferDesc {
+            format: PixelFormat::Bgra8888,
+            width: 1920,
+            height: 1080,
+            stride: 1920 * 4,
+            modifier: 1, // non-zero = tiled/compressed
+        };
+        assert!(!desc.is_valid_accel2d_src());
+    }
+
+    #[test]
+    fn display_buffer_desc_rejects_insufficient_stride() {
+        let desc = DisplayBufferDesc {
+            format: PixelFormat::Bgra8888,
+            width: 1920,
+            height: 1080,
+            stride: 1920 * 4 - 1, // one byte short
+            modifier: 0,
+        };
+        assert!(!desc.is_valid_accel2d_src());
+    }
+
+    #[test]
+    fn display_buffer_desc_allows_padded_stride() {
+        // Stride with padding bytes is valid as long as stride >= width * bpp.
+        let desc = DisplayBufferDesc {
+            format: PixelFormat::Bgra8888,
+            width: 1920,
+            height: 1080,
+            stride: 1920 * 4 + 64, // padded row
+            modifier: 0,
+        };
+        assert!(desc.is_valid_accel2d_src());
     }
 }

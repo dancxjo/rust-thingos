@@ -1803,6 +1803,41 @@ fn vfs_device_call(driver: &mut VirtioGpuDriver, payload: &[u8]) -> ProviderResp
 // DISPLAY_OP_ACCEL2D — 2D acceleration command batch handler
 // ============================================================================
 
+/// Validate that `dst` is a legal ACCEL2D v1 destination buffer.
+///
+/// Only `BufferId(0)` (the driver-owned output framebuffer) is writable in the
+/// current CPU-fallback implementation.  Any other ID returns `EINVAL` because
+/// the v1 ABI explicitly defines `BufferId(0)` as the sole writable target —
+/// this is an invalid argument, not an unimplemented feature.
+///
+/// # v1 Contract
+///
+/// `BufferId(0)` = output framebuffer (writable).
+/// All other IDs → `EINVAL`.
+///
+/// TODO(multi-buffer): Lift this restriction when the GPU path that supports
+/// off-screen compositing targets is implemented.
+#[inline]
+fn validate_accel2d_dst_buffer(dst: BufferId) -> abi::errors::SysResult<()> {
+    if dst != BufferId(0) {
+        return Err(Errno::EINVAL);
+    }
+    Ok(())
+}
+
+/// Validate that `format` meets the ACCEL2D v1 source-buffer format contract.
+///
+/// Only 4-bytes-per-pixel formats (`Bgra8888`, `Bgrx8888`) are accepted.
+/// Callers that pass any other format receive `EINVAL` — an explicit contract
+/// violation, not a missing feature.
+#[inline]
+fn validate_accel2d_src_format(format: PixelFormat) -> abi::errors::SysResult<()> {
+    if format.bytes_per_pixel() != 4 {
+        return Err(Errno::EINVAL);
+    }
+    Ok(())
+}
+
 /// Parse and execute a batch of 2D acceleration commands sent via
 /// `DISPLAY_OP_ACCEL2D`.  Drawing commands operate on the current frame-pool
 /// buffer in CPU space; `ACCEL2D_CMD_FLUSH_DAMAGE` transfers the declared dirty
@@ -1914,6 +1949,7 @@ fn execute_accel2d_cmd(
 /// Fill a rectangle in the frame-pool buffer with a solid colour.
 ///
 /// Only `BufferId(0)` (the driver framebuffer) is supported as destination.
+/// Any other destination buffer ID returns `EINVAL` per the v1 ABI contract.
 fn accel2d_clear_rect(
     driver: &mut VirtioGpuDriver,
     idx: usize,
@@ -1921,9 +1957,7 @@ fn accel2d_clear_rect(
     rect: abi::display_protocol::Rect,
     color: u32,
 ) -> abi::errors::SysResult<()> {
-    if dst_buffer != BufferId(0) {
-        return Err(Errno::ENOSYS);
-    }
+    validate_accel2d_dst_buffer(dst_buffer)?;
     let dst = PixelBuf {
         ptr: driver.frame_pool[idx].ptr,
         size: driver.frame_pool[idx].size,
@@ -1938,7 +1972,9 @@ fn accel2d_clear_rect(
 
 /// Copy pixels from an imported buffer into the frame-pool buffer.
 ///
-/// Only `BufferId(0)` as destination is supported.
+/// Only `BufferId(0)` as destination is supported (v1 contract).
+/// Source buffer must use a 4-bpp format (`Bgra8888` or `Bgrx8888`);
+/// any other format returns `EINVAL`.
 fn accel2d_copy_rect(
     driver: &mut VirtioGpuDriver,
     idx: usize,
@@ -1947,14 +1983,9 @@ fn accel2d_copy_rect(
     src_rect: abi::display_protocol::Rect,
     dst_rect: abi::display_protocol::Rect,
 ) -> abi::errors::SysResult<()> {
-    if dst_buffer != BufferId(0) {
-        return Err(Errno::ENOSYS);
-    }
+    validate_accel2d_dst_buffer(dst_buffer)?;
     let src = driver.imported_buffers.get(&src_buffer).ok_or(Errno::ENOENT)?;
-    let bpp = src.format.bytes_per_pixel();
-    if bpp != FRAME_POOL_BPP || bpp == 0 {
-        return Err(Errno::ENOSYS);
-    }
+    validate_accel2d_src_format(src.format)?;
     let src_buf = PixelBuf {
         ptr: src.ptr,
         size: src.size,
@@ -1978,7 +2009,9 @@ fn accel2d_copy_rect(
 /// Scale-copy from an imported buffer to the frame-pool buffer using
 /// nearest-neighbour sampling.
 ///
-/// Only `BufferId(0)` as destination is supported.
+/// Only `BufferId(0)` as destination is supported (v1 contract).
+/// Source buffer must use a 4-bpp format (`Bgra8888` or `Bgrx8888`);
+/// any other format returns `EINVAL`.
 fn accel2d_stretch_blit(
     driver: &mut VirtioGpuDriver,
     idx: usize,
@@ -1987,13 +2020,9 @@ fn accel2d_stretch_blit(
     src_rect: abi::display_protocol::Rect,
     dst_rect: abi::display_protocol::Rect,
 ) -> abi::errors::SysResult<()> {
-    if dst_buffer != BufferId(0) {
-        return Err(Errno::ENOSYS);
-    }
+    validate_accel2d_dst_buffer(dst_buffer)?;
     let src = driver.imported_buffers.get(&src_buffer).ok_or(Errno::ENOENT)?;
-    if src.format.bytes_per_pixel() != 4 {
-        return Err(Errno::ENOSYS);
-    }
+    validate_accel2d_src_format(src.format)?;
     let src_buf = PixelBuf {
         ptr: src.ptr,
         size: src.size,
@@ -2016,7 +2045,9 @@ fn accel2d_stretch_blit(
 
 /// Alpha-blend an imported buffer over the frame-pool buffer.
 ///
-/// Only `BufferId(0)` as destination is supported.
+/// Only `BufferId(0)` as destination is supported (v1 contract).
+/// Source buffer must use a 4-bpp format (`Bgra8888` or `Bgrx8888`);
+/// any other format returns `EINVAL`.
 fn accel2d_alpha_blit(
     driver: &mut VirtioGpuDriver,
     idx: usize,
@@ -2026,13 +2057,9 @@ fn accel2d_alpha_blit(
     dst_rect: abi::display_protocol::Rect,
     global_alpha: u8,
 ) -> abi::errors::SysResult<()> {
-    if dst_buffer != BufferId(0) {
-        return Err(Errno::ENOSYS);
-    }
+    validate_accel2d_dst_buffer(dst_buffer)?;
     let src = driver.imported_buffers.get(&src_buffer).ok_or(Errno::ENOENT)?;
-    if src.format.bytes_per_pixel() != 4 {
-        return Err(Errno::ENOSYS);
-    }
+    validate_accel2d_src_format(src.format)?;
     let src_buf = PixelBuf {
         ptr: src.ptr,
         size: src.size,
@@ -2056,7 +2083,9 @@ fn accel2d_alpha_blit(
 /// Blend an imported buffer over the frame-pool buffer using a mask buffer as
 /// per-pixel alpha coverage.
 ///
-/// Only `BufferId(0)` as destination is supported.
+/// Only `BufferId(0)` as destination is supported (v1 contract).
+/// Both source and mask buffers must use a 4-bpp format (`Bgra8888` or
+/// `Bgrx8888`); any other format returns `EINVAL`.
 #[allow(clippy::too_many_arguments)]
 fn accel2d_masked_blit(
     driver: &mut VirtioGpuDriver,
@@ -2068,23 +2097,17 @@ fn accel2d_masked_blit(
     mask_rect: abi::display_protocol::Rect,
     dst_rect: abi::display_protocol::Rect,
 ) -> abi::errors::SysResult<()> {
-    if dst_buffer != BufferId(0) {
-        return Err(Errno::ENOSYS);
-    }
+    validate_accel2d_dst_buffer(dst_buffer)?;
     // Extract source and mask buffer metadata before borrowing driver for the
     // frame pool.
     let (src_ptr, src_size, src_width, src_height, src_stride, src_format) = {
         let src = driver.imported_buffers.get(&src_buffer).ok_or(Errno::ENOENT)?;
-        if src.format.bytes_per_pixel() != 4 {
-            return Err(Errno::ENOSYS);
-        }
+        validate_accel2d_src_format(src.format)?;
         (src.ptr, src.size, src.width, src.height, src.stride, src.format)
     };
     let (msk_ptr, msk_size, msk_width, msk_height, msk_stride, msk_format) = {
         let msk = driver.imported_buffers.get(&mask_buffer).ok_or(Errno::ENOENT)?;
-        if msk.format.bytes_per_pixel() != 4 {
-            return Err(Errno::ENOSYS);
-        }
+        validate_accel2d_src_format(msk.format)?;
         (msk.ptr, msk.size, msk.width, msk.height, msk.stride, msk.format)
     };
     let src_buf =
@@ -2108,7 +2131,9 @@ fn accel2d_masked_blit(
 /// Blit an imported buffer into the frame-pool buffer, clipped to a rounded
 /// rectangle.
 ///
-/// Only `BufferId(0)` as destination is supported.
+/// Only `BufferId(0)` as destination is supported (v1 contract).
+/// Source buffer must use a 4-bpp format (`Bgra8888` or `Bgrx8888`);
+/// any other format returns `EINVAL`.
 fn accel2d_rounded_clip_blit(
     driver: &mut VirtioGpuDriver,
     idx: usize,
@@ -2118,13 +2143,9 @@ fn accel2d_rounded_clip_blit(
     dst_rect: abi::display_protocol::Rect,
     radius: u8,
 ) -> abi::errors::SysResult<()> {
-    if dst_buffer != BufferId(0) {
-        return Err(Errno::ENOSYS);
-    }
+    validate_accel2d_dst_buffer(dst_buffer)?;
     let src = driver.imported_buffers.get(&src_buffer).ok_or(Errno::ENOENT)?;
-    if src.format.bytes_per_pixel() != 4 {
-        return Err(Errno::ENOSYS);
-    }
+    validate_accel2d_src_format(src.format)?;
     let src_buf = PixelBuf {
         ptr: src.ptr,
         size: src.size,

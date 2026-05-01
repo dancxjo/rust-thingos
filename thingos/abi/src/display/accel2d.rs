@@ -20,13 +20,46 @@
 //! framebuffer.  All other `BufferId` values reference buffers previously
 //! imported via `DISPLAY_OP_IMPORT_BUFFER`.
 //!
+//! # v1 Buffer Contract
+//!
+//! The following rules are **stable ABI** for the current v1 CPU-fallback
+//! implementation.  Both `display_bootfb` and `display_virtio_gpu` enforce
+//! them; violating any rule produces a deterministic error (no silent pixel
+//! clipping or undefined behaviour):
+//!
+//! 1. **Destination buffer** – Only `BufferId(0)` (the driver-owned output
+//!    framebuffer) is writable.  Any other destination returns `EINVAL`.
+//! 2. **Source format** – All source buffers must use
+//!    [`PixelFormat::Bgra8888`][crate::pixel::PixelFormat::Bgra8888] or
+//!    [`PixelFormat::Bgrx8888`][crate::pixel::PixelFormat::Bgrx8888]
+//!    (4 bytes/pixel, little-endian BGRA/BGRX memory layout).
+//!    Any other format returns `EINVAL`.
+//! 3. **Stride** – `stride >= width * 4` must hold for all imported buffers.
+//!    The driver validates this at import time; callers do not need to
+//!    re-check inside ACCEL2D commands.
+//! 4. **Tiling** – Only linear (modifier = 0) buffers are accepted.
+//!    Tiled/compressed layouts return `EINVAL` at import time.
+//!
+//! See [`super::types::DisplayBufferDesc`] for the canonical descriptor type
+//! that encodes these constraints.
+//!
 //! # CPU Fallback
 //!
 //! The `display_bootfb` driver provides a software fallback for all commands
 //! when the destination is `BufferId(0)` (the boot framebuffer).  Operations
-//! targeting other buffers return `ENOSYS` on backends that do not support
+//! targeting other buffers return `EINVAL` on backends that do not support
 //! off-screen compositing.  Capability flags in [`super::types::DisplayCaps`]
 //! tell callers exactly which operations the backend supports.
+//!
+//! # Future: multi-buffer GPU path
+//!
+//! TODO: A future GPU acceleration path will extend these semantics to allow:
+//! - Non-zero destination `BufferId`s for off-screen compositing.
+//! - Import of source buffers with GPU-native tiling modifiers.
+//! - Fence-based producer/consumer synchronisation.
+//!
+//! Until then, every command must target `BufferId(0)` and all source buffers
+//! must conform to the linear BGRA/BGRX constraint above.
 
 use crate::display::BufferId;
 use crate::display_protocol::Rect;
