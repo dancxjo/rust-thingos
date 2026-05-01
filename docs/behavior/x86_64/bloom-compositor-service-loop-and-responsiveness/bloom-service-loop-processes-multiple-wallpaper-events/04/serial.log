@@ -1,0 +1,8 @@
+[42140349834] [[32mINFO [0m] [bloom::services::wayland_cmd] [CPU1] bloom: registered titlebar drag zone surface=2 height=28 frame=6
+[42147967818] [[32mINFO [0m] [bloom::wayland::dispatch] [CPU2] wayland-server: xdg_toplevel obj=12 assigned to xdg_surface=11
+cho /[42658357170] [[32mINFO [0m] [bloom::services::wayland_cmd] [CPU1] bloom: registered titlebar drag zone surface=3 height=28 frame=6
+[42667504011] [[32mINFO [0m] [bloom::wayland::dispatch] [CPU2] wayland-server: xdg_popup obj=23 assigned to xdg_surface=21
+[42695473689] [[32mINFO [0m] [bloom::wayland::dispatch] [CPU2] wayland-server: imported dmabuf wl_buffer=121 160x96 format=0x34325241
+share/wallpapers/[43588540974] [[32mINFO [0m] [bloom::render] [CPU1] bloom: flat window overlays ready size=1280x800
+flower.png > /session/desktop/wal[45330536031] [[32mINFO [0m] [kernel::time] [CPU0] System clock tick: utc=2026-05-01 20:35:08.015407538 unix_secs=1777667708.015407538
+lpaper

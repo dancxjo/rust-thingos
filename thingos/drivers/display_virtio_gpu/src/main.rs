@@ -3,16 +3,16 @@
 use alloc::string::ToString;
 extern crate alloc;
 
+use abi::display::accel2d::{
+    ACCEL2D_CMD_ALPHA_BLIT, ACCEL2D_CMD_CLEAR_RECT, ACCEL2D_CMD_COPY_RECT,
+    ACCEL2D_CMD_FLUSH_DAMAGE, ACCEL2D_CMD_MASKED_BLIT, ACCEL2D_CMD_ROUNDED_CLIP_BLIT,
+    ACCEL2D_CMD_STRETCH_BLIT, ACCEL2D_COMMAND_SIZE, Accel2dBatch, Accel2dCommand,
+};
 use abi::display::{
     BufferHandle, BufferId, CommitFlags, CommitRequest, DEFAULT_REFRESH_MHZ, DISPLAY_OP_ACCEL2D,
     DISPLAY_OP_COMMIT, DISPLAY_OP_GET_INFO, DISPLAY_OP_IMPORT_BUFFER, DISPLAY_OP_MOVE_CURSOR,
     DISPLAY_OP_RELEASE_BUFFER, DISPLAY_OP_SET_CURSOR, DisplayCaps, DisplayInfo, DisplayMode,
     MoveCursorRequest, PlaneCommit, SetCursorRequest,
-    accel2d::{
-        Accel2dBatch, Accel2dCommand, ACCEL2D_COMMAND_SIZE, ACCEL2D_CMD_ALPHA_BLIT,
-        ACCEL2D_CMD_CLEAR_RECT, ACCEL2D_CMD_COPY_RECT, ACCEL2D_CMD_FLUSH_DAMAGE,
-        ACCEL2D_CMD_MASKED_BLIT, ACCEL2D_CMD_ROUNDED_CLIP_BLIT, ACCEL2D_CMD_STRETCH_BLIT,
-    },
 };
 use abi::display_driver_protocol as drvproto;
 use abi::driver_frame::FrameReader;
@@ -294,6 +294,35 @@ struct TextureEntry {
     height: u32,
 }
 
+#[derive(Clone, Copy)]
+struct DisplayRpcDiag {
+    last_entered_seq: u64,
+    last_entered_op: u32,
+    last_exited_seq: u64,
+    last_exited_op: u32,
+    last_exit_status: u8,
+    last_enter_ns: u64,
+    last_exit_ns: u64,
+    last_req_id: u16,
+    last_resp_port: u32,
+}
+
+impl DisplayRpcDiag {
+    const fn new() -> Self {
+        Self {
+            last_entered_seq: 0,
+            last_entered_op: 0,
+            last_exited_seq: 0,
+            last_exited_op: 0,
+            last_exit_status: 0,
+            last_enter_ns: 0,
+            last_exit_ns: 0,
+            last_req_id: 0,
+            last_resp_port: 0,
+        }
+    }
+}
+
 /// Next resource ID for texture allocation
 static NEXT_TEXTURE_RESOURCE_ID: core::sync::atomic::AtomicU32 =
     core::sync::atomic::AtomicU32::new(1000);
@@ -356,8 +385,7 @@ impl PresentStats {
         if gpu_interval > 0 || cpu_interval > 0 {
             trace!(
                 "display_virtio_gpu accel2d stats: gpu_cmds={}, cpu_cmds={}",
-                gpu_interval,
-                cpu_interval,
+                gpu_interval, cpu_interval,
             );
         }
         self.accel2d_gpu_cmds_at_last_log = gpu_cmds_total;
@@ -467,6 +495,14 @@ struct VirtioGpuDriver {
     /// (e.g., `ACCEL2D_CMD_CLEAR_RECT`, `ACCEL2D_CMD_MASKED_BLIT`,
     /// `ACCEL2D_CMD_ROUNDED_CLIP_BLIT`, `ACCEL2D_CMD_STRETCH_BLIT`).
     accel2d_cpu_cmds: u64,
+    display_rpc_seq: u64,
+    rpc_diag: DisplayRpcDiag,
+    total_imports: u64,
+    total_commits: u64,
+    failed_imports: u64,
+    failed_commits: u64,
+    last_damage_rect_count: u32,
+    last_damage_area: u64,
 }
 
 /// Dispatch one VFS RPC request to the appropriate handler.
@@ -480,9 +516,167 @@ fn dispatch_vfs_rpc(driver: &mut VirtioGpuDriver, req: &ProviderRequest) -> Prov
         VfsRpcOp::Close | VfsRpcOp::SubscribeReady | VfsRpcOp::UnsubscribeReady => {
             ProviderResponse::ok_empty()
         }
-        VfsRpcOp::DeviceCall => vfs_device_call(driver, &req.payload),
+        VfsRpcOp::DeviceCall => vfs_device_call(driver, req, &req.payload),
         _ => ProviderResponse::err(Errno::ENOSYS),
     }
+}
+
+fn display_op_name(op: u32) -> &'static str {
+    match op {
+        DISPLAY_OP_GET_INFO => "GET_INFO",
+        DISPLAY_OP_IMPORT_BUFFER => "IMPORT_BUFFER",
+        DISPLAY_OP_RELEASE_BUFFER => "RELEASE_BUFFER",
+        DISPLAY_OP_COMMIT => "COMMIT",
+        DISPLAY_OP_SET_CURSOR => "SET_CURSOR",
+        DISPLAY_OP_MOVE_CURSOR => "MOVE_CURSOR",
+        DISPLAY_OP_ACCEL2D => "ACCEL2D",
+        _ => "UNKNOWN",
+    }
+}
+
+fn display_rpc_payload_summary(op: u32, payload: &[u8]) -> (u32, u32, u32) {
+    match op {
+        DISPLAY_OP_IMPORT_BUFFER => {
+            if payload.len() >= core::mem::size_of::<BufferHandle>() {
+                let bh: BufferHandle =
+                    unsafe { core::ptr::read_unaligned(payload.as_ptr() as *const _) };
+                (bh.handle, bh.width, bh.height)
+            } else {
+                (0, 0, 0)
+            }
+        }
+        DISPLAY_OP_RELEASE_BUFFER => {
+            if payload.len() >= 4 {
+                (u32::from_le_bytes(payload[..4].try_into().unwrap()), 0, 0)
+            } else {
+                (0, 0, 0)
+            }
+        }
+        DISPLAY_OP_COMMIT => {
+            let header_size = core::mem::size_of::<CommitRequest>();
+            if payload.len() >= header_size {
+                let req: CommitRequest =
+                    unsafe { core::ptr::read_unaligned(payload.as_ptr() as *const _) };
+                let plane_size = core::mem::size_of::<PlaneCommit>();
+                let first_buffer = if req.commit_count > 0
+                    && payload.len() >= header_size.saturating_add(plane_size)
+                {
+                    let plane: PlaneCommit = unsafe {
+                        core::ptr::read_unaligned(payload[header_size..].as_ptr() as *const _)
+                    };
+                    plane.buffer_id.0
+                } else {
+                    0
+                };
+                (first_buffer, req.commit_count, req.damage_count)
+            } else {
+                (0, 0, 0)
+            }
+        }
+        DISPLAY_OP_SET_CURSOR => {
+            if payload.len() >= core::mem::size_of::<SetCursorRequest>() {
+                let req: SetCursorRequest =
+                    unsafe { core::ptr::read_unaligned(payload.as_ptr() as *const _) };
+                (req.buffer_id.0, req.width, req.height)
+            } else {
+                (0, 0, 0)
+            }
+        }
+        DISPLAY_OP_MOVE_CURSOR => {
+            if payload.len() >= core::mem::size_of::<MoveCursorRequest>() {
+                let req: MoveCursorRequest =
+                    unsafe { core::ptr::read_unaligned(payload.as_ptr() as *const _) };
+                (req.x.max(0) as u32, req.y.max(0) as u32, req.visible as u32)
+            } else {
+                (0, 0, 0)
+            }
+        }
+        DISPLAY_OP_ACCEL2D => {
+            if payload.len() >= core::mem::size_of::<Accel2dBatch>() {
+                let batch: Accel2dBatch =
+                    unsafe { core::ptr::read_unaligned(payload.as_ptr() as *const _) };
+                (0, batch.cmd_count, 0)
+            } else {
+                (0, 0, 0)
+            }
+        }
+        _ => (0, 0, 0),
+    }
+}
+
+fn device_call_ret(response: &ProviderResponse) -> u32 {
+    if response.status == 0 && response.payload.len() >= 4 {
+        u32::from_le_bytes(response.payload[..4].try_into().unwrap_or([0; 4]))
+    } else {
+        0
+    }
+}
+
+fn note_damage_snapshot(driver: &mut VirtioGpuDriver, rects: &[Rect]) {
+    driver.last_damage_rect_count = rects.len() as u32;
+    driver.last_damage_area = rects.iter().fold(0u64, |acc, r| acc.saturating_add(rect_area(*r)));
+}
+
+fn frame_pool_counts(driver: &VirtioGpuDriver) -> (usize, usize, usize) {
+    let total = driver.frame_pool.len();
+    let in_flight_idx = driver.last_presented_idx;
+    let current_idx = driver.frame_pool.iter().position(|buf| buf.res_id == driver.current_res_id);
+    let in_flight = usize::from(in_flight_idx.is_some());
+    let acquired = usize::from(
+        driver.current_fd.is_some() && current_idx.is_some() && current_idx != in_flight_idx,
+    );
+    let used = in_flight.saturating_add(acquired).min(total);
+    (total.saturating_sub(used), acquired, in_flight)
+}
+
+fn maybe_log_display_watchdog(
+    driver: &VirtioGpuDriver,
+    last_watchdog_ns: &mut u64,
+    vfs_pending_bytes: usize,
+) {
+    const WATCHDOG_INTERVAL_NS: u64 = 5_000_000_000;
+    let now = stem::time::monotonic_ns();
+    if now.saturating_sub(*last_watchdog_ns) < WATCHDOG_INTERVAL_NS {
+        return;
+    }
+    *last_watchdog_ns = now;
+    if driver.present_seq == 0 && driver.display_rpc_seq == 0 {
+        return;
+    }
+
+    let (free, acquired, in_flight) = frame_pool_counts(driver);
+    let current_frame = driver.last_presented_idx.unwrap_or(driver.next_buffer_idx);
+    let open_rpc_ms = if driver.rpc_diag.last_entered_seq > driver.rpc_diag.last_exited_seq {
+        now.saturating_sub(driver.rpc_diag.last_enter_ns) / 1_000_000
+    } else {
+        0
+    };
+    let last_rpc_ms =
+        driver.rpc_diag.last_exit_ns.saturating_sub(driver.rpc_diag.last_enter_ns) / 1_000_000;
+    info!(
+        "display_virtio_gpu: watchdog rpc_enter={}({}) rpc_exit={}({}) status={} req_id={} resp_port={} open_rpc_ms={} last_rpc_ms={} frame={} present_seq={} pool free={} acquired={} in_flight={} imports={} commits={} failed_imports={} failed_commits={} damage_rects={} damage_area={} vfs_pending_bytes={}",
+        driver.rpc_diag.last_entered_seq,
+        display_op_name(driver.rpc_diag.last_entered_op),
+        driver.rpc_diag.last_exited_seq,
+        display_op_name(driver.rpc_diag.last_exited_op),
+        driver.rpc_diag.last_exit_status,
+        driver.rpc_diag.last_req_id,
+        driver.rpc_diag.last_resp_port,
+        open_rpc_ms,
+        last_rpc_ms,
+        current_frame,
+        driver.present_seq,
+        free,
+        acquired,
+        in_flight,
+        driver.total_imports,
+        driver.total_commits,
+        driver.failed_imports,
+        driver.failed_commits,
+        driver.last_damage_rect_count,
+        driver.last_damage_area,
+        vfs_pending_bytes,
+    );
 }
 
 fn alpha_over_argb(src: u32, dst: u32, plane_alpha: u8) -> u32 {
@@ -627,7 +821,10 @@ fn init_virgl_blend(
 
     const BLEND_CTX_ID: u32 = 1;
     if let Err(e) = gpu.create_context(BLEND_CTX_ID, b"blend") {
-        warn!("display_virtio_gpu: virgl create_context failed: {}; GPU alpha blend unavailable", e);
+        warn!(
+            "display_virtio_gpu: virgl create_context failed: {}; GPU alpha blend unavailable",
+            e
+        );
         return (0, 0, 0, 0, 0);
     }
 
@@ -657,7 +854,10 @@ fn init_virgl_blend(
     let (buf_virt, buf_phys) = match gpu.alloc_dma(pages) {
         Ok(v) => v,
         Err(e) => {
-            warn!("display_virtio_gpu: virgl staging alloc failed: {}; GPU alpha blend unavailable", e);
+            warn!(
+                "display_virtio_gpu: virgl staging alloc failed: {}; GPU alpha blend unavailable",
+                e
+            );
             return (0, 0, 0, 0, 0);
         }
     };
@@ -673,15 +873,24 @@ fn init_virgl_blend(
         disp_height,
         1,
     ) {
-        warn!("display_virtio_gpu: virgl create_resource_3d failed: {}; GPU alpha blend unavailable", e);
+        warn!(
+            "display_virtio_gpu: virgl create_resource_3d failed: {}; GPU alpha blend unavailable",
+            e
+        );
         return (0, 0, 0, 0, 0);
     }
     if let Err(e) = gpu.attach_backing_3d(src_res_id, buf_phys, size) {
-        warn!("display_virtio_gpu: virgl attach_backing_3d failed: {}; GPU alpha blend unavailable", e);
+        warn!(
+            "display_virtio_gpu: virgl attach_backing_3d failed: {}; GPU alpha blend unavailable",
+            e
+        );
         return (0, 0, 0, 0, 0);
     }
     if let Err(e) = gpu.ctx_attach_resource(BLEND_CTX_ID, src_res_id) {
-        warn!("display_virtio_gpu: virgl ctx_attach src_res failed: {}; GPU alpha blend unavailable", e);
+        warn!(
+            "display_virtio_gpu: virgl ctx_attach src_res failed: {}; GPU alpha blend unavailable",
+            e
+        );
         return (0, 0, 0, 0, 0);
     }
 
@@ -757,8 +966,7 @@ fn gpu_alpha_blit(
             for col in 0..copy_w {
                 let src_off = (src_y + row).saturating_mul(src_buffer.stride as usize)
                     + (src_x + col).saturating_mul(bpp);
-                let stg_off = row.saturating_mul(staging_stride as usize)
-                    + col.saturating_mul(bpp);
+                let stg_off = row.saturating_mul(staging_stride as usize) + col.saturating_mul(bpp);
                 if src_off + bpp > src_buffer.size {
                     // Out-of-bounds source pixel — write transparent black.
                     core::ptr::write_unaligned(staging_ptr.add(stg_off) as *mut u32, 0u32);
@@ -813,10 +1021,7 @@ fn gpu_alpha_blit(
         virtio_gpu::VIRTIO_GPU_FORMAT_B8G8R8X8_UNORM,
         true, // alpha_blend
     );
-    driver
-        .gpu
-        .submit_3d(driver.virgl_ctx_id, &blit_cmd)
-        .map_err(|_| abi::errors::Errno::EIO)?;
+    driver.gpu.submit_3d(driver.virgl_ctx_id, &blit_cmd).map_err(|_| abi::errors::Errno::EIO)?;
 
     Ok(())
 }
@@ -855,7 +1060,11 @@ fn vfs_stat(payload: &[u8]) -> ProviderResponse {
     ProviderResponse::ok_stat(mode, size, handle)
 }
 
-fn vfs_device_call(driver: &mut VirtioGpuDriver, payload: &[u8]) -> ProviderResponse {
+fn vfs_device_call(
+    driver: &mut VirtioGpuDriver,
+    req: &ProviderRequest,
+    payload: &[u8],
+) -> ProviderResponse {
     use abi::device::{DeviceCall, DeviceKind};
 
     let dc_size = core::mem::size_of::<DeviceCall>();
@@ -876,7 +1085,73 @@ fn vfs_device_call(driver: &mut VirtioGpuDriver, payload: &[u8]) -> ProviderResp
         return ProviderResponse::err(Errno::ENOSYS);
     }
 
+    driver.display_rpc_seq = driver.display_rpc_seq.saturating_add(1);
+    let seq = driver.display_rpc_seq;
+    let (summary0, summary1, summary2) = display_rpc_payload_summary(call.op, call_payload);
+    let tid = stem::syscall::get_tid().unwrap_or(0);
+    driver.rpc_diag.last_entered_seq = seq;
+    driver.rpc_diag.last_entered_op = call.op;
+    driver.rpc_diag.last_enter_ns = stem::time::monotonic_ns();
+    driver.rpc_diag.last_req_id = req.req_id;
+    driver.rpc_diag.last_resp_port = req.resp_port;
+    trace!(
+        "display_virtio_gpu: rpc enter seq={} op={} req_id={} resp_port={} pid={} tid={} arg0={} arg1={} arg2={}",
+        seq,
+        display_op_name(call.op),
+        req.req_id,
+        req.resp_port,
+        stem::syscall::getpid(),
+        tid,
+        summary0,
+        summary1,
+        summary2,
+    );
+
+    let response = dispatch_display_device_call(driver, call.op, call_payload);
+    let ret = device_call_ret(&response);
+    let ok = response.status == 0;
     match call.op {
+        DISPLAY_OP_IMPORT_BUFFER => {
+            if ok {
+                driver.total_imports = driver.total_imports.saturating_add(1);
+            } else {
+                driver.failed_imports = driver.failed_imports.saturating_add(1);
+            }
+        }
+        DISPLAY_OP_COMMIT | DISPLAY_OP_ACCEL2D => {
+            if ok {
+                driver.total_commits = driver.total_commits.saturating_add(1);
+            } else {
+                driver.failed_commits = driver.failed_commits.saturating_add(1);
+            }
+        }
+        _ => {}
+    }
+    driver.rpc_diag.last_exited_seq = seq;
+    driver.rpc_diag.last_exited_op = call.op;
+    driver.rpc_diag.last_exit_status = response.status;
+    driver.rpc_diag.last_exit_ns = stem::time::monotonic_ns();
+    trace!(
+        "display_virtio_gpu: rpc exit seq={} op={} status={} ret={} present_seq={} imports={} commits={} failed_imports={} failed_commits={}",
+        seq,
+        display_op_name(call.op),
+        response.status,
+        ret,
+        driver.present_seq,
+        driver.total_imports,
+        driver.total_commits,
+        driver.failed_imports,
+        driver.failed_commits,
+    );
+    response
+}
+
+fn dispatch_display_device_call(
+    driver: &mut VirtioGpuDriver,
+    op: u32,
+    call_payload: &[u8],
+) -> ProviderResponse {
+    match op {
         DISPLAY_OP_GET_INFO => {
             let _ = refresh_display_mode(driver);
             stem::trace!("DISP: DISPLAY_OP_GET_INFO requested");
@@ -1095,6 +1370,7 @@ fn vfs_device_call(driver: &mut VirtioGpuDriver, payload: &[u8]) -> ProviderResp
                 damage_rects.clear();
                 damage_rects.push(Rect { x: 0, y: 0, w: driver.disp_width, h: driver.disp_height });
             }
+            note_damage_snapshot(driver, &damage_rects);
             planes.sort_unstable_by_key(|plane| plane.z_order);
 
             if !planes.is_empty() {
@@ -1264,20 +1540,13 @@ fn vfs_device_call(driver: &mut VirtioGpuDriver, payload: &[u8]) -> ProviderResp
                             };
                             let dp = if dst_off + 4 <= driver.frame_pool[idx].size {
                                 unsafe {
-                                    core::ptr::read_unaligned(
-                                        target_ptr.add(dst_off) as *const u32
-                                    )
+                                    core::ptr::read_unaligned(target_ptr.add(dst_off) as *const u32)
                                 }
                             } else {
                                 0
                             };
-                            first_copy_sample = Some((
-                                plane.buffer_id.0,
-                                sp,
-                                dp,
-                                copy_w as u32,
-                                copy_h as u32,
-                            ));
+                            first_copy_sample =
+                                Some((plane.buffer_id.0, sp, dp, copy_w as u32, copy_h as u32));
                         }
                         continue;
                     }
@@ -1441,9 +1710,10 @@ fn vfs_device_call(driver: &mut VirtioGpuDriver, payload: &[u8]) -> ProviderResp
                         // imported_buffers is only read here; gpu_alpha_blit takes
                         // the buffer by reference so we snapshot the needed values
                         // to avoid the borrow-checker conflict).
-                        let src_snapshot = driver.imported_buffers.get(&buf_id).map(|s| {
-                            (s.ptr, s.size, s.stride, s.format)
-                        });
+                        let src_snapshot = driver
+                            .imported_buffers
+                            .get(&buf_id)
+                            .map(|s| (s.ptr, s.size, s.stride, s.format));
                         if let Some((src_ptr, src_size, src_stride, src_format)) = src_snapshot {
                             // Build a temporary ImportedBuffer view from the snapshot.
                             let tmp_buf = ImportedBuffer {
@@ -1455,9 +1725,9 @@ fn vfs_device_call(driver: &mut VirtioGpuDriver, payload: &[u8]) -> ProviderResp
                                 stride: src_stride,
                                 format: src_format,
                             };
-                            if let Err(e) = gpu_alpha_blit(
-                                driver, idx, &tmp_buf, sx, sy, cw, ch, dx, dy, ga,
-                            ) {
+                            if let Err(e) =
+                                gpu_alpha_blit(driver, idx, &tmp_buf, sx, sy, cw, ch, dx, dy, ga)
+                            {
                                 // Fall back to CPU blend for this plane.
                                 stem::warn!(
                                     "DISP: GPU alpha blit failed ({:?}), applying CPU fallback",
@@ -1465,8 +1735,7 @@ fn vfs_device_call(driver: &mut VirtioGpuDriver, payload: &[u8]) -> ProviderResp
                                 );
                                 driver.cpu_fallback_planes =
                                     driver.cpu_fallback_planes.saturating_add(1);
-                                driver.gpu_path_planes =
-                                    driver.gpu_path_planes.saturating_sub(1);
+                                driver.gpu_path_planes = driver.gpu_path_planes.saturating_sub(1);
                                 let target_ptr = driver.frame_pool[idx].ptr;
                                 let target_size = driver.frame_pool[idx].size;
                                 let fb_stride = driver.disp_stride as usize;
@@ -1476,15 +1745,14 @@ fn vfs_device_call(driver: &mut VirtioGpuDriver, payload: &[u8]) -> ProviderResp
                                             let s_off = (sy + row)
                                                 .saturating_mul(src_stride as usize)
                                                 + (sx + col).saturating_mul(4);
-                                            let d_off = (dy + row)
-                                                .saturating_mul(fb_stride)
+                                            let d_off = (dy + row).saturating_mul(fb_stride)
                                                 + (dx + col).saturating_mul(4);
                                             if s_off + 4 > src_size || d_off + 4 > target_size {
                                                 continue;
                                             }
                                             let sp = source_argb_for_blend(
                                                 core::ptr::read_unaligned(
-                                                    src_ptr.add(s_off) as *const u32,
+                                                    src_ptr.add(s_off) as *const u32
                                                 ),
                                                 src_format,
                                             );
@@ -1499,12 +1767,8 @@ fn vfs_device_call(driver: &mut VirtioGpuDriver, payload: &[u8]) -> ProviderResp
                                     }
                                 }
                                 // Re-upload the CPU-blended region.
-                                let fallback_rect = Rect {
-                                    x: dx as u32,
-                                    y: dy as u32,
-                                    w: cw as u32,
-                                    h: ch as u32,
-                                };
+                                let fallback_rect =
+                                    Rect { x: dx as u32, y: dy as u32, w: cw as u32, h: ch as u32 };
                                 let _ = driver.gpu.transfer_to_host_with_stride(
                                     res_id,
                                     fallback_rect,
@@ -1843,9 +2107,7 @@ fn vfs_device_call(driver: &mut VirtioGpuDriver, payload: &[u8]) -> ProviderResp
             );
             ProviderResponse::ok_device_call(0, &[])
         }
-        DISPLAY_OP_ACCEL2D => {
-            execute_accel2d(driver, call_payload)
-        }
+        DISPLAY_OP_ACCEL2D => execute_accel2d(driver, call_payload),
         _ => ProviderResponse::err(Errno::ENOSYS),
     }
 }
@@ -1944,8 +2206,7 @@ fn gpu_accel2d_copy_rect(
                 let src_off = (src_rect.y as usize + row)
                     .saturating_mul(src_buffer.stride as usize)
                     + (src_rect.x as usize + col).saturating_mul(bpp);
-                let stg_off =
-                    row.saturating_mul(staging_stride as usize) + col.saturating_mul(bpp);
+                let stg_off = row.saturating_mul(staging_stride as usize) + col.saturating_mul(bpp);
                 let px = if src_off + bpp <= src_buffer.size {
                     // Normalise BGRX → BGRA by forcing alpha=0xff for opaque formats.
                     let raw = core::ptr::read_unaligned(src_buffer.ptr.add(src_off) as *const u32);
@@ -1989,10 +2250,7 @@ fn gpu_accel2d_copy_rect(
         virtio_gpu::VIRTIO_GPU_FORMAT_B8G8R8X8_UNORM,
         false, // opaque copy — no alpha blending
     );
-    driver
-        .gpu
-        .submit_3d(driver.virgl_ctx_id, &blit_cmd)
-        .map_err(|_| abi::errors::Errno::EIO)?;
+    driver.gpu.submit_3d(driver.virgl_ctx_id, &blit_cmd).map_err(|_| abi::errors::Errno::EIO)?;
 
     Ok(())
 }
@@ -2064,7 +2322,7 @@ fn execute_accel2d(driver: &mut VirtioGpuDriver, call_payload: &[u8]) -> Provide
         let off = batch_size + i * ACCEL2D_COMMAND_SIZE;
         let cmd: Accel2dCommand = unsafe {
             core::ptr::read_unaligned(
-                call_payload[off..off + ACCEL2D_COMMAND_SIZE].as_ptr() as *const _,
+                call_payload[off..off + ACCEL2D_COMMAND_SIZE].as_ptr() as *const _
             )
         };
         if let Err(e) = execute_accel2d_cmd(driver, idx, &cmd) {
@@ -2097,11 +2355,11 @@ fn execute_accel2d_cmd(
             let c = unsafe { cmd.body.copy_rect };
             validate_accel2d_dst_buffer(c.dst_buffer)?;
             // Extract source buffer metadata before any mutable borrow.
-            let src_snapshot = driver
-                .imported_buffers
-                .get(&c.src_buffer)
-                .ok_or(Errno::ENOENT)
-                .and_then(|s| { validate_accel2d_src_format(s.format)?; Ok(*s) })?;
+            let src_snapshot =
+                driver.imported_buffers.get(&c.src_buffer).ok_or(Errno::ENOENT).and_then(|s| {
+                    validate_accel2d_src_format(s.format)?;
+                    Ok(*s)
+                })?;
             // Try GPU path first; fall back to CPU on ENOSYS.
             match gpu_accel2d_copy_rect(driver, idx, &src_snapshot, c.src_rect, c.dst_rect) {
                 Ok(()) => {
@@ -2112,10 +2370,20 @@ fn execute_accel2d_cmd(
                 Err(abi::errors::Errno::ENOSYS) => {
                     trace!("display_virtio_gpu: [batch {}] copy_rect using CPU", idx);
                     driver.accel2d_cpu_cmds = driver.accel2d_cpu_cmds.saturating_add(1);
-                    accel2d_copy_rect(driver, idx, c.src_buffer, c.dst_buffer, c.src_rect, c.dst_rect)
+                    accel2d_copy_rect(
+                        driver,
+                        idx,
+                        c.src_buffer,
+                        c.dst_buffer,
+                        c.src_rect,
+                        c.dst_rect,
+                    )
                 }
                 Err(e) => {
-                    warn!("display_virtio_gpu: [batch {}] gpu_accel2d_copy_rect failed: {:?}", idx, e);
+                    warn!(
+                        "display_virtio_gpu: [batch {}] gpu_accel2d_copy_rect failed: {:?}",
+                        idx, e
+                    );
                     Err(e)
                 }
             }
@@ -2129,14 +2397,19 @@ fn execute_accel2d_cmd(
             let c = unsafe { cmd.body.alpha_blit };
             validate_accel2d_dst_buffer(c.dst_buffer)?;
             // Extract source buffer metadata before any mutable borrow.
-            let src_snapshot = driver
-                .imported_buffers
-                .get(&c.src_buffer)
-                .ok_or(Errno::ENOENT)
-                .and_then(|s| { validate_accel2d_src_format(s.format)?; Ok(*s) })?;
+            let src_snapshot =
+                driver.imported_buffers.get(&c.src_buffer).ok_or(Errno::ENOENT).and_then(|s| {
+                    validate_accel2d_src_format(s.format)?;
+                    Ok(*s)
+                })?;
             // Try GPU path first; fall back to CPU on ENOSYS.
             match gpu_accel2d_alpha_blit(
-                driver, idx, &src_snapshot, c.src_rect, c.dst_rect, c.global_alpha,
+                driver,
+                idx,
+                &src_snapshot,
+                c.src_rect,
+                c.dst_rect,
+                c.global_alpha,
             ) {
                 Ok(()) => {
                     trace!("display_virtio_gpu: [batch {}] alpha_blit using GPU", idx);
@@ -2147,11 +2420,20 @@ fn execute_accel2d_cmd(
                     trace!("display_virtio_gpu: [batch {}] alpha_blit using CPU", idx);
                     driver.accel2d_cpu_cmds = driver.accel2d_cpu_cmds.saturating_add(1);
                     accel2d_alpha_blit(
-                        driver, idx, c.src_buffer, c.dst_buffer, c.src_rect, c.dst_rect, c.global_alpha,
+                        driver,
+                        idx,
+                        c.src_buffer,
+                        c.dst_buffer,
+                        c.src_rect,
+                        c.dst_rect,
+                        c.global_alpha,
                     )
                 }
                 Err(e) => {
-                    warn!("display_virtio_gpu: [batch {}] gpu_accel2d_alpha_blit failed: {:?}", idx, e);
+                    warn!(
+                        "display_virtio_gpu: [batch {}] gpu_accel2d_alpha_blit failed: {:?}",
+                        idx, e
+                    );
                     Err(e)
                 }
             }
@@ -2355,10 +2637,22 @@ fn accel2d_masked_blit(
         validate_accel2d_src_format(msk.format)?;
         (msk.ptr, msk.size, msk.width, msk.height, msk.stride, msk.format)
     };
-    let src_buf =
-        PixelBuf { ptr: src_ptr, size: src_size, width: src_width, height: src_height, stride: src_stride, format: src_format };
-    let msk_buf =
-        PixelBuf { ptr: msk_ptr, size: msk_size, width: msk_width, height: msk_height, stride: msk_stride, format: msk_format };
+    let src_buf = PixelBuf {
+        ptr: src_ptr,
+        size: src_size,
+        width: src_width,
+        height: src_height,
+        stride: src_stride,
+        format: src_format,
+    };
+    let msk_buf = PixelBuf {
+        ptr: msk_ptr,
+        size: msk_size,
+        width: msk_width,
+        height: msk_height,
+        stride: msk_stride,
+        format: msk_format,
+    };
     let dst_buf = PixelBuf {
         ptr: driver.frame_pool[idx].ptr,
         size: driver.frame_pool[idx].size,
@@ -2429,8 +2723,7 @@ fn accel2d_flush_damage(
         // Full-surface flush.
         damage_rects.push(Rect { x: 0, y: 0, w: driver.disp_width, h: driver.disp_height });
     } else {
-        let count =
-            (cmd.rect_count as usize).min(abi::display::accel2d::ACCEL2D_MAX_DAMAGE_RECTS);
+        let count = (cmd.rect_count as usize).min(abi::display::accel2d::ACCEL2D_MAX_DAMAGE_RECTS);
         for i in 0..count {
             let r = cmd.rects[i];
             let clamped = rect_clamp_to_bounds(
@@ -2447,6 +2740,7 @@ fn accel2d_flush_damage(
             return Ok(());
         }
     }
+    note_damage_snapshot(driver, &damage_rects);
 
     // Transfer each damaged region to the GPU resource, then flush.
     let stride = driver.disp_stride;
@@ -2950,8 +3244,13 @@ fn main(boot_arg: usize) -> ! {
     // Attempt to initialize the virgl 3D rendering context and DMA staging
     // buffer for GPU-backed alpha blending.  Failures are non-fatal; the
     // driver falls back to the CPU blend path.
-    let (virgl_ctx_id, virgl_blend_staging_buf, virgl_blend_staging_phys, virgl_blend_staging_size, virgl_src_res_id) =
-        init_virgl_blend(&mut gpu, disp_width, disp_height, &frame_pool_buffers);
+    let (
+        virgl_ctx_id,
+        virgl_blend_staging_buf,
+        virgl_blend_staging_phys,
+        virgl_blend_staging_size,
+        virgl_src_res_id,
+    ) = init_virgl_blend(&mut gpu, disp_width, disp_height, &frame_pool_buffers);
     if virgl_ctx_id != 0 {
         info!(
             "display_virtio_gpu: composition paths: gpu_opaque_copy=enabled gpu_alpha_blend=enabled cpu_alpha_blend=enabled"
@@ -3127,11 +3426,20 @@ fn main(boot_arg: usize) -> ! {
         virgl_src_res_id,
         accel2d_gpu_cmds: 0,
         accel2d_cpu_cmds: 0,
+        display_rpc_seq: 0,
+        rpc_diag: DisplayRpcDiag::new(),
+        total_imports: 0,
+        total_commits: 0,
+        failed_imports: 0,
+        failed_commits: 0,
+        last_damage_rect_count: 0,
+        last_damage_area: 0,
     };
 
     // ProviderLoop handles VFS RPC framing and correctly prefixes every
     // response with the req_id the kernel needs to route the reply.
     let mut vfs_loop = ProviderLoop::new(vfs_read);
+    let mut last_watchdog_ns = stem::time::monotonic_ns();
     info!("display_virtio_gpu: VFS provider loop online");
 
     loop {
@@ -3465,7 +3773,10 @@ fn main(boot_arg: usize) -> ! {
                         // Rate-limited stats logging
                         if stats.frame_count >= STATS_LOG_INTERVAL {
                             stats.log_and_reset(driver.gpu_path_planes, driver.cpu_fallback_planes);
-                            stats.log_and_reset_accel2d(driver.accel2d_gpu_cmds, driver.accel2d_cpu_cmds);
+                            stats.log_and_reset_accel2d(
+                                driver.accel2d_gpu_cmds,
+                                driver.accel2d_cpu_cmds,
+                            );
                         }
                     }
                     send_msg(drv_resp_write, drvproto::MSG_ACK, &[]);
@@ -3722,5 +4033,6 @@ fn main(boot_arg: usize) -> ! {
         if DISPLAY_PROVIDER_POLL_ISOLATION && !did_work {
             stem::sleep_ms(1);
         }
+        maybe_log_display_watchdog(&driver, &mut last_watchdog_ns, vfs_loop.pending_len());
     }
 }

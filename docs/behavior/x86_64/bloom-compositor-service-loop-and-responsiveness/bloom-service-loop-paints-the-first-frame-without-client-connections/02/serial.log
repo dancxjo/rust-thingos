@@ -1,0 +1,33 @@
+[32mINFO [0m] [cambium::catalog] [CPU1] DEVD CATALOG: registered driver '/drivers/display_virtio_gpu' name='display_virtio_gpu' class=Display kind='dev.display.Gpu' start='thingos_driver_start_safe'
+[37108382784] [[32mINFO [0m] [sprout::supervisor] [CPU0] SPROUT: Spawned bloom (PID=10)
+[37182352350] [[32mINFO [0m] [bloom] [CPU1] bloom: ENTERING MAIN
+[37183596879] [[32mINFO [0m] [bloom] [CPU1] bloom: compositor service starting
+[37199335107] [[32mINFO [0m] [cambium::catalog] [CPU1] DEVD CATALOG: registered driver '/drivers/hdaudio' name='hdaudio' class=Audio kind='dev.sound.Hda' start='thingos_driver_start_safe'
+[37427808561] [[32mINFO [0m] [bloom] [CPU1] bloom: connected to /dev/display/card0 on try 0
+[37453873578] [[32mINFO [0m] [bloom] [CPU1] bloom: output0 1280x800 @ 60000mHz
+[37455345147] [[32mINFO [0m] [bloom] [CPU1] bloom: display driver does not support VBLANK
+[37456639770] [[32mINFO [0m] [bloom] [CPU1] bloom: display driver supports linear dmabuf import
+[37459081836] [[32mINFO [0m] [bloom] [CPU1] bloom: display driver supports GPU blit (hardware transfer/flush)
+[37462065960] [[32mINFO [0m] [bloom] [CPU1] bloom: display driver supports direct scanout (zero-copy path to display)
+[37463359692] [[32mINFO [0m] [bloom] [CPU1] bloom: display driver supports partial flush (damage regions)
+[37464683586] [[32mINFO [0m] [bloom] [CPU1] bloom: display driver supports resource cache (pre-allocated buffer pool)
+[37465903695] [[32mINFO [0m] [bloom] [CPU1] bloom: creating service port...
+[37773102015] [[32mINFO [0m] [bloom::render] [CPU1] bloom: pistil background renderer loaded from /lib/libpistil.so
+[37774192434] [[32mINFO [0m] [bloom::render] [CPU1] bloom: pistil font text renderer loaded with default /share/fonts/Inter-Regular.ttf
+[37775007468] [[32mINFO [0m] [bloom::render] [CPU1] bloom: pistil symbol renderer loaded with /share/fonts/NotoSansSymbol2-Regular.ttf
+[37782553347] [[32mINFO [0m] [bloom] [CPU1] bloom: initial theme configured Facet Frame
+[38013620997] [[32mINFO [0m] [cambium::catalog] [CPU1] DEVD CATALOG: registered driver '/drivers/hwrng' name='hwrng' class=Other kind='dev.rng.HwRng' start='_RNvCs7wlZbVUrQWf_5hwrng20thingos_driver_start'
+[38163024405] [[32mINFO [0m] [cambium::catalog] [CPU1] DEVD CATALOG: registered driver '/drivers/pci_stubd' name='pci_stubd' class=Other kind='drv.PciStubd' start='thingos_driver_start_safe'
+[38326354638] [[32mINFO [0m] [cambium::catalog] [CPU1] DEVD CATALOG: registered driver '/drivers/ps2_kbd' name='ps2_kbd' class=Input kind='drv.Ps2Keyboard' start='thingos_driver_start_safe'
+[38438599056] [[32mINFO [0m] [bloom] [CPU1] bloom: initial wallpaper configured /share/wallpapers/flower.png
+[38635994595] [[32mINFO [0m] [cambium::catalog] [CPU1] DEVD CATALOG: registered driver '/drivers/ps2_mouse' name='ps2_mouse' class=Input kind='drv.Ps2Mouse' start='thingos_driver_start_safe'
+[38789666751] [[32mINFO [0m] [cambium::catalog] [CPU1] DEVD CATALOG: registered driver '/drivers/rtc_cmos' name='rtc_cmos' class=Other kind='dev.rtc.Cmos' start='thingos_driver_start_safe'
+[38964698388] [[32mINFO [0m] [cambium::catalog] [CPU1] DEVD CATALOG: registered driver '/drivers/rtl8168d' name='rtl8168d' class=Net kind='dev.net.Nic' start='thingos_driver_start_safe'
+[39057532371] [[32mINFO [0m] [bloom::render] [CPU1] bloom: cursor ready buffer=2 size=48x48 hotspot=11,6
+[39067677396] [[32mINFO [0m] [bloom] [CPU1] bloom: watching wallpaper config /session/desktop/wallpaper
+[39069594102] [[32mINFO [0m] [bloom] [CPU1] bloom: watching theme config /session/desktop/theme
+[39113706126] [[32mINFO [0m] [bloom] [CPU1] bloom: Wayland server thread spawned
+[39115453212] [[32mINFO [0m] [bloom::loop_types] [CPU1] bloom: service loop started
+[39116263098] [[32mINFO [0m] [bloom::loop_types] [CPU1] bloom: output0 1280x800 @ 60000mHz ready
+[39122630481] [[32mINFO [0m] [bloom::wayland] [CPU2] wayland-server: starting
+[39137686368] [

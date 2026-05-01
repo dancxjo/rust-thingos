@@ -1,0 +1,10 @@
+=== Command Output ===
+1
+=== End Command Output ===
+
+=== Serial Log (since step start) ===
+[[32mINFO [0m] [bloom::services::wallpaper] [CPU1] bloom: preparing background /share/wallpapers/flower.png
+e[43677635463] [[32mINFO [0m] [ps2_mouse] [CPU3] ps2_mouse: sample rate set to 60 Hz
+cho hello | grep hello | wc -l
+[?25l
+=== End Serial Log ===

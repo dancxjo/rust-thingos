@@ -1,0 +1,44 @@
+[?25h[1;95mTHING[0m[1;96m-OS[0m [2;94m[[0m[1;92mOK[0m[2;94m][0m [1;93m/[0m [1;96m>[0m [?25h[47965774857] [[32mINFO [0m] [wayland_hello] [CPU2] wayland_hello: frame callback done object=1000 data=23968
+[47968248471] [[32mINFO [0m] [bloom::services::theme_service] [CPU1] bloom: reacting to theme change: Solarized Warm -> Facet Frame
+[47969021793] [[32mINFO [0m] [wayland_hello] [CPU2] wayland_hello: wp_presentation_feedback.presented object=1001 tv=23.977968844 refresh_ns=16666666 seq=0
+[48711787938] [[32mINFO [0m] [wayland_hello] [CPU2] wayland_hello: frame callback done object=1002 data=24349
+[48712786749] [[32mINFO [0m] [wayland_hello] [CPU2] wayland_hello: wp_presentation_feedback.presented object=1003 tv=24.354146272 refresh_ns=16666666 seq=1
+[48728165112] [[32mINFO [0m] [bloom::services::theme_service] [CPU1] bloom: reacting to theme change: Solarized Warm -> Facet Frame
+[48734440128] [[32mINFO [0m] [bloom::services::theme_service] [CPU1] bloom: reacting to theme change: Solarized Warm -> Facet Frame
+[49426857117] [[32mINFO [0m] [bloom::services::theme_service] [CPU1] bloom: reacting to theme change: Solarized Warm -> Facet Frame
+[52183005105] [[32mINFO [0m] [kernel::time] [CPU0] System clock tick: utc=2026-05-01 20:31:45.014570051 unix_secs=1777667505.014570051
+[58190962170] [[32mINFO [0m] [kernel::time] [CPU0] System clock tick: utc=2026-05-01 20:31:48.018535136 unix_secs=1777667508.018535136
+[64198612434] [[32mINFO [0m] [kernel::time] [CPU0] System clock tick: utc=2026-05-01 20:31:51.022362875 unix_secs=1777667511.022362875
+[70206261477] [[32mINFO [0m] [kernel::time] [CPU0] System clock tick: utc=2026-05-01 20:31:54.026206322 unix_secs=1777667514.026206322
+[74809901298] [[32mINFO [0m] [clock] [CPU1] clock: tick local=2026-05-01 12:31:56 UTC-8 system_unix=1777667516.327396361
+[76214111358] [[32mINFO [0m] [kernel::time] [CPU0] System clock tick: utc=2026-05-01 20:31:57.030114828 unix_secs=1777667517.030114828
+[82221982524] [[32mINFO [0m] [kernel::time] [CPU0] System clock tick: utc=2026-05-01 20:32:00.034041534 unix_secs=1777667520.034041534
+[88229759706] [[32mINFO [0m] [kernel::time] [CPU0] System clock tick: utc=2026-05-01 20:32:03.037916018 unix_secs=1777667523.037916018
+[94237454091] [[32mINFO [0m] [kernel::time] [CPU0] System clock tick: utc=2026-05-01 20:32:06.041783637 unix_secs=1777667526.041783637
+[100245197580] [[32mINFO [0m] [kernel::time] [CPU0] System clock tick: utc=2026-05-01 20:32:09.045657444 unix_secs=1777667529.045657444
+[106253337003] [[32mINFO [0m] [kernel::time] [CPU0] System clock tick: utc=2026-05-01 20:32:12.049648220 unix_secs=1777667532.049648220
+[112261565790] [[32mINFO [0m] [kernel::time] [CPU0] System clock tick: utc=2026-05-01 20:32:15.053843430 unix_secs=1777667535.053843430
+[118275352338] [[32mINFO [0m] [kernel::time] [CPU0] System clock tick: utc=2026-05-01 20:32:18.060713192 unix_secs=1777667538.060713192
+[124276798668] [[32mINFO [0m] [kernel::time] [CPU0] System clock tick: utc=2026-05-01 20:32:21.061374746 unix_secs=1777667541.061374746
+[130284467808] [[32mINFO [0m] [kernel::time] [CPU0] System clock tick: utc=2026-05-01 20:32:24.065242052 unix_secs=1777667544.065242052
+[136291667985] [[32mINFO [0m] [kernel::time] [CPU0] System clock tick: utc=2026-05-01 20:32:27.068898752 unix_secs=1777667547.068898752
+[142299623268] [[32mINFO [0m] [kernel::time] [CPU0] System clock tick: utc=2026-05-01 20:32:30.072869628 unix_secs=1777667550.072869628
+[148307328048] [[32mINFO [0m] [kernel::time] [CPU0] System clock tick: utc=2026-05-01 20:32:33.076695750 unix_secs=1777667553.076695750
+[149082175077] [[32mINFO [0m] [clock] [CPU1] clock: tick local=2026-05-01 12:32:33 UTC-8 system_unix=1777667553.463935488
+[154314996297] [[32mINFO [0m] [kernel::time] [CPU0] System clock tick: utc=2026-05-01 20:32:36.080567181 unix_secs=1777667556.080567181
+[160323503109] [[32mINFO [0m] [kernel::time] [CPU0] System clock tick: utc=2026-05-01 20:32:39.084776235 unix_secs=1777667559.084776235
+[166330957551] [[32mINFO [0m] [kernel::time] [CPU0] System clock tick: utc=2026-05-01 20:32:42.088520435 unix_secs=1777667562.088520435
+[172338249369] [[32mINFO [0m] [kernel::time] [CPU0] System clock tick: utc=2026-05-01 20:32:45.092191011 unix_secs=1777667565.092191011
+[178346120865] [[32mINFO [0m] [kernel::time] [CPU0] System clock tick: utc=2026-05-01 20:32:48.096130455 unix_secs=1777667568.096130455
+[184354159770] [[32mINFO [0m] [kernel::time] [CPU0] System clock tick: utc=2026-05-01 20:32:51.100125933 unix_secs=1777667571.100125933
+[190361582631] [[32mINFO [0m] [kernel::time] [CPU0] System clock tick: utc=2026-05-01 20:32:54.103843370 unix_secs=1777667574.103843370
+[196369465248] [[32mINFO [0m] [kernel::time] [CPU0] System clock tick: utc=2026-05-01 20:32:57.107780174 unix_secs=1777667577.107780174
+[202378864512] [[32mINFO [0m] [kernel::time] [CPU0] System clock tick: utc=2026-05-01 20:33:00.112459329 unix_secs=1777667580.112459329
+[208385165769] [[32mINFO [0m] [kernel::time] [CPU0] System clock tick: utc=2026-05-01 20:33:03.115638057 unix_secs=1777667583.115638057
+[214392928101] [[32mINFO [0m] [kernel::time] [CPU0] System clock tick: utc=2026-05-01 20:33:06.119500529 unix_secs=1777667586.119500529
+[220401465537] [[32mINFO [0m] [kernel::time] [CPU0] System clock tick: utc=2026-05-01 20:33:09.123754166 unix_secs=1777667589.123754166
+[223380554694] [[32mINFO [0m] [clock] [CPU1] clock: tick local=2026-05-01 12:33:10 UTC-8 system_unix=1777667590.612924079
+[226408512825] [[32mINFO [0m] [kernel::time] [CPU0] System clock tick: utc=2026-05-01 20:33:12.127293419 unix_secs=1777667592.127293419
+[232416935091] [[32mINFO [0m] [kernel::time] [CPU0] System clock tick: utc=2026-05-01 20:33:15.131495526 unix_secs=1777667595.131495526
+[238423822692] [[32mINFO [0m] [kernel::time] [CPU0] System clock tick: utc=2026-05-01 20:33:18.134954474 unix_secs=1777667598.134954474
+[244432371876]

@@ -1,0 +1,5 @@
+[32mINFO [0m] [cambium::catalog] [CPU1] DEVD CATALOG: registered driver '/drivers/display_virtio_gpu' name='display_virtio_gpu' class=Display kind='dev.display.Gpu' start='thingos_driver_start_safe'
+[37481072112] [[32mINFO [0m] [sprout::supervisor] [CPU0] SPROUT: Spawned bloom (PID=10)
+[37525266141] [[32mINFO [0m] [bloom] [CPU1] bloom: ENTERING MAIN
+[37526437773] [[32mINFO [0m] [bloom] [CPU1] bloom: compositor service starting
+[37676038620] [[

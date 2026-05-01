@@ -1,0 +1,210 @@
+[2J[01;01H[=3h[2J[01;01H[2J[01;01H[8;042;160t0[2J[01;01H[2J[01;01H[8;056;240t0[2J[01;01HBdsDxe: loading Boot0002 "UEFI QEMU DVD-ROM QM00005 " from PciRoot(0x0)/Pci(0x1F,0x2)/Sata(0x2,0xFFFF,0x0)
+BdsDxe: starting Boot0002 "UEFI QEMU DVD-ROM QM00005 " from PciRoot(0x0)/Pci(0x1F,0x2)/Sata(0x2,0xFFFF,0x0)
+[2J[01;01H[01;01H[2J[01;01H[01;01H[33673764564] [[32mINFO [0m] [kernel::boot_progress] [CPU0] boot_progress: milestone="Framebuffer Initialized"
+[33933190797] [[32mINFO [0m] [kernel::boot_progress] [CPU0] boot_progress: milestone="Memory Map OK"
+[33953640006] [[32mINFO [0m] [kernel] [CPU0] Initializing global allocator...
+[33986946708] [[32mINFO [0m] [kernel::boot_progress] [CPU0] boot_progress: milestone="Global Allocator"
+[34021021584] [[32mINFO [0m] [kernel::boot_progress] [CPU0] boot_progress: milestone="Display Registry"
+[34041009222] [[32mINFO [0m] [kernel] [CPU0] Initializing SIMD...
+[34043149272] [[32mINFO [0m] [kernel::boot_progress] [CPU0] boot_progress: milestone="SIMD Ready"
+[34082227014] [[33mWARN [0m] [kernel::entropy] [CPU0] ENTROPY: no hardware RNG available, using timer fallback (weak entropy)
+[34084089633] [[32mINFO [0m] [kernel::boot_progress] [CPU0] boot_progress: milestone="SIMD Ready"
+[34105165017] [[32mINFO [0m] [kernel] [CPU0] Initializing tasking...
+[34120804377] [[32mINFO [0m] [kernel::sched] [CPU0] SCHED: 1 per-CPU scheduler(s) allocated
+[34121501403] [[32mINFO [0m] [kernel::sched] [CPU0] SCHED: per-CPU preemption initialized (1 independent preemption domains, no global preemption lock)
+[34158049299] [[32mINFO [0m] [kernel::sched] [CPU0] Scheduler initialized
+[34159246275] [[32mINFO [0m] [kernel::boot_progress] [CPU0] boot_progress: milestone="Tasking Initialized"
+[34250676306] [[32mINFO [0m] [kernel::boot_progress] [CPU0] boot_progress: milestone="VFS Root Ready"
+[34333436610] [[32mINFO [0m] [kernel::boot_progress] [CPU0] boot_progress: milestone="PCI Bus Scanned"
+[34355610102] [[32mINFO [0m] [kernel::boot_progress] [CPU0] boot_progress: milestone="Legacy Devices"
+[34429983126] [[32mINFO [0m] [kernel::boot_progress] [CPU0] boot_progress: milestone="BSP Timer OK"
+[34533022623] [[32mINFO [0m] [kernel::boot_progress] [CPU0] boot_progress: milestone="SMP Bring-up"
+[34563194787] [[32mINFO [0m] [kernel::boot_progress] [CPU0] boot_progress: milestone="Boot Info OK"
+[34586204664] [[32mINFO [0m] [kernel::boot_progress] [CPU0] boot_progress: milestone="Modules Scanned"
+[34689050022] [[32mINFO [0m] [kernel::boot_progress] [CPU0] boot_progress: hint="Press F12 for a terminal"
+[34745035875] [[32mINFO [0m] [kernel::boot_progress] [CPU0] boot_progress: milestone="Spawning Sprout"
+[34882006566] [[32mINFO [0m] [kernel::boot_progress] [CPU0] boot_progress: milestone="Entering Scheduler"
+[35138909751] [[32mINFO [0m] [kernel] [CPU0] [kernel:start] scheduler-entry total elapsed_ticks=958812327 elapsed_us=479406
+[35139764286] [[32mINFO [0m] [kernel] [CPU0] Entering scheduler loop.
+[35221003323] [[32mINFO [0m] [sprout] [CPU0] SPROUT: ENTERING MAIN (arg0=6291456)
+[35226178218] [[32mINFO [0m] [sprout] [CPU0] SPROUT: v0.4.1 [REBUILT] starting (Supervisor Mode)...
+[35265031131] [[32mINFO [0m] [sprout::supervisor] [CPU0] SPROUT: Initializing Supervisor...
+[35308446492] [[32mINFO [0m] [sprout::supervisor] [CPU0] SPROUT: Supervisor session started (FULL PIPELINE MODE)
+[35331392382] [[32mINFO [0m] [sprout::supervisor] [CPU0] SPROUT: Launching serial shell...
+[35333110296] [[32mINFO [0m] [sprout::pipelines] [CPU0] SPROUT: Setting up serial shell on /dev/console...
+[35479946931] [[32mINFO [0m] [sprout::pipelines] [CPU0] SPROUT: Spawned serial shell '/bin/sh' (PID=6)
+[35486211057] [[32mINFO [0m] [sprout::supervisor] [CPU0] SPROUT: Serial shell launched; yielding 50ms so the prompt can take the foreground
+[35505119100] [[32mINFO [0m] [sh] [CPU3] SH: starting v0.1.0-debug
+[1;32m
+        .-.
+       /   \        [1;36mTHING-OS[1;32m
+      |     |       [0;36m"People, places, things."[1;32m
+       \   /        
+        `-'        
+       /   \        v0.1  •  
+      |     |       2026-04-16
+       \   /
+        `-'
+[0m
+[2m--------------------------------------------------------------[0m
+[1m sprout has taken root. the system is awake.[0m
+
+  try:
+    [36mls /bin[0m       browse available shoots
+    [36mps[0m            observe living processes
+    [36mcat /version[0m  inspect the genome
+
+[2m--------------------------------------------------------------[0m
+[1;95mTHING[0m[1;96m-OS[0m [2;94m[[0m[1;95mBOOT[0m[2;94m][0m [1;93m/[0m [1;96m>[0m [?25h[35668351158] [[32mINFO [0m] [sprout::supervisor] [CPU0] SPROUT: Continuing supervisor startup
+[35670373233] [[32mINFO [0m] [sprout::supervisor] [CPU0] SPROUT: Spawning cambium for driver discovery...
+[35702933112] [[32mINFO [0m] [sprout::pipelines] [CPU0] SPROUT: Skipping early /hosts mount; mesocarp is disabled in init
+[35705220045] [[32mINFO [0m] [sprout::supervisor] [CPU0] SPROUT: Starting full pipeline (graphics + input)
+[35706683628] [[32mINFO [0m] [sprout::supervisor] [CPU0] SPROUT: Entering supervisor service loop (tick=100ms)
+[35707170411] [[32mINFO [0m] [cambium] [CPU1] CAMBIUM: main started
+[35731127850] [[32mINFO [0m] [cambium] [CPU1] CAMBIUM: starting device discovery manager (daemon mode)
+[35741741508] [[32mINFO [0m] [sprout::pipelines] [CPU0] SPROUT: Spawned bristle (PID=8)
+[35744918748] [[32mINFO [0m] [sprout::supervisor] [CPU0] SPROUT: Starting display pipeline setup
+[35746641579] [[32mINFO [0m] [sprout::pipelines] [CPU0] SPROUT: Probing /dev/fb0 for boot framebuffer metadata
+[35753343351] [[32mINFO [0m] [sprout::pipelines] [CPU0] SPROUT: /dev/fb0 ready width=1920 height=1080 stride=7680 format=2
+[35772176616] [[32mINFO [0m] [sprout::pipelines] [CPU0] SPROUT: Selected display driver '/drivers/display_virtio_gpu'
+[35774714712] [[32mINFO [0m] [sprout::pipelines] [CPU0] SPROUT: Creating display request port
+[35785399881] [[32mINFO [0m] [sprout::pipelines] [CPU0] SPROUT: Creating display response port
+[35789568012] [[32mINFO [0m] [sprout::pipelines] [CPU0] SPROUT: Creating display bootstrap memfd
+[35795022549] [[32mINFO [0m] [sprout::pipelines] [CPU0] SPROUT: Mapping display bootstrap memfd
+[35801008188] [[32mINFO [0m] [sprout::pipelines] [CPU0] SPROUT: Launching display driver '/drivers/display_virtio_gpu' (boot_fd=3, bind_id=322371585)
+[35802892983] [[32mINFO [0m] [bristle] [CPU2] bristle: published pid 8 to /run/bristle/pid
+[35814787800] [[32mINFO [0m] [bristle] [CPU2] bristle: published device handles kbd_in=1 mouse_in=3
+[35826464421] [[32mINFO [0m] [bristle] [CPU2] bristle: online (kbd_tok=Some(WaitToken(2)), mouse_tok=Some(WaitToken(3)))
+[35861725020] [[32mINFO [0m] [sprout::supervisor] [CPU0] SPROUT: Display pipeline initialized (backend=virtio_gpu)
+[35865572721] [[32mINFO [0m] [display_virtio_gpu] [CPU3] display_virtio_gpu: starting v0.4.1 (boot_arg=3)
+[35947941777] [[32mINFO [0m] [virtio_gpu] [CPU3] virtio_gpu: caps from sysfs - common BAR2 off=0x1000, notify BAR2 off=0x3000 mult=4
+[35961269487] [[32mINFO [0m] [virtio_gpu] [CPU3] virtio_gpu: device features=0x30000002 virgl=false
+[35972852454] [[32mINFO [0m] [virtio_gpu] [CPU3] virtio_gpu: cursor queue (queue 1) configured
+[35974116189] [[32mINFO [0m] [display_virtio_gpu] [CPU3] display_virtio_gpu: GPU initialized successfully
+[35975078733] [[32mINFO [0m] [display_virtio_gpu] [CPU3] display_virtio_gpu: composition paths: gpu_opaque_copy=enabled cpu_alpha_blend=enabled
+[35984959032] [[32mINFO [0m] [display_virtio_gpu] [CPU3] display_virtio_gpu: host scanout 1280x800 enabled=true (bootfb was 1920x1080)
+[36018556431] [[32mINFO [0m] [cambium::catalog] [CPU1] DEVD CATALOG: registered driver '/drivers/ahci_disk' name='ahci_disk' class=Block kind='dev.storage.Ahci' start='thingos_driver_start_safe'
+[36186426705] [[32mINFO [0m] [cambium::catalog] [CPU1] DEVD CATALOG: registered driver '/drivers/ata_disk' name='ata_disk' class=Block kind='dev.storage.Ide' start='thingos_driver_start_safe'
+[36240174894] [[32mINFO [0m] [display_virtio_gpu] [CPU3] display_virtio_gpu: cursor DMA buffer ready (16 pages at phys=0x2723000)
+[36305894724] [[32mINFO [0m] [sprout::supervisor] [CPU0] SPROUT: Mounted /dev/display/card0 successfully
+[36314577453] [[32mINFO [0m] [display_virtio_gpu] [CPU3] display_virtio_gpu: Sovereign registration COMPLETE. Assigned: /dev/display/card0
+[36319552368] [[32mINFO [0m] [display_virtio_gpu] [CPU3] display_virtio_gpu: VFS provider loop online
+[36322801416] [[32mINFO [0m] [sprout::supervisor] [CPU0] SPROUT: Display service is ready at /dev/display/card0
+[36350309424] [[32mINFO [0m] [cambium::catalog] [CPU1] DEVD CATALOG: registered driver '/drivers/chime' name='chime' class=Audio kind='dev.sound.Chime' start='thingos_driver_start_safe'
+[36519616815] [[32mINFO [0m] [cambium::catalog] [CPU1] DEVD CATALOG: registered driver '/drivers/display_bootfb' name='display_bootfb' class=Display kind='dev.display.Gpu' start='thingos_driver_start_safe'
+[36708502974] [[32mINFO [0m] [cambium::catalog] [CPU1] DEVD CATALOG: registered driver '/drivers/display_virtio_gpu' name='display_virtio_gpu' class=Display kind='dev.display.Gpu' start='thingos_driver_start_safe'
+[36792046302] [[32mINFO [0m] [sprout::supervisor] [CPU0] SPROUT: Spawned bloom (PID=10)
+[36823622748] [[32mINFO [0m] [bloom] [CPU1] bloom: ENTERING MAIN
+[36825189192] [[32mINFO [0m] [bloom] [CPU1] bloom: compositor service starting
+[36988055247] [[32mINFO [0m] [cambium::catalog] [CPU1] DEVD CATALOG: registered driver '/drivers/hdaudio' name='hdaudio' class=Audio kind='dev.sound.Hda' start='thingos_driver_start_safe'
+[37003196538] [[32mINFO [0m] [bloom] [CPU1] bloom: connected to /dev/display/card0 on try 0
+[37026687918] [[32mINFO [0m] [bloom] [CPU1] bloom: output0 1280x800 @ 60000mHz
+[37027840971] [[32mINFO [0m] [bloom] [CPU1] bloom: display driver does not support VBLANK
+[37028661846] [[32mINFO [0m] [bloom] [CPU1] bloom: display driver supports linear dmabuf import
+[37029351447] [[32mINFO [0m] [bloom] [CPU1] bloom: display driver supports GPU blit (hardware transfer/flush)
+[37030180704] [[32mINFO [0m] [bloom] [CPU1] bloom: display driver supports direct scanout (zero-copy path to display)
+[37030864233] [[32mINFO [0m] [bloom] [CPU1] bloom: display driver supports partial flush (damage regions)
+[37031486085] [[32mINFO [0m] [bloom] [CPU1] bloom: display driver supports resource cache (pre-allocated buffer pool)
+[37032161100] [[32mINFO [0m] [bloom] [CPU1] bloom: creating service port...
+[37363968972] [[32mINFO [0m] [bloom::render] [CPU1] bloom: pistil background renderer loaded from /lib/libpistil.so
+[37365118362] [[32mINFO [0m] [bloom::render] [CPU1] bloom: pistil font text renderer loaded with default /share/fonts/Inter-Regular.ttf
+[37520872653] [[32mINFO [0m] [cambium::catalog] [CPU1] DEVD CATALOG: registered driver '/drivers/hwrng' name='hwrng' class=Other kind='dev.rng.HwRng' start='_RNvCs7wlZbVUrQWf_5hwrng20thingos_driver_start'
+[37695531753] [[32mINFO [0m] [bloom::render] [CPU1] bloom: pistil symbol renderer loaded with /share/fonts/NotoSansSymbol2-Regular.ttf
+[37708261404] [[32mINFO [0m] [bloom] [CPU1] bloom: initial theme configured Facet Frame
+[38016545424] [[32mINFO [0m] [cambium::catalog] [CPU1] DEVD CATALOG: registered driver '/drivers/pci_stubd' name='pci_stubd' class=Other kind='drv.PciStubd' start='thingos_driver_start_safe'
+[38186378307] [[32mINFO [0m] [cambium::catalog] [CPU1] DEVD CATALOG: registered driver '/drivers/ps2_kbd' name='ps2_kbd' class=Input kind='drv.Ps2Keyboard' start='thingos_driver_start_safe'
+[38416466913] [[32mINFO [0m] [bloom] [CPU1] bloom: initial wallpaper configured /share/wallpapers/flower.png
+[38429226330] [[32mINFO [0m] [cambium::catalog] [CPU1] DEVD CATALOG: registered driver '/drivers/ps2_mouse' name='ps2_mouse' class=Input kind='drv.Ps2Mouse' start='thingos_driver_start_safe'
+[38617187928] [[32mINFO [0m] [cambium::catalog] [CPU1] DEVD CATALOG: registered driver '/drivers/rtc_cmos' name='rtc_cmos' class=Other kind='dev.rtc.Cmos' start='thingos_driver_start_safe'
+[38966734884] [[32mINFO [0m] [cambium::catalog] [CPU1] DEVD CATALOG: registered driver '/drivers/rtl8168d' name='rtl8168d' class=Net kind='dev.net.Nic' start='thingos_driver_start_safe'
+[39149219406] [[32mINFO [0m] [cambium::catalog] [CPU1] DEVD CATALOG: registered driver '/drivers/virtio_netd' name='virtio_netd' class=Net kind='dev.net.Nic' start='thingos_driver_start_safe'
+[39162902889] [[32mINFO [0m] [sprout::supervisor] [CPU0] SPROUT: Spawned wayland_hello (PID=11)
+[39166316640] [[32mINFO [0m] [bloom::render] [CPU1] bloom: cursor ready buffer=2 size=48x48 hotspot=11,6
+[39178925544] [[32mINFO [0m] [bloom] [CPU1] bloom: watching wallpaper config /session/desktop/wallpaper
+[39182992068] [[32mINFO [0m] [bloom] [CPU1] bloom: watching theme config /session/desktop/theme
+[39192002784] [[32mINFO [0m] [sprout::supervisor] [CPU0] SPROUT: Spawned clock (PID=12)
+[39211384509] [[32mINFO [0m] [clock] [CPU3] clock: running at low scheduler priority tid=12
+[39227749077] [[32mINFO [0m] [bloom::wayland] [CPU1] wayland-server: starting
+[39243085959] [[32mINFO [0m] [bloom::wayland] [CPU1] wayland-server: listening on /run/wayland-0
+[39244139913] [[32mINFO [0m] [bloom::wayland] [CPU1] wayland-server: advertising globals wl_compositor wl_shm xdg_wm_base wl_seat wl_output wl_subcompositor wl_data_device_manager zwp_linux_dmabuf_v1
+[39250064700] [[32mINFO [0m] [bloom] [CPU1] bloom: Wayland server thread spawned
+[39252985761] [[32mINFO [0m] [bloom::loop_types] [CPU1] bloom: service loop started
+[39254071989] [[32mINFO [0m] [bloom::loop_types] [CPU1] bloom: output0 1280x800 @ 60000mHz ready
+[39343747080] [[32mINFO [0m] [wayland_hello] [CPU2] wayland_hello: connected to /run/wayland-0
+[39370888887] [[32mINFO [0m] [clock] [CPU3] clock: connected to /run/wayland-0
+[39499235094] [[32mINFO [0m] [cambium::catalog] [CPU1] DEVD CATALOG: registered driver '/drivers/virtio_sound' name='virtio_sound' class=Audio kind='dev.sound.Virtio' start='thingos_driver_start_safe'
+[39801026100] [[32mINFO [0m] [cambium::catalog] [CPU1] DEVD CATALOG: registered driver '/drivers/xhci' name='xhci' class=Block kind='dev.usb.Xhci' start='thingos_driver_start_safe'
+[39811518252] [[32mINFO [0m] [cambium::catalog] [CPU1] DEVD CATALOG: 15 driver(s) found
+[39828532359] [[32mINFO [0m] [clock] [CPU3] clock: pistil DSEG7 text renderer loaded with /share/fonts/DSEG7Classic-Regular.ttf
+[39838580463] [[32mINFO [0m] [clock] [CPU3] clock: pistil generic text renderer loaded with /share/fonts/Inter-Regular.ttf
+[39845170233] [[32mINFO [0m] [wayland_hello] [CPU2] wayland_hello: pistil text renderer loaded with default /share/fonts/Inter-Regular.ttf
+[39975672858] [[32mINFO [0m] [ahci_disk] [CPU2] AHCI: Starting AHCI VFS driver
+[40087873056] [[32mINFO [0m] [display_virtio_gpu] [CPU3] display_virtio_gpu: first commit copied buffer=1 rect=1280x800 src_px=0xff0b0a10 dst_px=0xff0b0a10 damage=1280x800+0,0 res_id=1 gpu_planes=0 cpu_planes=2
+[40096988613] [[32mINFO [0m] [display_virtio_gpu] [CPU3] display_virtio_gpu: cursor plane blended buffer=2 at 638,399 src_px=0x10202020 dst_before=0xff0b0a10 dst_after=0xff0c0b11
+[40171366125] [[32mINFO [0m] [wayland_hello] [CPU2] wayland_hello: using zwp_linux_dmabuf_v1 buffers
+[40184776434] [[32mINFO [0m] [wayland_hello] [CPU2] wayland_hello: bound wp_presentation
+[40216884642] [[32mINFO [0m] [wayland_hello] [CPU2] wayland_hello: wl_region smoke test: create+add+set_opaque+destroy
+[40225019406] [[32mINFO [0m] [bloom::loop_types] [CPU1] First frame rendered
+[40285990965] [[32mINFO [0m] [ahci_disk] [CPU2] AHCI: Claimed device /sys/devices/pci-0000:00:1f.2
+[40327439757] [[32mINFO [0m] [ahci_disk] [CPU2] AHCI: Mounted atapi2 at /dev/storage/atapi2
+[40334404671] [[32mINFO [0m] [rtc_cmos] [CPU3] RTC: claimed /sys/devices/isa-0070 (handle=2)
+[40346973645] [[32mINFO [0m] [bloom::services::wayland_cmd] [CPU1] bloom: registered titlebar drag zone surface=1 height=28 frame=6
+[40360262085] [[32mINFO [0m] [ahci_disk] [CPU2] AHCI: Provider loop online at /dev/storage/atapi2
+[40396977093] [[32mINFO [0m] [bloom::services::input_service] [CPU1] bloom: registered bristle pointer sink
+[40446763269] [[32mINFO [0m] [bristle] [CPU2] bristle: bloom sink registered (handle=5 mask=0x03)
+[40450588365] [[32mINFO [0m] [bloom::wayland::dispatch] [CPU1] wayland-server: xdg_toplevel obj=12 assigned to xdg_surface=11
+[40521427683] [[32mINFO [0m] [rtc_cmos] [CPU3] RTC: 2026-05-01 20:37:10 = 1777667830 unix_secs
+[40600310949] [[32mINFO [0m] [bloom::wayland::dispatch] [CPU1] wayland-server: imported dmabuf wl_buffer=111 480x320 format=0x34325241
+[40669884915] [[32mINFO [0m] [kernel::time] [CPU3] System clock anchored: unix_secs=1777667830, mono_ns=20334676576, offset=1777667809665323424ns
+[40680171939] [[32mINFO [0m] [rtc_cmos] [CPU3] RTC: System clock anchored to 1777667830 unix_secs
+[40693798068] [[32mINFO [0m] [kernel::time] [CPU0] System clock tick: utc=2026-05-01 20:37:10.010975916 unix_secs=1777667830.010975916
+[40756733028] [[32mINFO [0m] [ps2_kbd] [CPU1] ps2_kbd: bristle pid=8
+[40787959509] [[32mINFO [0m] [bloom::services::wallpaper] [CPU1] bloom: preparing background /share/wallpapers/flower.png
+[42741019992] [[32mINFO [0m] [ps2_mouse] [CPU2] ps2_mouse: bristle pid=8
+[43680093732] [[32mINFO [0m] [ps2_mouse] [CPU2] ps2_mouse: sample rate set to 60 Hz
+[44754500142] [[32mINFO [0m] [bloom::services::wayland_cmd] [CPU1] bloom: registered titlebar drag zone surface=2 height=28 frame=6
+[44767446966] [[32mINFO [0m] [bloom::wayland::dispatch] [CPU1] wayland-server: xdg_toplevel obj=12 assigned to xdg_surface=11
+[45467224110] [[32mINFO [0m] [bloom::services::wayland_cmd] [CPU1] bloom: registered titlebar drag zone surface=3 height=28 frame=6
+[45485725494] [[32mINFO [0m] [bloom::wayland::dispatch] [CPU1] wayland-server: xdg_popup obj=23 assigned to xdg_surface=21
+[45787631307] [[32mINFO [0m] [bloom::wayland::dispatch] [CPU1] wayland-server: imported dmabuf wl_buffer=121 160x96 format=0x34325241
+[46326795933] [[32mINFO [0m] [bloom::render] [CPU1] bloom: flat window overlays ready size=1280x800
+[46708266066] [[32mINFO [0m] [kernel::time] [CPU0] System clock tick: utc=2026-05-01 20:37:13.019349141 unix_secs=1777667833.019349141
+[48252378372] [[32mINFO [0m] [wayland_hello] [CPU2] wayland_hello: frame callback done object=1000 data=24084
+[48259100373] [[32mINFO [0m] [wayland_hello] [CPU2] wayland_hello: wp_presentation_feedback.presented object=1001 tv=24.121254976 refresh_ns=16666666 seq=0
+[48707333895] [[32mINFO [0m] [wayland_hello] [CPU2] wayland_hello: frame callback done object=1002 data=24330
+[48714741702] [[32mINFO [0m] [wayland_hello] [CPU2] wayland_hello: wp_presentation_feedback.presented object=1003 tv=24.346800604 refresh_ns=16666666 seq=1
+[52731303108] [[32mINFO [0m] [kernel::time] [CPU0] System clock tick: utc=2026-05-01 20:37:16.030929141 unix_secs=1777667836.030929141
+[58754621838] [[32mINFO [0m] [kernel::time] [CPU0] System clock tick: utc=2026-05-01 20:37:19.042570587 unix_secs=1777667839.042570587
+[64777789065] [[32mINFO [0m] [kernel::time] [CPU0] System clock tick: utc=2026-05-01 20:37:22.054154266 unix_secs=1777667842.054154266
+[70801212966] [[32mINFO [0m] [kernel::time] [CPU0] System clock tick: utc=2026-05-01 20:37:25.065857752 unix_secs=1777667845.065857752
+[74786963526] [[32mINFO [0m] [clock] [CPU3] clock: tick local=2026-05-01 12:37:27 UTC-8 system_unix=1777667847.058080721
+[76824183909] [[32mINFO [0m] [kernel::time] [CPU0] System clock tick: utc=2026-05-01 20:37:28.077358404 unix_secs=1777667848.077358404
+[82847355129] [[32mINFO [0m] [kernel::time] [CPU0] System clock tick: utc=2026-05-01 20:37:31.088962246 unix_secs=1777667851.088962246
+[88871005443] [[32mINFO [0m] [kernel::time] [CPU0] System clock tick: utc=2026-05-01 20:37:34.100751928 unix_secs=1777667854.100751928
+[94894081689] [[32mINFO [0m] [kernel::time] [CPU0] System clock tick: utc=2026-05-01 20:37:37.112261572 unix_secs=1777667857.112261572
+[100917263337] [[32mINFO [0m] [kernel::time] [CPU0] System clock tick: utc=2026-05-01 20:37:40.123880001 unix_secs=1777667860.123880001
+[106940194944] [[32mINFO [0m] [kernel::time] [CPU0] System clock tick: utc=2026-05-01 20:37:43.135371231 unix_secs=1777667863.135371231
+[112963382697] [[32mINFO [0m] [kernel::time] [CPU0] System clock tick: utc=2026-05-01 20:37:46.146974826 unix_secs=1777667866.146974826
+[118986568041] [[32mINFO [0m] [kernel::time] [CPU0] System clock tick: utc=2026-05-01 20:37:49.158544975 unix_secs=1777667869.158544975
+[125009915085] [[32mINFO [0m] [kernel::time] [CPU0] System clock tick: utc=2026-05-01 20:37:52.170233628 unix_secs=1777667872.170233628
+[131033982783] [[32mINFO [0m] [kernel::time] [CPU0] System clock tick: utc=2026-05-01 20:37:55.182221442 unix_secs=1777667875.182221442
+[137056441830] [[32mINFO [0m] [kernel::time] [CPU0] System clock tick: utc=2026-05-01 20:37:58.193482810 unix_secs=1777667878.193482810
+[143079939618] [[32mINFO [0m] [kernel::time] [CPU0] System clock tick: utc=2026-05-01 20:38:01.205219725 unix_secs=1777667881.205219725
+[149103493275] [[32mINFO [0m] [kernel::time] [CPU0] System clock tick: utc=2026-05-01 20:38:04.216992297 unix_secs=1777667884.216992297
+[149279379381] [[32mINFO [0m] [clock] [CPU3] clock: tick local=2026-05-01 12:38:04 UTC-8 system_unix=1777667884.304844055
+[155126181276] [[32mINFO [0m] [kernel::time] [CPU0] System clock tick: utc=2026-05-01 20:38:07.228296021 unix_secs=1777667887.228296021
+[161149213764] [[32mINFO [0m] [kernel::time] [CPU0] System clock tick: utc=2026-05-01 20:38:10.239869338 unix_secs=1777667890.239869338
+[167172466164] [[32mINFO [0m] [kernel::time] [CPU0] System clock tick: utc=2026-05-01 20:38:13.251491397 unix_secs=1777667893.251491397
+[173195676984] [[32mINFO [0m] [kernel::time] [CPU0] System clock tick: utc=2026-05-01 20:38:16.263098985 unix_secs=1777667896.263098985
+[179218855035] [[32mINFO [0m] [kernel::time] [CPU0] System clock tick: utc=2026-05-01 20:38:19.274697811 unix_secs=1777667899.274697811
+[185242467168] [[32mINFO [0m] [kernel::time] [CPU0] System clock tick: utc=2026-05-01 20:38:22.286482197 unix_secs=1777667902.286482197
+[191265537540] [[32mINFO [0m] [kernel::time] [CPU0] System clock tick: utc=2026-05-01 20:38:25.298004744 unix_secs=1777667905.298004744
+[197288940750] [[32mINFO [0m] [kernel::time] [CPU0] System clock tick: utc=2026-05-01 20:38:28.309716876 unix_secs=1777667908.309716876
+[203311733394] [[32mINFO [0m] [kernel::time] [CPU0] System clock tick: utc=2026-05-01 20:38:31.321140043 unix_secs=1777667911.321140043
+[209334813666] [[32mINFO [0m] [kernel::time] [CPU0] System clock tick: utc=2026-05-01 20:38:34.332682209 unix_secs=1777667914.332682209
+[215358241032] [[32mINFO [0m] [kernel::time] [CPU0] System clock tick: utc=2026-05-01 20:38:37.344385051 unix_secs=1777667917.344385051
+[221381375292] [[32mINFO [0m] [kernel::time] [CPU0] System clock tick: utc=2026-05-01 20:38:40.355956224 unix_secs=1777667920.355956224
+[223742776554] [[32mINFO [0m] [clock] [CPU3] clock: tick local=2026-05-01 12:38:41 UTC-8 system_unix=1777667921.536535217
+[227404592085] [[32mINFO [0m] [kernel::time] [CPU0] System clock tick: utc=2026-05-01 20:38:43.367570263 unix_secs=1777667923.367570263
+[233427966651] [[32mINFO [0m] [kernel::time] [CPU0] System clock tick: utc=2026-05-01 20:38:46.379233192 unix_secs=1777667926.379233192
+[239452237134] [

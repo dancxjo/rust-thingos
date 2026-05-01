@@ -1,0 +1,14 @@
+[32mINFO [0m] [kernel::time] [CPU0] System clock tick: utc=2026-05-01 20:24:33.156508949 unix_secs=1777667073.156508949
+[105259699809] [[32mINFO [0m] [kernel::time] [CPU0] System clock tick: utc=2026-05-01 20:24:36.171506412 unix_secs=1777667076.171506412
+[111289934085] [[32mINFO [0m] [kernel::time] [CPU0] System clock tick: utc=2026-05-01 20:24:39.186584396 unix_secs=1777667079.186584396
+[117319754211] [[32mINFO [0m] [kernel::time] [CPU0] System clock tick: utc=2026-05-01 20:24:42.201532590 unix_secs=1777667082.201532590
+[123349850811] [[32mINFO [0m] [kernel::time] [CPU0] System clock tick: utc=2026-05-01 20:24:45.216574752 unix_secs=1777667085.216574752
+[129379774359] [[32mINFO [0m] [kernel::time] [CPU0] System clock tick: utc=2026-05-01 20:24:48.231554544 unix_secs=1777667088.231554544
+[135409699260] [[32mINFO [0m] [kernel::time] [CPU0] System clock tick: utc=2026-05-01 20:24:51.246509570 unix_secs=1777667091.246509570
+[141439632807] [[32mINFO [0m] [kernel::time] [CPU0] System clock tick: utc=2026-05-01 20:24:54.261492695 unix_secs=1777667094.261492695
+[147470533155] [[32mINFO [0m] [kernel::time] [CPU0] System clock tick: utc=2026-05-01 20:24:57.276897543 unix_secs=1777667097.276897543
+[148740207561] [[32mINFO [0m] [clock] [CPU3] clock: tick local=2026-05-01 12:24:57 UTC-8 system_unix=1777667097.911589876
+[148833904692] [[32mINFO [0m] [clock] [CPU1] clock: tick local=2026-05-01 12:24:57 UTC-8 system_unix=1777667097.958341224
+[149165930265] [[32mINFO [0m] [clock] [CPU1] clock: tick local=2026-05-01 12:24:58 UTC-8 system_unix=1777667098.124458208
+[149296366329] [[32mINFO [0m] [clock] [CPU2] clock: tick local=2026-05-01 12:24:58 UTC-8 system_unix=1777667098.189525842
+[152475534

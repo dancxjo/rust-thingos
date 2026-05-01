@@ -17,5 +17,12 @@ Feature: Bloom display metadata polling
     And I move the mouse 20 times
     And I wait for 1 seconds
     Then the latest serial output should contain "bloom: pointer moved"
+    And the latest serial output should contain "display_virtio_gpu: rpc enter seq="
+    And the latest serial output should contain "display_virtio_gpu: rpc exit seq="
     And the latest serial output should contain at most 8 occurrences of "DISP: DISPLAY_OP_GET_INFO requested"
     And the latest serial output should contain at most 12 occurrences of "VFS: sys_fs_open path='/session/wayland/"
+
+  Scenario: desktop display watchdog reports runtime state
+    Given the machine is booted
+    Then the serial output should contain "First frame rendered" within 60s
+    And the serial output should contain "display_virtio_gpu: watchdog rpc_enter=" within 90s

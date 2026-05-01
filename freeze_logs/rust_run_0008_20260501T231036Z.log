@@ -1,0 +1,1169 @@
+
+[hunter] session=0008 arch=x86_64 timeout=15s desktop_ready_timeout=180s loglevel=5
+
+[hunter] waiting for desktop readiness before random actions: bloom: service loop started, bloom: output0, bloom: cursor ready, First frame rendered, wayland-server: listening on /run/wayland-0, bloom: registered bristle pointer sink
+[2J[01;01H[=3h[2J[01;01H[2J[01;01H[8;042;160t0[2J[01;01H[2J[01;01H[8;056;240t0[2J[01;01HBdsDxe: loading Boot0002 "UEFI QEMU DVD-ROM QM00005 " from PciRoot(0x0)/Pci(0x1F,0x2)/Sata(0x2,0xFFFF,0x0)
+BdsDxe: starting Boot0002 "UEFI QEMU DVD-ROM QM00005 " from PciRoot(0x0)/Pci(0x1F,0x2)/Sata(0x2,0xFFFF,0x0)
+[2J[01;01H[01;01H[2J[01;01H[01;01H
+[hunter] desktop readiness pending; missing=["bloom: service loop started", "bloom: output0", "bloom: cursor ready", "First frame rendered", "wayland-server: listening on /run/wayland-0", "bloom: registered bristle pointer sink"]
+[33198802230] [[32mINFO [0m] [kernel::boot_progress] [CPU0] boot_progress: milestone="Framebuffer Initialized"
+[hunter] desktop readiness pending; missing=["bloom: service loop started", "bloom: output0", "bloom: cursor ready", "First frame rendered", "wayland-server: listening on /run/wayland-0", "bloom: registered bristle pointer sink"]
+
+[33230642907] [[35mTRACE[0m] [kernel::memory] [CPU0] [kernel:mem:init] enter
+[33233768403] [[35mTRACE[0m] [kernel::memory] [CPU0] [kernel:mem:init] phys_memory_map ok
+[33234537105] [[35mTRACE[0m] [kernel::memory] [CPU0] [kernel:mem:init] modules ok
+[33235274358] [[35mTRACE[0m] [kernel::memory] [CPU0] [kernel:mem:init] phys_to_virt_offset ok
+[33235775628] [[35mTRACE[0m] [kernel::memory] [CPU0] [kernel:mem:init] memory map logging done
+[33258947865] [[35mTRACE[0m] [kernel::memory] [CPU0] [kernel:mem:init] boot_frame_alloc init ok
+[33445076643] [[35mTRACE[0m] [kernel::memory] [CPU0] [kernel:mem:init] frame allocator build ok
+[33446051166] [[35mTRACE[0m] [kernel::memory] [CPU0] [kernel:mem:init] frame allocator log ok
+[33446896791] [[35mTRACE[0m] [kernel::memory] [CPU0] [kernel:mem:init] FRAME_ALLOCATOR init ok
+[33447580221] [[35mTRACE[0m] [kernel::memory] [CPU0] [kernel:mem:init] tasking init ok
+[33448075452] [[32mINFO [0m] [kernel::boot_progress] [CPU0] boot_progress: milestone="Memory Map OK"
+[33467056392] [[32mINFO [0m] [kernel] [CPU0] Initializing global allocator...
+[33467614983] [[34mDEBUG[0m] [kernel::memory::global_alloc] [CPU0] [kernel:global_alloc] enter
+[33468153543] [[34mDEBUG[0m] [kernel::memory::global_alloc] [CPU0] [kernel:global_alloc] set expand hook
+[33468641712] [[34mDEBUG[0m] [kernel::memory::global_alloc] [CPU0] [kernel:global_alloc] expand hook ok
+[33469218618] [[34mDEBUG[0m] [kernel::memory::global_alloc] [CPU0] [kernel:global_alloc] kernel_heap lock begin
+[33469987485] [[34mDEBUG[0m] [kernel::memory::global_alloc] [CPU0] [kernel:global_alloc] kernel_heap lock ok
+[33470487534] [[35mTRACE[0m] [kernel::memory::global_alloc] [CPU0] [kernel:global_alloc] reserve_region begin
+[33499019433] [[35mTRACE[0m] [kernel::memory::global_alloc] [CPU0] [kernel:global_alloc] reserve_region ok
+[33499633464] [[35mTRACE[0m] [kernel::memory::global_alloc] [CPU0] [kernel:global_alloc] inner allocator init begin
+[33502213503] [[35mTRACE[0m] [kernel::memory::global_alloc] [CPU0] [kernel:global_alloc] inner allocator init ok
+[33502882710] [[35mTRACE[0m] [kernel::memory::global_alloc] [CPU0] [kernel:global_alloc] heap top store ok
+[33503385069] [[35mTRACE[0m] [kernel::memory::global_alloc] [CPU0] [kernel:global_alloc] init done
+[33503978805] [[32mINFO [0m] [kernel::boot_progress] [CPU0] boot_progress: milestone="Global Allocator"
+[33524804115] [[34mDEBUG[0m] [kernel::vfs::devfs] [CPU0] devfs: set_boot_fb width=1920 height=1080 pitch=7680 resource_id=0xfb000000 phys=0x80000000
+[33526827807] [[34mDEBUG[0m] [kernel] [CPU0] [kernel:start] framebuffer/devfs set_boot_fb elapsed_ticks=1961454 elapsed_us=980
+[33532289307] [[34mDEBUG[0m] [kernel] [CPU0] [kernel:start] framebuffer/devfs FbNode::new elapsed_ticks=4703853 elapsed_us=2351
+[33533036559] [[35mTRACE[0m] [kernel::vfs::devfs] [CPU0] [kernel:devfs] register begin
+[33537503241] [[35mTRACE[0m] [kernel::vfs::devfs] [CPU0] [kernel:devfs] register ok
+[33538185714] [[34mDEBUG[0m] [kernel] [CPU0] [kernel:start] framebuffer/devfs register fb0 elapsed_ticks=5104308 elapsed_us=2552
+[33538783443] [[32mINFO [0m] [kernel::boot_progress] [CPU0] boot_progress: milestone="Display Registry"
+[33557771214] [[32mINFO [0m] [kernel] [CPU0] Initializing SIMD...
+[33559522557] [[32mINFO [0m] [kernel::boot_progress] [CPU0] boot_progress: milestone="SIMD Ready"
+[33594251955] [[34mDEBUG[0m] [kernel] [CPU0] Seeding entropy pool...
+[33595347027] [[35mTRACE[0m] [kernel::entropy] [CPU0] [kernel:entropy] seed begin
+[33596335938] [[35mTRACE[0m] [kernel::entropy] [CPU0] [kernel:entropy] fill_entropy done
+[33598984551] [[35mTRACE[0m] [kernel::entropy] [CPU0] [kernel:entropy] add_sample(timer) ok
+[33599521956] [[35mTRACE[0m] [kernel::entropy] [CPU0] [kernel:entropy] mark_seeded(timer) ok
+[33600037845] [[33mWARN [0m] [kernel::entropy] [CPU0] ENTROPY: no hardware RNG available, using timer fallback (weak entropy)
+[33600594522] [[34mDEBUG[0m] [kernel::entropy] [CPU0] ENTROPY: marked seeded with weak entropy (timer-only fallback)
+[33601118661] [[35mTRACE[0m] [kernel::entropy] [CPU0] [kernel:entropy] seed done
+[33602173638] [[34mDEBUG[0m] [kernel] [CPU0] [kernel:start] entropy::seed_from_hardware elapsed_ticks=6469452 elapsed_us=3234
+[33602757177] [[32mINFO [0m] [kernel::boot_progress] [CPU0] boot_progress: milestone="SIMD Ready"
+[33621758775] [[32mINFO [0m] [kernel] [CPU0] Initializing tasking...
+[33630130776] [[35mTRACE[0m] [kernel::sched] [CPU0]   Acquiring scheduler lock...
+[33631109622] [[35mTRACE[0m] [kernel::sched] [CPU0]   Lock acquired, checking if initialized...
+[33631703688] [[35mTRACE[0m] [kernel::sched] [CPU0]   Allocating scheduler...
+[33635294022] [[35mTRACE[0m] [kernel::sched] [CPU0]   Leaking scheduler...
+[33635798130] [[35mTRACE[0m] [kernel::sched] [CPU0]   Initializing boot task...
+[33637924122] [[34mDEBUG[0m] [kernel::sched] [CPU0] SCHED: allocating CpuScheduler for cpu0 (total=1)
+[33638847924] [[32mINFO [0m] [kernel::sched] [CPU0] SCHED: 1 per-CPU scheduler(s) allocated
+[33639417438] [[32mINFO [0m] [kernel::sched] [CPU0] SCHED: per-CPU preemption initialized (1 independent preemption domains, no global preemption lock)
+[33640367244] [[35mTRACE[0m] [kernel::sched] [CPU0]   Creating boot task...
+[33652142139] [[35mTRACE[0m] [kernel::sched] [CPU0]   Creating idle tasks...
+[33653482104] [[34mDEBUG[0m] [bran::arch::x86_64::task] [CPU0] INIT KERNEL CTX: entry=0xffffffff8008b400 kstack_top=0xffffffffb0020660 arg=0x0
+[33655520283] [[34mDEBUG[0m] [kernel::sched::spawn] [CPU0] SCHED: Task 1 assigned to CPU 0
+[33674233329] [[35mTRACE[0m] [kernel::sched] [CPU0]   Boot task initialized
+[33676269363] [[34mDEBUG[0m] [kernel::sched::state] [CPU0] SCHED[cpu0]: current=Some(0) idle=Some(1) runnable=0 need_resched=true
+[33677458221] [[35mTRACE[0m] [kernel::sched] [CPU0]   Storing scheduler pointer...
+[33678541578] [[32mINFO [0m] [kernel::sched] [CPU0] Scheduler initialized
+[33679529565] [[32mINFO [0m] [kernel::boot_progress] [CPU0] boot_progress: milestone="Tasking Initialized"
+[33698943366] [[34mDEBUG[0m] [kernel] [CPU0] Initializing VFS...
+[33702348042] [[34mDEBUG[0m] [kernel] [CPU0] [kernel:start] scheduler-entry step='set_cmdline' elapsed_ticks=2703855 elapsed_us=1351 total_ticks=3220239 total_us=1610
+[33720901698] [[34mDEBUG[0m] [kernel::vfs] [CPU0] VFS: Created /dev/display directory
+[33721754187] [[34mDEBUG[0m] [kernel::vfs] [CPU0] VFS: Created /dev/storage directory
+[33759705969] [[34mDEBUG[0m] [kernel::vfs] [CPU0] vfs: mounted union filesystem at / (root)
+[33762280398] [[34mDEBUG[0m] [kernel::vfs] [CPU0] vfs: mounted devfs at /dev
+[33763412034] [[34mDEBUG[0m] [kernel::vfs] [CPU0] vfs: mounted procfs at /proc
+[33764306664] [[34mDEBUG[0m] [kernel::vfs] [CPU0] vfs: mounted sysfs at /sys
+[33768344148] [[34mDEBUG[0m] [kernel::vfs] [CPU0] vfs: mounted tmpfs at /tmp
+[33769129977] [[34mDEBUG[0m] [kernel::vfs] [CPU0] vfs: mounted tmpfs at /run
+[33769835946] [[34mDEBUG[0m] [kernel::vfs] [CPU0] vfs: mounted tmpfs at /services
+[33770524029] [[34mDEBUG[0m] [kernel::vfs] [CPU0] vfs: mounted tmpfs at /session
+[33771310749] [[34mDEBUG[0m] [kernel::vfs] [CPU0] vfs: mounted tmpfs at /data
+[33771783177] [[34mDEBUG[0m] [kernel] [CPU0] [kernel:start] scheduler-entry step='vfs_init' elapsed_ticks=68770053 elapsed_us=34385 total_ticks=72908121 total_us=36454
+[33772400673] [[32mINFO [0m] [kernel::boot_progress] [CPU0] boot_progress: milestone="VFS Root Ready"
+[33792332706] [[34mDEBUG[0m] [kernel] [CPU0] Scanning PCI bus...
+[33795887565] [[34mDEBUG[0m] [kernel] [CPU0] PCI: Discovered 0x8086:0x29c0 at 00:00.0 class=060000 id=1
+[33800856243] [[35mTRACE[0m] [kernel] [CPU0]   BAR0 (MEM32): 0x80000000 (size 0x800000)
+[33812348724] [[35mTRACE[0m] [kernel] [CPU0]   BAR2 (MEM64): 0xc000000000 (size 0x4000)
+[33815743830] [[35mTRACE[0m] [kernel] [CPU0]   BAR4 (MEM32): 0x80883000 (size 0x1000)
+[33816485670] [[34mDEBUG[0m] [kernel] [CPU0] PCI: Discovered 0x1af4:0x1050 at 00:01.0 class=030000 id=2
+[33820607403] [[35mTRACE[0m] [kernel] [CPU0]   BAR0 (I/O):  0x6060 (size 0x20)
+[33823884600] [[35mTRACE[0m] [kernel] [CPU0]   BAR1 (MEM32): 0x80882000 (size 0x1000)
+[33839352096] [[35mTRACE[0m] [kernel] [CPU0]   BAR4 (MEM64): 0xc000004000 (size 0x4000)
+[33840730704] [[34mDEBUG[0m] [kernel] [CPU0] PCI: Discovered 0x1af4:0x1000 at 00:02.0 class=020000 id=3
+[33843409116] [[35mTRACE[0m] [kernel] [CPU0]   BAR1 (MEM32): 0x80881000 (size 0x1000)
+[33851142831] [[35mTRACE[0m] [kernel] [CPU0]   BAR4 (MEM64): 0xc000008000 (size 0x4000)
+[33851801445] [[34mDEBUG[0m] [kernel] [CPU0] PCI: Discovered 0x1af4:0x1059 at 00:03.0 class=040100 id=4
+[33852576087] [[34mDEBUG[0m] [kernel] [CPU0] PCI: Discovered 0x8086:0x2918 at 00:1f.0 class=060100 id=5
+[33854926083] [[35mTRACE[0m] [kernel] [CPU0]   BAR4 (I/O):  0x6040 (size 0x20)
+[33858019371] [[35mTRACE[0m] [kernel] [CPU0]   BAR5 (MEM32): 0x80880000 (size 0x1000)
+[33858622875] [[34mDEBUG[0m] [kernel] [CPU0] PCI: Discovered 0x8086:0x2922 at 00:1f.2 class=010601 id=6
+[33860820543] [[35mTRACE[0m] [kernel] [CPU0]   BAR4 (I/O):  0x6000 (size 0x40)
+[33861417381] [[34mDEBUG[0m] [kernel] [CPU0] PCI: Discovered 0x8086:0x2930 at 00:1f.3 class=0c0500 id=7
+[33863478594] [[34mDEBUG[0m] [kernel] [CPU0] [kernel:start] scheduler-entry step='scan_pci' elapsed_ticks=70651647 elapsed_us=35325 total_ticks=164593572 total_us=82296
+[33864130707] [[32mINFO [0m] [kernel::boot_progress] [CPU0] boot_progress: milestone="PCI Bus Scanned"
+[33884726832] [[34mDEBUG[0m] [kernel] [CPU0] [kernel:start] scheduler-entry step='register_legacy_devices' elapsed_ticks=735999 elapsed_us=367 total_ticks=185854086 total_us=92927
+[33885399240] [[32mINFO [0m] [kernel::boot_progress] [CPU0] boot_progress: milestone="Legacy Devices"
+[33904921446] [[34mDEBUG[0m] [kernel] [CPU0] System initialized. Setting up preemption timer (100Hz)...
+[33911491053] [[34mDEBUG[0m] [bran::arch] [CPU0] IOAPIC: hhdm=0xffff800000000000
+[33912022386] [[34mDEBUG[0m] [bran::arch] [CPU0] IOAPIC: Disabling legacy PIC...
+[33912956253] [[34mDEBUG[0m] [bran::arch] [CPU0] IOAPIC: PIC disabled OK
+[33913762674] [[34mDEBUG[0m] [bran::arch] [CPU0] IOAPIC: RSDP virt=0x7f77e014
+[33917353173] [[34mDEBUG[0m] [bran::arch::x86_64::acpi] [CPU0] MADT: total length 144
+[33918831012] [[35mTRACE[0m] [bran::arch::x86_64::acpi] [CPU0] MADT: Entry type 0, len 8 at 0xffff80007f77802c
+[33919671390] [[35mTRACE[0m] [bran::arch::x86_64::acpi] [CPU0] MADT: Entry type 0, len 8 at 0xffff80007f778034
+[33920179062] [[35mTRACE[0m] [bran::arch::x86_64::acpi] [CPU0] MADT: Entry type 0, len 8 at 0xffff80007f77803c
+[33920645451] [[35mTRACE[0m] [bran::arch::x86_64::acpi] [CPU0] MADT: Entry type 0, len 8 at 0xffff80007f778044
+[33921120387] [[35mTRACE[0m] [bran::arch::x86_64::acpi] [CPU0] MADT: Entry type 1, len 12 at 0xffff80007f77804c
+[33926496054] [[35mTRACE[0m] [bran::arch::x86_64::acpi] [CPU0] MADT: Entry type 2, len 10 at 0xffff80007f778058
+[33927287790] [[35mTRACE[0m] [bran::arch::x86_64::acpi] [CPU0] MADT: Entry type 2, len 10 at 0xffff80007f778062
+[33927798795] [[35mTRACE[0m] [bran::arch::x86_64::acpi] [CPU0] MADT: Entry type 2, len 10 at 0xffff80007f77806c
+[33928314585] [[35mTRACE[0m] [bran::arch::x86_64::acpi] [CPU0] MADT: Entry type 2, len 10 at 0xffff80007f778076
+[33928802490] [[35mTRACE[0m] [bran::arch::x86_64::acpi] [CPU0] MADT: Entry type 2, len 10 at 0xffff80007f778080
+[33929326827] [[35mTRACE[0m] [bran::arch::x86_64::acpi] [CPU0] MADT: Entry type 4, len 6 at 0xffff80007f77808a
+[33930153048] [[34mDEBUG[0m] [bran::arch] [CPU0] IOAPIC: MADT parsed OK
+[33931007649] [[34mDEBUG[0m] [bran::arch] [CPU0] SMP: Found 4 CPUs (CPU_COUNT now = 4)
+[33931612209] [[34mDEBUG[0m] [bran::arch] [CPU0] IOAPIC: Found at phys 0xfec00000, GSI base 0
+[33932946927] [[34mDEBUG[0m] [bran::arch] [CPU0] IOAPIC: Registers initialized
+[33933837003] [[34mDEBUG[0m] [bran::arch] [CPU0] IOAPIC: Local APIC enabled (SVR=0x1FF, TPR=0)
+[33934749981] [[34mDEBUG[0m] [bran::arch] [CPU0] IOAPIC: version 0x20, 24 redir entries
+[33935773773] [[34mDEBUG[0m] [bran::arch] [CPU0] IOAPIC: All pins masked
+[33937200429] [[35mTRACE[0m] [bran::arch] [CPU0] IOAPIC: IRQ1 -> GSI 1 -> NMI
+[33937948242] [[35mTRACE[0m] [bran::arch] [CPU0] IOAPIC: IRQ12 -> GSI 12 -> 0x2C
+[33938736909] [[35mTRACE[0m] [bran::arch] [CPU0] IOAPIC: IRQ4 -> GSI 4 -> 0x24
+[33939261510] [[34mDEBUG[0m] [bran::arch] [CPU0] IOAPIC: Init complete
+[33973531152] [[34mDEBUG[0m] [bran::arch::x86_64::ioapic] [CPU0] LAPIC: calibrated 62489700 ticks/sec (delta=624897, ok=true) -> init_cnt=624897
+[33974993316] [[34mDEBUG[0m] [bran::arch::x86_64] [CPU0] LAPIC: calibrated timer (62489700 ticks/sec), init_cnt=624897 for 100Hz
+[33975674238] [[34mDEBUG[0m] [kernel] [CPU0] [kernel:start] scheduler-entry step='setup_preemption_timer' elapsed_ticks=70219182 elapsed_us=35109 total_ticks=276794628 total_us=138397
+[33976371198] [[32mINFO [0m] [kernel::boot_progress] [CPU0] boot_progress: milestone="BSP Timer OK"
+[33996879741] [[34mDEBUG[0m] [kernel] [CPU0] Kernel: Detected 4 CPUs. Starting 3 secondaries...
+[33997590528] [[34mDEBUG[0m] [bran::arch::x86_64] [CPU0] SMP: Starting 3 secondary CPUs...
+[33998908779] [[34mDEBUG[0m] [bran::arch::x86_64] [CPU0] SMP: Initializing trampoline at 0x8000
+[34000881552] [[34mDEBUG[0m] [bran::arch::x86_64] [CPU0] SMP: Starting CPU 1 (APIC 1)
+[34029142686] [[34mDEBUG[0m] [bran::arch::x86_64] [CPU0] SMP: CPU 1 (APIC 1) is online
+[34030299006] [[34mDEBUG[0m] [bran::arch::x86_64] [CPU0] SMP: Starting CPU 2 (APIC 2)
+[34032274551] [[34mDEBUG[0m] [bran::arch::x86_64] [CPU1] SMP: CPU 1 initializing preemption timer (vec=32 init_cnt=624897)
+[34041644637] [[34mDEBUG[0m] [kernel] [CPU1] SMP: kernel_secondary_entry arg_cpu=1 runtime_cpu=1
+[34042704333] [[34mDEBUG[0m] [kernel] [CPU1] SMP: Entering kernel_secondary_entry for CPU 1
+[34044646977] [[34mDEBUG[0m] [kernel::sched] [CPU1] SMP: CPU 1 online (triggered by scheduler spawn)
+[34049418381] [[34mDEBUG[0m] [bran::arch::x86_64::task] [CPU1] INIT KERNEL CTX: entry=0xffffffff8008b400 kstack_top=0xffffffffb00373c0 arg=0x1
+[34050576054] [[34mDEBUG[0m] [kernel::sched::spawn] [CPU1] SCHED: Task 2 assigned to CPU 1
+[34055210772] [[34mDEBUG[0m] [kernel::sched] [CPU1] REGISTRY: Applying 2 deferred inserts
+[34055910999] [[34mDEBUG[0m] [bran::arch::x86_64] [CPU0] SMP: CPU 2 (APIC 2) is online
+[34055800119] [[34mDEBUG[0m] [bran::arch::x86_64] [CPU2] SMP: CPU 2 initializing preemption timer (vec=32 init_cnt=624897)
+[34056758703] [[34mDEBUG[0m] [bran::arch::x86_64] [CPU0] SMP: Starting CPU 3 (APIC 3)
+[34056847704] [[34mDEBUG[0m] [kernel::sched] [CPU1] REGISTRY: Inserting TID=1
+[34058794506] [[34mDEBUG[0m] [kernel] [CPU2] SMP: kernel_secondary_entry arg_cpu=2 runtime_cpu=2
+[34059049497] [[34mDEBUG[0m] [kernel::sched] [CPU1] REGISTRY: Inserting TID=2
+[34059812160] [[34mDEBUG[0m] [kernel] [CPU2] SMP: Entering kernel_secondary_entry for CPU 2
+[34060555155] [[34mDEBUG[0m] [kernel::sched] [CPU2] SMP: CPU 2 online (triggered by scheduler spawn)
+[34061623860] [[34mDEBUG[0m] [kernel::sched] [CPU1] REGISTRY: Inserts applied
+[34061765496] [[34mDEBUG[0m] [bran::arch::x86_64::task] [CPU2] INIT KERNEL CTX: entry=0xffffffff8008b400 kstack_top=0xffffffffb0048b40 arg=0x2
+[34062869874] [[34mDEBUG[0m] [kernel::sched::spawn] [CPU2] SCHED: Task 3 assigned to CPU 2
+[34062882909] [[34mDEBUG[0m] [kernel::sched::lifecycle] [CPU1] SMP: Secondary CPU 1 online!
+[34064191590] [[34mDEBUG[0m] [kernel::task] [CPU1] SMP: run_scheduler entry on CPU 1
+[34064951745] [[34mDEBUG[0m] [kernel::sched] [CPU2] REGISTRY: Applying 1 deferred inserts
+[34065158358] [[34mDEBUG[0m] [kernel::task] [CPU1] SMP: bootstrap_cpu start on CPU 1
+[34065693783] [[34mDEBUG[0m] [kernel::sched] [CPU2] REGISTRY: Inserting TID=3
+[34066428627] [[34mDEBUG[0m] [kernel::sched] [CPU2] REGISTRY: Inserts applied
+[34066438164] [[34mDEBUG[0m] [kernel::task] [CPU1] SMP: CPU 1 bootstrapped with idle thread 2 and is now schedulable
+[34067070741] [[34mDEBUG[0m] [kernel::sched::lifecycle] [CPU2] SMP: Secondary CPU 2 online!
+[34067779185] [[34mDEBUG[0m] [kernel::task] [CPU2] SMP: run_scheduler entry on CPU 2
+[34068433740] [[34mDEBUG[0m] [kernel::task] [CPU2] SMP: bootstrap_cpu start on CPU 2
+[34077926817] [[34mDEBUG[0m] [kernel::task] [CPU2] SMP: CPU 2 bootstrapped with idle thread 3 and is now schedulable
+[34087538430] [[34mDEBUG[0m] [bran::arch::x86_64] [CPU3] SMP: CPU 3 initializing preemption timer (vec=32 init_cnt=624897)
+[34087709535] [[34mDEBUG[0m] [bran::arch::x86_64] [CPU0] SMP: CPU 3 (APIC 3) is online
+[34088616441] [[34mDEBUG[0m] [kernel] [CPU3] SMP: kernel_secondary_entry arg_cpu=3 runtime_cpu=3
+[34089069564] [[34mDEBUG[0m] [bran::arch::x86_64] [CPU0] SMP: Secondary CPU startup complete
+[34089220308] [[34mDEBUG[0m] [kernel] [CPU3] SMP: Entering kernel_secondary_entry for CPU 3
+[34089926277] [[34mDEBUG[0m] [kernel] [CPU0] Kernel: Secondary CPU bring-up complete.
+[34089916014] [[34mDEBUG[0m] [kernel::sched] [CPU3] SMP: CPU 3 online (triggered by scheduler spawn)
+[34090688610] [[34mDEBUG[0m] [kernel] [CPU0] [kernel:start] scheduler-entry step='start_secondary_cpus' elapsed_ticks=93995616 elapsed_us=46997 total_ticks=391793754 total_us=195896
+[34091175195] [[34mDEBUG[0m] [bran::arch::x86_64::task] [CPU3] INIT KERNEL CTX: entry=0xffffffff8008b400 kstack_top=0xffffffffb005a2c0 arg=0x3
+[34092241227] [[34mDEBUG[0m] [kernel::sched::spawn] [CPU3] SCHED: Task 4 assigned to CPU 3
+[34093703061] [[34mDEBUG[0m] [kernel::sched] [CPU3] REGISTRY: Applying 1 deferred inserts
+[34094231358] [[34mDEBUG[0m] [kernel::sched] [CPU3] REGISTRY: Inserting TID=4
+[34095363852] [[34mDEBUG[0m] [kernel::sched] [CPU3] REGISTRY: Inserts applied
+[34095327882] [[32mINFO [0m] [kernel::boot_progress] [CPU0] boot_progress: milestone="SMP Bring-up"
+[34095896241] [[34mDEBUG[0m] [kernel::sched::lifecycle] [CPU3] SMP: Secondary CPU 3 online!
+[34096446681] [[34mDEBUG[0m] [kernel::task] [CPU3] SMP: run_scheduler entry on CPU 3
+[34096924026] [[34mDEBUG[0m] [kernel::task] [CPU3] SMP: bootstrap_cpu start on CPU 3
+[34097458527] [[34mDEBUG[0m] [kernel::task] [CPU3] SMP: CPU 3 bootstrapped with idle thread 4 and is now schedulable
+[34184605455] [[32mINFO [0m] [kernel::boot_progress] [CPU0] boot_progress: milestone="Boot Info OK"
+[34262239374] [[34mDEBUG[0m] [kernel] [CPU0] Kernel: Enumerating 220 boot modules...
+[34263380745] [[35mTRACE[0m] [kernel] [CPU0]   Module[0]: name='/bin/sprout' cmdline='init' size=90224 bytes
+[34264045728] [[35mTRACE[0m] [kernel] [CPU0]   Module[1]: name='/bin/bristle' cmdline='' size=68744 bytes
+[34264738101] [[35mTRACE[0m] [kernel] [CPU0]   Module[2]: name='/drivers/rtc_cmos' cmdline='init' size=45904 bytes
+[34265376354] [[35mTRACE[0m] [kernel] [CPU0]   Module[3]: name='/drivers/hwrng' cmdline='init' size=40016 bytes
+[34265970189] [[35mTRACE[0m] [kernel] [CPU0]   Module[4]: name='/drivers/ps2_kbd' cmdline='' size=72264 bytes
+[34266578841] [[35mTRACE[0m] [kernel] [CPU0]   Module[5]: name='/bin/sh' cmdline='init' size=127864 bytes
+[34267154163] [[35mTRACE[0m] [kernel] [CPU0]   Module[6]: name='/bin/ls' cmdline='init' size=62136 bytes
+[34267728363] [[35mTRACE[0m] [kernel] [CPU0]   Module[7]: name='/bin/lsusb' cmdline='init' size=1066664 bytes
+[34268307282] [[35mTRACE[0m] [kernel] [CPU0]   Module[8]: name='/bin/lspci' cmdline='init' size=1052328 bytes
+[34268911215] [[35mTRACE[0m] [kernel] [CPU0]   Module[9]: name='/bin/ln' cmdline='init' size=47568 bytes
+[34269488649] [[35mTRACE[0m] [kernel] [CPU0]   Module[10]: name='/bin/ps' cmdline='init' size=50544 bytes
+[34270068294] [[35mTRACE[0m] [kernel] [CPU0]   Module[11]: name='/bin/kill' cmdline='init' size=55584 bytes
+[34270653087] [[35mTRACE[0m] [kernel] [CPU0]   Module[12]: name='/bin/killall' cmdline='init' size=67656 bytes
+[34271306619] [[35mTRACE[0m] [kernel] [CPU0]   Module[13]: name='/bin/cat' cmdline='init' size=50832 bytes
+[34272009783] [[35mTRACE[0m] [kernel] [CPU0]   Module[14]: name='/bin/head' cmdline='init' size=56112 bytes
+[34272607578] [[35mTRACE[0m] [kernel] [CPU0]   Module[15]: name='/bin/tail' cmdline='init' size=56088 bytes
+[34273458516] [[35mTRACE[0m] [kernel] [CPU0]   Module[16]: name='/bin/top' cmdline='init' size=65488 bytes
+[34274860917] [[35mTRACE[0m] [kernel] [CPU0]   Module[17]: name='/bin/wc' cmdline='init' size=56248 bytes
+[34275477060] [[35mTRACE[0m] [kernel] [CPU0]   Module[18]: name='/bin/yes' cmdline='init' size=44520 bytes
+[34288960893] [[35mTRACE[0m] [kernel] [CPU0]   Module[19]: name='/bin/which' cmdline='init' size=50448 bytes
+[34289671152] [[35mTRACE[0m] [kernel] [CPU0]   Module[20]: name='/bin/cp' cmdline='init' size=46312 bytes
+[34290528195] [[35mTRACE[0m] [kernel] [CPU0]   Module[21]: name='/bin/mv' cmdline='init' size=47048 bytes
+[34301350512] [[35mTRACE[0m] [kernel] [CPU0]   Module[22]: name='/bin/rm' cmdline='init' size=47128 bytes
+[34302117135] [[35mTRACE[0m] [kernel] [CPU0]   Module[23]: name='/bin/rmdir' cmdline='init' size=47144 bytes
+[34302793734] [[35mTRACE[0m] [kernel] [CPU0]   Module[24]: name='/bin/mkdir' cmdline='init' size=47144 bytes
+[34303388295] [[35mTRACE[0m] [kernel] [CPU0]   Module[25]: name='/bin/mount' cmdline='init' size=57688 bytes
+[34303994637] [[35mTRACE[0m] [kernel] [CPU0]   Module[26]: name='/bin/echo' cmdline='init' size=44616 bytes
+[34304626587] [[35mTRACE[0m] [kernel] [CPU0]   Module[27]: name='/bin/printf' cmdline='init' size=93928 bytes
+[34305309291] [[35mTRACE[0m] [kernel] [CPU0]   Module[28]: name='/bin/grep' cmdline='init' size=85240 bytes
+[34306309389] [[35mTRACE[0m] [kernel] [CPU0]   Module[29]: name='/bin/pwd' cmdline='init' size=39184 bytes
+[34306922331] [[35mTRACE[0m] [kernel] [CPU0]   Module[30]: name='/bin/touch' cmdline='init' size=46160 bytes
+[34307876658] [[35mTRACE[0m] [kernel] [CPU0]   Module[31]: name='/bin/setshell' cmdline='init' size=47048 bytes
+[34308537417] [[35mTRACE[0m] [kernel] [CPU0]   Module[32]: name='/bin/dmesg' cmdline='init' size=39328 bytes
+[34309143561] [[35mTRACE[0m] [kernel] [CPU0]   Module[33]: name='/bin/stat' cmdline='init' size=46200 bytes
+[34309736868] [[35mTRACE[0m] [kernel] [CPU0]   Module[34]: name='/bin/file' cmdline='init' size=51104 bytes
+[34310358687] [[35mTRACE[0m] [kernel] [CPU0]   Module[35]: name='/bin/dirname' cmdline='init' size=50096 bytes
+[34310975952] [[35mTRACE[0m] [kernel] [CPU0]   Module[36]: name='/bin/basename' cmdline='init' size=50104 bytes
+[34311632223] [[35mTRACE[0m] [kernel] [CPU0]   Module[37]: name='/bin/sleep' cmdline='init' size=56824 bytes
+[34312288857] [[35mTRACE[0m] [kernel] [CPU0]   Module[38]: name='/bin/sort' cmdline='init' size=66336 bytes
+[34312898301] [[35mTRACE[0m] [kernel] [CPU0]   Module[39]: name='/bin/env' cmdline='init' size=45832 bytes
+[34313501904] [[35mTRACE[0m] [kernel] [CPU0]   Module[40]: name='/bin/uname' cmdline='' size=44632 bytes
+[34314101844] [[35mTRACE[0m] [kernel] [CPU0]   Module[41]: name='/bin/true' cmdline='' size=20744 bytes
+[34314724554] [[35mTRACE[0m] [kernel] [CPU0]   Module[42]: name='/bin/false' cmdline='' size=20744 bytes
+[34315334790] [[35mTRACE[0m] [kernel] [CPU0]   Module[43]: name='/bin/input_echo' cmdline='' size=43016 bytes
+[34315925226] [[35mTRACE[0m] [kernel] [CPU0]   Module[44]: name='/drivers/ps2_mouse' cmdline='' size=71096 bytes
+[34316551104] [[35mTRACE[0m] [kernel] [CPU0]   Module[45]: name='/drivers/display_bootfb' cmdline='' size=100448 bytes
+[34317150549] [[35mTRACE[0m] [kernel] [CPU0]   Module[46]: name='/drivers/display_virtio_gpu' cmdline='' size=187560 bytes
+[34317778770] [[35mTRACE[0m] [kernel] [CPU0]   Module[47]: name='/bin/cambium' cmdline='' size=144760 bytes
+[34318424118] [[35mTRACE[0m] [kernel] [CPU0]   Module[48]: name='/drivers/virtio_netd' cmdline='' size=123920 bytes
+[34319031153] [[35mTRACE[0m] [kernel] [CPU0]   Module[49]: name='/drivers/rtl8168d' cmdline='' size=61392 bytes
+[34319735406] [[35mTRACE[0m] [kernel] [CPU0]   Module[50]: name='/bin/netd' cmdline='' size=10819752 bytes
+[34320614262] [[35mTRACE[0m] [kernel] [CPU0]   Module[51]: name='/bin/mesocarp' cmdline='' size=123496 bytes
+[34322515656] [[35mTRACE[0m] [kernel] [CPU0]   Module[52]: name='/bin/mdns' cmdline='' size=123496 bytes
+[34323116388] [[35mTRACE[0m] [kernel] [CPU0]   Module[53]: name='/bin/mdnsd' cmdline='' size=123496 bytes
+[34324011447] [[35mTRACE[0m] [kernel] [CPU0]   Module[54]: name='/bin/fetchd' cmdline='' size=76752 bytes
+[34324655508] [[35mTRACE[0m] [kernel] [CPU0]   Module[55]: name='/bin/httpsd' cmdline='' size=536128 bytes
+[34332016290] [[35mTRACE[0m] [kernel] [CPU0]   Module[56]: name='/bin/find' cmdline='' size=57896 bytes
+[34332629694] [[35mTRACE[0m] [kernel] [CPU0]   Module[57]: name='/bin/ip' cmdline='' size=55472 bytes
+[34333249962] [[35mTRACE[0m] [kernel] [CPU0]   Module[58]: name='/bin/iso_reader' cmdline='' size=37424 bytes
+[34333879866] [[35mTRACE[0m] [kernel] [CPU0]   Module[59]: name='/bin/ping' cmdline='' size=65184 bytes
+[34334493072] [[35mTRACE[0m] [kernel] [CPU0]   Module[60]: name='/bin/nslookup' cmdline='' size=56424 bytes
+[34335087501] [[35mTRACE[0m] [kernel] [CPU0]   Module[61]: name='/drivers/ahci_disk' cmdline='' size=53784 bytes
+[34335683745] [[35mTRACE[0m] [kernel] [CPU0]   Module[62]: name='/drivers/ata_disk' cmdline='' size=64448 bytes
+[34336280319] [[35mTRACE[0m] [kernel] [CPU0]   Module[63]: name='/bin/iso9660d' cmdline='' size=78544 bytes
+[34336888476] [[35mTRACE[0m] [kernel] [CPU0]   Module[64]: name='/bin/fatd' cmdline='' size=64096 bytes
+[34337556693] [[35mTRACE[0m] [kernel] [CPU0]   Module[65]: name='/drivers/virtio_sound' cmdline='' size=99296 bytes
+[34338226923] [[35mTRACE[0m] [kernel] [CPU0]   Module[66]: name='/drivers/hdaudio' cmdline='' size=67696 bytes
+[34338671136] [[35mTRACE[0m] [kernel] [CPU0]   Module[67]: name='/drivers/pci_stubd' cmdline='' size=57928 bytes
+[34339303020] [[35mTRACE[0m] [kernel] [CPU0]   Module[68]: name='/drivers/xhci' cmdline='' size=94056 bytes
+[34339932528] [[35mTRACE[0m] [kernel] [CPU0]   Module[69]: name='/drivers/chime' cmdline='' size=59536 bytes
+[34346881272] [[35mTRACE[0m] [kernel] [CPU0]   Module[70]: name='/bin/vfs_hello' cmdline='' size=39560 bytes
+[34347542031] [[35mTRACE[0m] [kernel] [CPU0]   Module[71]: name='/bin/show_args' cmdline='' size=42488 bytes
+[34348142235] [[35mTRACE[0m] [kernel] [CPU0]   Module[72]: name='/bin/clock' cmdline='' size=83048 bytes
+[34348748214] [[35mTRACE[0m] [kernel] [CPU0]   Module[73]: name='/bin/leaf' cmdline='' size=97432 bytes
+[34349328849] [[35mTRACE[0m] [kernel] [CPU0]   Module[74]: name='/bin/env_roundtrip' cmdline='' size=48232 bytes
+[34349944497] [[35mTRACE[0m] [kernel] [CPU0]   Module[75]: name='/bin/cwd_test' cmdline='' size=43696 bytes
+[34350553446] [[35mTRACE[0m] [kernel] [CPU0]   Module[76]: name='/bin/date' cmdline='' size=67032 bytes
+[34351204338] [[35mTRACE[0m] [kernel] [CPU0]   Module[77]: name='/bin/wayland_hello' cmdline='' size=86696 bytes
+[34351825629] [[35mTRACE[0m] [kernel] [CPU0]   Module[78]: name='/bin/terminal' cmdline='' size=91056 bytes
+[34352517210] [[35mTRACE[0m] [kernel] [CPU0]   Module[79]: name='/bin/tee' cmdline='' size=44968 bytes
+[34353343728] [[35mTRACE[0m] [kernel] [CPU0]   Module[80]: name='/bin/xargs' cmdline='' size=55016 bytes
+[34353956175] [[35mTRACE[0m] [kernel] [CPU0]   Module[81]: name='/bin/placed' cmdline='' size=38048 bytes
+[34354941159] [[35mTRACE[0m] [kernel] [CPU0]   Module[82]: name='/bin/bloom' cmdline='' size=577280 bytes
+[34355710290] [[35mTRACE[0m] [kernel] [CPU0]   Module[83]: name='/bin/clear' cmdline='' size=20872 bytes
+[34356573966] [[35mTRACE[0m] [kernel] [CPU0]   Module[84]: name='/bin/loglevel' cmdline='' size=41536 bytes
+[34357173510] [[35mTRACE[0m] [kernel] [CPU0]   Module[85]: name='/bin/poll_mux' cmdline='' size=39056 bytes
+[34359747378] [[35mTRACE[0m] [kernel] [CPU0]   Module[86]: name='/bin/ipc_service_demo' cmdline='' size=47592 bytes
+[34376624898] [[35mTRACE[0m] [kernel] [CPU0]   Module[87]: name='/bin/ipc_pipe_demo' cmdline='' size=43936 bytes
+[34377289980] [[35mTRACE[0m] [kernel] [CPU0]   Module[88]: name='/bin/ipc_provider_demo' cmdline='' size=84440 bytes
+[34377932952] [[35mTRACE[0m] [kernel] [CPU0]   Module[89]: name='/bin/vfs_test_provider' cmdline='' size=70648 bytes
+[34378548732] [[35mTRACE[0m] [kernel] [CPU0]   Module[90]: name='/bin/ipc_memfd_demo' cmdline='' size=38232 bytes
+[34379157384] [[35mTRACE[0m] [kernel] [CPU0]   Module[91]: name='/bin/test_exec' cmdline='' size=62592 bytes
+[34379753001] [[35mTRACE[0m] [kernel] [CPU0]   Module[92]: name='/bin/test_vm_protect' cmdline='' size=38224 bytes
+[34380343272] [[35mTRACE[0m] [kernel] [CPU0]   Module[93]: name='/bin/test_exec_env' cmdline='' size=58904 bytes
+[34380969051] [[35mTRACE[0m] [kernel] [CPU0]   Module[94]: name='/bin/test_threads' cmdline='' size=82376 bytes
+[34381557969] [[35mTRACE[0m] [kernel] [CPU0]   Module[95]: name='/bin/test_futex' cmdline='' size=52992 bytes
+[34382171043] [[35mTRACE[0m] [kernel] [CPU0]   Module[96]: name='/bin/ld_so' cmdline='' size=378600 bytes
+[34382750655] [[35mTRACE[0m] [kernel] [CPU0]   Module[97]: name='/bin/test_dyn_loader' cmdline='' size=57760 bytes
+[34383356469] [[35mTRACE[0m] [kernel] [CPU0]   Module[98]: name='/bin/test_dlopen' cmdline='' size=64688 bytes
+[34383988254] [[35mTRACE[0m] [kernel] [CPU0]   Module[99]: name='/bin/reboot' cmdline='' size=32048 bytes
+[34384585455] [[35mTRACE[0m] [kernel] [CPU0]   Module[100]: name='/bin/shutdown' cmdline='' size=32048 bytes
+[34385256873] [[35mTRACE[0m] [kernel] [CPU0]   Module[101]: name='/bin/attr_list' cmdline='' size=47400 bytes
+[34385855592] [[35mTRACE[0m] [kernel] [CPU0]   Module[102]: name='/bin/attr_get' cmdline='' size=47488 bytes
+[34386776853] [[35mTRACE[0m] [kernel] [CPU0]   Module[103]: name='/bin/attr_set' cmdline='' size=69600 bytes
+[34388337753] [[35mTRACE[0m] [kernel] [CPU0]   Module[104]: name='/bin/attr_rm' cmdline='' size=47008 bytes
+[34394578746] [[35mTRACE[0m] [kernel] [CPU0]   Module[105]: name='/lib/libpistil.so' cmdline='' size=822496 bytes
+[34407071886] [[35mTRACE[0m] [kernel] [CPU0]   Module[106]: name='/share/wallpapers/clouds.bmp' cmdline='' size=786486 bytes
+[34407637671] [[35mTRACE[0m] [kernel] [CPU0]   Module[107]: name='/share/wallpapers/flower.bmp' cmdline='' size=8386614 bytes
+[34408168674] [[35mTRACE[0m] [kernel] [CPU0]   Module[108]: name='/share/wallpapers/flower.png' cmdline='' size=1730504 bytes
+[34408693968] [[35mTRACE[0m] [kernel] [CPU0]   Module[109]: name='/share/wallpapers/leather.bmp' cmdline='' size=1179702 bytes
+[34409219394] [[35mTRACE[0m] [kernel] [CPU0]   Module[110]: name='/share/wallpapers/linen.bmp' cmdline='' size=4718646 bytes
+[34409740530] [[35mTRACE[0m] [kernel] [CPU0]   Module[111]: name='/share/fonts/DSEG7Classic-Regular.ttf' cmdline='' size=23272 bytes
+[34410311331] [[35mTRACE[0m] [kernel] [CPU0]   Module[112]: name='/share/fonts/Hack-Regular.ttf' cmdline='' size=309408 bytes
+[34410843753] [[35mTRACE[0m] [kernel] [CPU0]   Module[113]: name='/share/fonts/Inter-Regular.ttf' cmdline='' size=876576 bytes
+[34411381158] [[35mTRACE[0m] [kernel] [CPU0]   Module[114]: name='/share/fonts/Iosevka-Regular.ttf' cmdline='' size=10457376 bytes
+[34411910544] [[35mTRACE[0m] [kernel] [CPU0]   Module[115]: name='/share/fonts/JetBrainsMono-Regular.ttf' cmdline='' size=270224 bytes
+[34412443593] [[35mTRACE[0m] [kernel] [CPU0]   Module[116]: name='/share/fonts/NotoSans-Regular.ttf' cmdline='' size=569208 bytes
+[34412984958] [[35mTRACE[0m] [kernel] [CPU0]   Module[117]: name='/share/fonts/NotoSansSymbol-Regular.ttf' cmdline='' size=258156 bytes
+[34413559686] [[35mTRACE[0m] [kernel] [CPU0]   Module[118]: name='/share/fonts/NotoSansSymbol2-Regular.ttf' cmdline='' size=656852 bytes
+[34414119399] [[35mTRACE[0m] [kernel] [CPU0]   Module[119]: name='/share/fonts/NotoSerif-Regular.ttf' cmdline='' size=616196 bytes
+[34414648356] [[35mTRACE[0m] [kernel] [CPU0]   Module[120]: name='/share/themes/solarized_warm.toml' cmdline='' size=1832 bytes
+[34415170251] [[35mTRACE[0m] [kernel] [CPU0]   Module[121]: name='/share/cursors/future/alias.svg' cmdline='' size=9033 bytes
+[34415688516] [[35mTRACE[0m] [kernel] [CPU0]   Module[122]: name='/share/cursors/future/all-scroll.svg' cmdline='' size=5170 bytes
+[34416213150] [[35mTRACE[0m] [kernel] [CPU0]   Module[123]: name='/share/cursors/future/bottom_left_corner.svg' cmdline='' size=1441 bytes
+[34416815037] [[35mTRACE[0m] [kernel] [CPU0]   Module[124]: name='/share/cursors/future/bottom_right_corner.svg' cmdline='' size=3037 bytes
+[34417386696] [[35mTRACE[0m] [kernel] [CPU0]   Module[125]: name='/share/cursors/future/bottom_side.svg' cmdline='' size=5432 bytes
+[34417933176] [[35mTRACE[0m] [kernel] [CPU0]   Module[126]: name='/share/cursors/future/cell.svg' cmdline='' size=3707 bytes
+[34418450352] [[35mTRACE[0m] [kernel] [CPU0]   Module[127]: name='/share/cursors/future/center_ptr.svg' cmdline='' size=9766 bytes
+[34419121506] [[35mTRACE[0m] [kernel] [CPU0]   Module[128]: name='/share/cursors/future/col-resize.svg' cmdline='' size=16463 bytes
+[34420275846] [[35mTRACE[0m] [kernel] [CPU0]   Module[129]: name='/share/cursors/future/color-picker.svg' cmdline='' size=6296 bytes
+[34420834965] [[35mTRACE[0m] [kernel] [CPU0]   Module[130]: name='/share/cursors/future/context-menu.svg' cmdline='' size=9011 bytes
+[34421524104] [[35mTRACE[0m] [kernel] [CPU0]   Module[131]: name='/share/cursors/future/copy.svg' cmdline='' size=3527 bytes
+[34422219249] [[35mTRACE[0m] [kernel] [CPU0]   Module[132]: name='/share/cursors/future/crosshair.svg' cmdline='' size=16918 bytes
+[34423155030] [[35mTRACE[0m] [kernel] [CPU0]   Module[133]: name='/share/cursors/future/default.svg' cmdline='' size=3079 bytes
+[34425894789] [[35mTRACE[0m] [kernel] [CPU0]   Module[134]: name='/share/cursors/future/dnd-move.svg' cmdline='' size=3569 bytes
+[34426419588] [[35mTRACE[0m] [kernel] [CPU0]   Module[135]: name='/share/cursors/future/dnd-no-drop.svg' cmdline='' size=4753 bytes
+[34426968774] [[35mTRACE[0m] [kernel] [CPU0]   Module[136]: name='/share/cursors/future/down-arrow.svg' cmdline='' size=1820 bytes
+[34427503110] [[35mTRACE[0m] [kernel] [CPU0]   Module[137]: name='/share/cursors/future/draft.svg' cmdline='' size=3136 bytes
+[34428021507] [[35mTRACE[0m] [kernel] [CPU0]   Module[138]: name='/share/cursors/future/fleur.svg' cmdline='' size=28469 bytes
+[34428541917] [[35mTRACE[0m] [kernel] [CPU0]   Module[139]: name='/share/cursors/future/help.svg' cmdline='' size=5873 bytes
+[34429058400] [[35mTRACE[0m] [kernel] [CPU0]   Module[140]: name='/share/cursors/future/left-arrow.svg' cmdline='' size=1785 bytes
+[34429586268] [[35mTRACE[0m] [kernel] [CPU0]   Module[141]: name='/share/cursors/future/left_side.svg' cmdline='' size=3848 bytes
+[34430154825] [[35mTRACE[0m] [kernel] [CPU0]   Module[142]: name='/share/cursors/future/no-drop.svg' cmdline='' size=3861 bytes
+[34430684112] [[35mTRACE[0m] [kernel] [CPU0]   Module[143]: name='/share/cursors/future/not-allowed.svg' cmdline='' size=1567 bytes
+[34431206304] [[35mTRACE[0m] [kernel] [CPU0]   Module[144]: name='/share/cursors/future/openhand.svg' cmdline='' size=3435 bytes
+[34431723975] [[35mTRACE[0m] [kernel] [CPU0]   Module[145]: name='/share/cursors/future/pencil.svg' cmdline='' size=6527 bytes
+[34432237719] [[35mTRACE[0m] [kernel] [CPU0]   Module[146]: name='/share/cursors/future/pirate.svg' cmdline='' size=6663 bytes
+[34432751133] [[35mTRACE[0m] [kernel] [CPU0]   Module[147]: name='/share/cursors/future/pointer.svg' cmdline='' size=2922 bytes
+[34433303883] [[35mTRACE[0m] [kernel] [CPU0]   Module[148]: name='/share/cursors/future/progress-01.svg' cmdline='' size=11030 bytes
+[34433832873] [[35mTRACE[0m] [kernel] [CPU0]   Module[149]: name='/share/cursors/future/progress-02.svg' cmdline='' size=12198 bytes
+[34434357540] [[35mTRACE[0m] [kernel] [CPU0]   Module[150]: name='/share/cursors/future/progress-03.svg' cmdline='' size=12733 bytes
+[34434880557] [[35mTRACE[0m] [kernel] [CPU0]   Module[151]: name='/share/cursors/future/progress-04.svg' cmdline='' size=13777 bytes
+[34435401396] [[35mTRACE[0m] [kernel] [CPU0]   Module[152]: name='/share/cursors/future/progress-05.svg' cmdline='' size=13835 bytes
+[34435966620] [[35mTRACE[0m] [kernel] [CPU0]   Module[153]: name='/share/cursors/future/progress-06.svg' cmdline='' size=14907 bytes
+[34436517324] [[35mTRACE[0m] [kernel] [CPU0]   Module[154]: name='/share/cursors/future/progress-07.svg' cmdline='' size=14805 bytes
+[34437046017] [[35mTRACE[0m] [kernel] [CPU0]   Module[155]: name='/share/cursors/future/progress-08.svg' cmdline='' size=15996 bytes
+[34437573192] [[35mTRACE[0m] [kernel] [CPU0]   Module[156]: name='/share/cursors/future/progress-09.svg' cmdline='' size=16010 bytes
+[34439405517] [[35mTRACE[0m] [kernel] [CPU0]   Module[157]: name='/share/cursors/future/progress-10.svg' cmdline='' size=17080 bytes
+[34439974206] [[35mTRACE[0m] [kernel] [CPU0]   Module[158]: name='/share/cursors/future/progress-11.svg' cmdline='' size=17096 bytes
+[34441796499] [[35mTRACE[0m] [kernel] [CPU0]   Module[159]: name='/share/cursors/future/progress-12.svg' cmdline='' size=17079 bytes
+[34442329119] [[35mTRACE[0m] [kernel] [CPU0]   Module[160]: name='/share/cursors/future/progress-13.svg' cmdline='' size=15900 bytes
+[34442855799] [[35mTRACE[0m] [kernel] [CPU0]   Module[161]: name='/share/cursors/future/progress-14.svg' cmdline='' size=16001 bytes
+[34443423960] [[35mTRACE[0m] [kernel] [CPU0]   Module[162]: name='/share/cursors/future/progress-15.svg' cmdline='' size=14931 bytes
+[34443955062] [[35mTRACE[0m] [kernel] [CPU0]   Module[163]: name='/share/cursors/future/progress-16.svg' cmdline='' size=14873 bytes
+[34444483986] [[35mTRACE[0m] [kernel] [CPU0]   Module[164]: name='/share/cursors/future/progress-17.svg' cmdline='' size=13846 bytes
+[34445012349] [[35mTRACE[0m] [kernel] [CPU0]   Module[165]: name='/share/cursors/future/progress-18.svg' cmdline='' size=13835 bytes
+[34445543748] [[35mTRACE[0m] [kernel] [CPU0]   Module[166]: name='/share/cursors/future/progress-19.svg' cmdline='' size=12645 bytes
+[34446075609] [[35mTRACE[0m] [kernel] [CPU0]   Module[167]: name='/share/cursors/future/progress-20.svg' cmdline='' size=12741 bytes
+[34446628392] [[35mTRACE[0m] [kernel] [CPU0]   Module[168]: name='/share/cursors/future/progress-21.svg' cmdline='' size=11660 bytes
+[34447161672] [[35mTRACE[0m] [kernel] [CPU0]   Module[169]: name='/share/cursors/future/progress-22.svg' cmdline='' size=11612 bytes
+[34447750425] [[35mTRACE[0m] [kernel] [CPU0]   Module[170]: name='/share/cursors/future/progress-23.svg' cmdline='' size=11674 bytes
+[34448299149] [[35mTRACE[0m] [kernel] [CPU0]   Module[171]: name='/share/cursors/future/progress.svg' cmdline='' size=11642 bytes
+[34448843814] [[35mTRACE[0m] [kernel] [CPU0]   Module[172]: name='/share/cursors/future/right-arrow.svg' cmdline='' size=3432 bytes
+[34449387126] [[35mTRACE[0m] [kernel] [CPU0]   Module[173]: name='/share/cursors/future/right_ptr.svg' cmdline='' size=5155 bytes
+[34449946938] [[35mTRACE[0m] [kernel] [CPU0]   Module[174]: name='/share/cursors/future/right_side.svg' cmdline='' size=6447 bytes
+[34450473123] [[35mTRACE[0m] [kernel] [CPU0]   Module[175]: name='/share/cursors/future/row-resize.svg' cmdline='' size=15825 bytes
+[34451066265] [[35mTRACE[0m] [kernel] [CPU0]   Module[176]: name='/share/cursors/future/size_bdiag.svg' cmdline='' size=16323 bytes
+[34451601756] [[35mTRACE[0m] [kernel] [CPU0]   Module[177]: name='/share/cursors/future/size_fdiag.svg' cmdline='' size=16589 bytes
+[34452488829] [[35mTRACE[0m] [kernel] [CPU0]   Module[178]: name='/share/cursors/future/size_hor.svg' cmdline='' size=16255 bytes
+[34454282742] [[35mTRACE[0m] [kernel] [CPU0]   Module[179]: name='/share/cursors/future/size_ver.svg' cmdline='' size=15822 bytes
+[34455055305] [[35mTRACE[0m] [kernel] [CPU0]   Module[180]: name='/share/cursors/future/text.svg' cmdline='' size=5584 bytes
+[34455583866] [[35mTRACE[0m] [kernel] [CPU0]   Module[181]: name='/share/cursors/future/top_left_corner.svg' cmdline='' size=7121 bytes
+[34457215056] [[35mTRACE[0m] [kernel] [CPU0]   Module[182]: name='/share/cursors/future/top_right_corner.svg' cmdline='' size=7139 bytes
+[34457754474] [[35mTRACE[0m] [kernel] [CPU0]   Module[183]: name='/share/cursors/future/top_side.svg' cmdline='' size=10651 bytes
+[34459492419] [[35mTRACE[0m] [kernel] [CPU0]   Module[184]: name='/share/cursors/future/up-arrow.svg' cmdline='' size=7653 bytes
+[34460024544] [[35mTRACE[0m] [kernel] [CPU0]   Module[185]: name='/share/cursors/future/vertical-text.svg' cmdline='' size=5621 bytes
+[34460556075] [[35mTRACE[0m] [kernel] [CPU0]   Module[186]: name='/share/cursors/future/wait-01.svg' cmdline='' size=15308 bytes
+[34461078564] [[35mTRACE[0m] [kernel] [CPU0]   Module[187]: name='/share/cursors/future/wait-02.svg' cmdline='' size=6672 bytes
+[34461598380] [[35mTRACE[0m] [kernel] [CPU0]   Module[188]: name='/share/cursors/future/wait-03.svg' cmdline='' size=6686 bytes
+[34462118097] [[35mTRACE[0m] [kernel] [CPU0]   Module[189]: name='/share/cursors/future/wait-04.svg' cmdline='' size=7827 bytes
+[34462639695] [[35mTRACE[0m] [kernel] [CPU0]   Module[190]: name='/share/cursors/future/wait-05.svg' cmdline='' size=7835 bytes
+[34463182974] [[35mTRACE[0m] [kernel] [CPU0]   Module[191]: name='/share/cursors/future/wait-06.svg' cmdline='' size=8976 bytes
+[34463716056] [[35mTRACE[0m] [kernel] [CPU0]   Module[192]: name='/share/cursors/future/wait-07.svg' cmdline='' size=8989 bytes
+[34464335070] [[35mTRACE[0m] [kernel] [CPU0]   Module[193]: name='/share/cursors/future/wait-08.svg' cmdline='' size=10126 bytes
+[34464889074] [[35mTRACE[0m] [kernel] [CPU0]   Module[194]: name='/share/cursors/future/wait-09.svg' cmdline='' size=10140 bytes
+[34465420011] [[35mTRACE[0m] [kernel] [CPU0]   Module[195]: name='/share/cursors/future/wait-10.svg' cmdline='' size=11277 bytes
+[34465945668] [[35mTRACE[0m] [kernel] [CPU0]   Module[196]: name='/share/cursors/future/wait-11.svg' cmdline='' size=11291 bytes
+[34466488122] [[35mTRACE[0m] [kernel] [CPU0]   Module[197]: name='/share/cursors/future/wait-12.svg' cmdline='' size=11277 bytes
+[34467008664] [[35mTRACE[0m] [kernel] [CPU0]   Module[198]: name='/share/cursors/future/wait-13.svg' cmdline='' size=10140 bytes
+[34467530592] [[35mTRACE[0m] [kernel] [CPU0]   Module[199]: name='/share/cursors/future/wait-14.svg' cmdline='' size=10126 bytes
+[34468083012] [[35mTRACE[0m] [kernel] [CPU0]   Module[200]: name='/share/cursors/future/wait-15.svg' cmdline='' size=8991 bytes
+[34468602333] [[35mTRACE[0m] [kernel] [CPU0]   Module[201]: name='/share/cursors/future/wait-16.svg' cmdline='' size=8978 bytes
+[34469163333] [[35mTRACE[0m] [kernel] [CPU0]   Module[202]: name='/share/cursors/future/wait-17.svg' cmdline='' size=7842 bytes
+[34469759016] [[35mTRACE[0m] [kernel] [CPU0]   Module[203]: name='/share/cursors/future/wait-18.svg' cmdline='' size=7829 bytes
+[34470299391] [[35mTRACE[0m] [kernel] [CPU0]   Module[204]: name='/share/cursors/future/wait-19.svg' cmdline='' size=6822 bytes
+[34471115151] [[35mTRACE[0m] [kernel] [CPU0]   Module[205]: name='/share/cursors/future/wait-20.svg' cmdline='' size=6679 bytes
+[34472766669] [[35mTRACE[0m] [kernel] [CPU0]   Module[206]: name='/share/cursors/future/wait-21.svg' cmdline='' size=5542 bytes
+[34473314733] [[35mTRACE[0m] [kernel] [CPU0]   Module[207]: name='/share/cursors/future/wait-22.svg' cmdline='' size=5528 bytes
+[34475355057] [[35mTRACE[0m] [kernel] [CPU0]   Module[208]: name='/share/cursors/future/wait-23.svg' cmdline='' size=5546 bytes
+[34475887743] [[35mTRACE[0m] [kernel] [CPU0]   Module[209]: name='/share/cursors/future/wait.svg' cmdline='' size=5525 bytes
+[34476454551] [[35mTRACE[0m] [kernel] [CPU0]   Module[210]: name='/share/cursors/future/wayland-cursor.svg' cmdline='' size=8222 bytes
+[34477012383] [[35mTRACE[0m] [kernel] [CPU0]   Module[211]: name='/share/cursors/future/x-cursor.svg' cmdline='' size=6822 bytes
+[34477557081] [[35mTRACE[0m] [kernel] [CPU0]   Module[212]: name='/share/cursors/future/zoom-in.svg' cmdline='' size=5441 bytes
+[34478076072] [[35mTRACE[0m] [kernel] [CPU0]   Module[213]: name='/share/cursors/future/zoom-out.svg' cmdline='' size=5403 bytes
+[34478598330] [[35mTRACE[0m] [kernel] [CPU0]   Module[214]: name='/share/fonts/unifont.hex' cmdline='' size=8355852 bytes
+[34479108378] [[35mTRACE[0m] [kernel] [CPU0]   Module[215]: name='/etc/locale.conf' cmdline='' size=85 bytes
+[34479622947] [[35mTRACE[0m] [kernel] [CPU0]   Module[216]: name='/etc/profile' cmdline='' size=68 bytes
+[34480110852] [[35mTRACE[0m] [kernel] [CPU0]   Module[217]: name='/etc/motd' cmdline='' size=610 bytes
+[34480591365] [[35mTRACE[0m] [kernel] [CPU0]   Module[218]: name='/etc/fstab' cmdline='' size=127 bytes
+[34481073396] [[35mTRACE[0m] [kernel] [CPU0]   Module[219]: name='/etc/hostname' cmdline='' size=8 bytes
+[34481654889] [[32mINFO [0m] [kernel::boot_progress] [CPU0] boot_progress: milestone="Modules Scanned"
+[34705391787] [[32mINFO [0m] [kernel::boot_progress] [CPU0] boot_progress: hint="Press F12 for a terminal"
+[34706619948] [[34mDEBUG[0m] [kernel] [CPU0] Found init module: /bin/sprout (cmdline: 'init'), loading...
+[34708143591] [[34mDEBUG[0m] [kernel::task::loader] [CPU0] LOADER: Loading module '/bin/sprout' (len=90224, base=0x200000)
+[34708905165] [[35mTRACE[0m] [kernel::task::loader] [CPU0]   Header: [7f, 45, 4c, 46, 02, 01, 01, 00, 00, 00, 00, 00, 00, 00, 00, 00]
+[34722228585] [[34mDEBUG[0m] [kernel::task::loader] [CPU0] LOADER: ELF info: entry=200000, min_vaddr=200000, bias=0, entry_pc=200000
+[34724010981] [[35mTRACE[0m] [kernel::task::loader] [CPU0] Segment: vaddr=200000 exec=true
+[34728639363] [[35mTRACE[0m] [kernel::task::loader] [CPU0]   COPIED at 0x201420: [0b, 00, 00, 00, be, 01, 00, 00]
+[34734622956] [[35mTRACE[0m] [kernel::task::loader] [CPU0] Segment: vaddr=20c000 exec=false
+[34739297340] [[35mTRACE[0m] [kernel::task::loader] [CPU0] Segment: vaddr=20f000 exec=false
+[34743790785] [[34mDEBUG[0m] [kernel::task::loader] [CPU0] LOADER: TLS block: tp=0x210000 filesz=0 memsz=0 align=1
+[34752485295] [[34mDEBUG[0m] [kernel] [CPU0] [kernel:start] scheduler-entry step='load_init_module' elapsed_ticks=44567655 elapsed_us=22283 total_ticks=1053594531 total_us=526797
+[34754089425] [[34mDEBUG[0m] [kernel] [CPU0] Warning: Module registry page overflow, truncating list.
+[34754629404] [[34mDEBUG[0m] [kernel] [CPU0] [kernel:start] scheduler-entry step='prepare_boot_registry' elapsed_ticks=1376991 elapsed_us=688 total_ticks=1055759925 total_us=527879
+[34755450543] [[34mDEBUG[0m] [kernel] [CPU0] [kernel:start] scheduler-entry step='map_boot_registry' elapsed_ticks=153582 elapsed_us=76 total_ticks=1056582780 total_us=528291
+[34756394409] [[34mDEBUG[0m] [kernel] [CPU0] [kernel:start] scheduler-entry step='activate_init_aspace' elapsed_ticks=158664 elapsed_us=79 total_ticks=1057489191 total_us=528744
+[34757239572] [[34mDEBUG[0m] [kernel] [CPU0] Spawning sprout with registry at 0x600000...
+[34757760741] [[34mDEBUG[0m] [kernel] [CPU0] Spawning init process...
+[34759737672] [[34mDEBUG[0m] [bran::arch::x86_64::task] [CPU0] INIT KERNEL CTX: entry=0xffffffff800532f0 kstack_top=0xffffffffb006a7c0 arg=0xffffffffb0020a20
+[34774459005] [[34mDEBUG[0m] [kernel::sched] [CPU0] REGISTRY: Applying 1 deferred inserts
+[34780479162] [[34mDEBUG[0m] [kernel::sched] [CPU0] REGISTRY: Inserting TID=5
+[34785125892] [[34mDEBUG[0m] [kernel::sched] [CPU0] REGISTRY: Inserts applied
+[34785769161] [[34mDEBUG[0m] [kernel] [CPU0] [kernel:start] scheduler-entry step='spawn_init_task' elapsed_ticks=28049967 elapsed_us=14024 total_ticks=1086893181 total_us=543446
+[34786446651] [[32mINFO [0m] [kernel::boot_progress] [CPU0] boot_progress: milestone="Spawning Sprout"
+[34919498889] [[34mDEBUG[0m] [kernel::sched::lifecycle] [CPU0] SCHED: early-boot bringup complete; resuming steady-state SMP scheduling
+[34920260265] [[34mDEBUG[0m] [kernel] [CPU0] [kernel:start] scheduler-entry step='end_bringup' elapsed_ticks=1229580 elapsed_us=614 total_ticks=1221383031 total_us=610691
+[34920964122] [[32mINFO [0m] [kernel::boot_progress] [CPU0] boot_progress: milestone="Entering Scheduler"
+[35166824979] [[32mINFO [0m] [kernel] [CPU0] [kernel:start] scheduler-entry total elapsed_ticks=1467724236 elapsed_us=733862
+[35167579920] [[32mINFO [0m] [kernel] [CPU0] Entering scheduler loop.
+[35185968510] [[34mDEBUG[0m] [kernel::sched::spawn] [CPU0] USER_TRAMPOLINE: PC=0x200000 SP=0x800000 ARG0=0x600000
+[35186990289] [[34mDEBUG[0m] [bran::arch::x86_64] [CPU0] ENTER_USER: TID=5 entry_pc=200000 user_sp=800000
+[35215568817] [[35mTRACE[0m] [kernel::sched] [CPU0] SCHED-DBG: cpus_online=4
+[35225014539] [[35mTRACE[0m] [kernel::sched] [CPU0] SCHED-DBG: cpu=0 curr=Some(5) runq=1 runq_avg=2 runq_samples=1 ctxsw=1 idle2busy=0 tick=0 ipi=0 enq=3 deq=1 wake=0 lock_miss=0 lock_pending=0 lock_blocked=0
+[35226326322] [[35mTRACE[0m] [kernel::sched] [CPU0] SCHED-DBG: cpu=1 curr=Some(2) runq=0 runq_avg=0 runq_samples=38 ctxsw=0 idle2busy=0 tick=34 ipi=0 enq=1 deq=0 wake=0 lock_miss=0 lock_pending=0 lock_blocked=0
+[35227265073] [[35mTRACE[0m] [kernel::sched] [CPU0] SCHED-DBG: cpu=2 curr=Some(3) runq=0 runq_avg=0 runq_samples=39 ctxsw=0 idle2busy=0 tick=33 ipi=0 enq=1 deq=0 wake=0 lock_miss=0 lock_pending=0 lock_blocked=0
+[35228305563] [[35mTRACE[0m] [kernel::sched] [CPU0] SCHED-DBG: cpu=3 curr=Some(4) runq=0 runq_avg=0 runq_samples=38 ctxsw=0 idle2busy=0 tick=33 ipi=0 enq=1 deq=0 wake=0 lock_miss=0 lock_pending=0 lock_blocked=0
+[35288584056] [[34mDEBUG[0m] [kernel::syscall::handlers::process] [CPU0] sys_auxv_get: tid=5 buf_len=0
+[35294488845] [[34mDEBUG[0m] [kernel::syscall::handlers::process] [CPU0] sys_auxv_get: tid=5 buf_len=20
+[35304879324] [[32mINFO [0m] [sprout] [CPU0] SPROUT: ENTERING MAIN (arg0=6291456)
+[35306753130] [[34mDEBUG[0m] [sprout] [CPU0] [sprout] whoami: cs=0x2b ss=0x23 cpl=3 rsp=0x7fef70 rip=0x2038e5 rflags=0x202
+[35308664886] [[32mINFO [0m] [sprout] [CPU0] SPROUT: v0.4.1 [REBUILT] starting (Supervisor Mode)...
+[35310032010] [[34mDEBUG[0m] [sprout] [CPU0] SPROUT: About to create Supervisor...
+[35311386297] [[34mDEBUG[0m] [sprout] [CPU0] SPROUT: Listing /bin directory...
+[35314137837] [[35mTRACE[0m] [kernel::syscall::handlers::vfs] [CPU0] VFS: sys_fs_open path='/bin' tid=5
+[35345188560] [[35mTRACE[0m] [kernel::syscall::handlers::vfs] [CPU0] sys_fs_close: fd=3
+[35352439320] [[32mINFO [0m] [sprout::supervisor] [CPU0] SPROUT: Initializing Supervisor...
+[35355988437] [[34mDEBUG[0m] [sprout::supervisor] [CPU0] SPROUT: Parsed command line: '    '
+[35357499342] [[35mTRACE[0m] [kernel::syscall::handlers::vfs] [CPU0] VFS: sys_fs_open path='/dev/cmdline' tid=5
+[35367735909] [[35mTRACE[0m] [kernel::vfs::devfs] [CPU0] devfs: cmdline read offset=0 len=1024
+[35370371652] [[34mDEBUG[0m] [sprout::supervisor] [CPU0] SPROUT: Parsed command line: 'loglevel=5'
+[35371575129] [[35mTRACE[0m] [kernel::syscall::handlers::vfs] [CPU0] sys_fs_close: fd=3
+[35398935066] [[34mDEBUG[0m] [sprout] [CPU0] SPROUT: Supervisor created, calling run_forever...
+[35400700269] [[32mINFO [0m] [sprout::supervisor] [CPU0] SPROUT: Supervisor session started (FULL PIPELINE MODE)
+[35410205391] [[32mINFO [0m] [sprout::supervisor] [CPU0] SPROUT: Launching serial shell...
+[35411818134] [[32mINFO [0m] [sprout::pipelines] [CPU0] SPROUT: Setting up serial shell on /dev/console...
+[35413233339] [[35mTRACE[0m] [kernel::syscall::handlers::vfs] [CPU0] VFS: sys_fs_open path='/run/sprout/shell' tid=5
+[35417397345] [[35mTRACE[0m] [kernel::syscall::handlers::vfs] [CPU0] VFS: sys_fs_open path='/etc/default/shell' tid=5
+[35419751202] [[35mTRACE[0m] [kernel::syscall::handlers::vfs] [CPU0] VFS: sys_fs_open path='/bin/sh' tid=5
+[35423491356] [[35mTRACE[0m] [kernel::syscall::handlers::vfs] [CPU0] sys_fs_close: fd=3
+[35426585205] [[35mTRACE[0m] [kernel::syscall::handlers::vfs] [CPU0] VFS: sys_fs_open path='/dev/console' tid=5
+[35429431356] [[35mTRACE[0m] [kernel::syscall::handlers::vfs] [CPU0] VFS: sys_fs_open path='/dev/console' tid=5
+[35432102904] [[35mTRACE[0m] [kernel::syscall::handlers::vfs] [CPU0] VFS: sys_fs_open path='/dev/console' tid=5
+[35460007440] [[34mDEBUG[0m] [kernel::sched::spawn] [CPU0] SPAWN: page cache miss for '/bin/sh', caching 127864 bytes
+[35464892331] [[34mDEBUG[0m] [kernel::task::loader] [CPU0] LOADER: Loading module 'sh' (len=127864, base=0x200000)
+[35465452011] [[35mTRACE[0m] [kernel::task::loader] [CPU0]   Header: [7f, 45, 4c, 46, 02, 01, 01, 00, 00, 00, 00, 00, 00, 00, 00, 00]
+[35466445839] [[34mDEBUG[0m] [kernel::task::loader] [CPU0] LOADER: ELF info: entry=200000, min_vaddr=200000, bias=0, entry_pc=200000
+[35467019379] [[35mTRACE[0m] [kernel::task::loader] [CPU0] Segment: vaddr=200000 exec=true
+[35469051453] [[35mTRACE[0m] [kernel::task::loader] [CPU0]   COPIED at 0x201420: [0f, 84, 32, 06, 00, 00, 48, 8b]
+[35482817172] [[35mTRACE[0m] [kernel::task::loader] [CPU0] Segment: vaddr=214000 exec=false
+[35484607521] [[35mTRACE[0m] [kernel::task::loader] [CPU0] Segment: vaddr=217000 exec=false
+[35485834989] [[34mDEBUG[0m] [kernel::task::loader] [CPU0] LOADER: TLS block: tp=0x218000 filesz=0 memsz=0 align=1
+[35490774924] [[34mDEBUG[0m] [kernel::sched::spawn] [CPU0] SPAWN_FROM_PATH: Starting Phase 1 for /bin/sh
+[35492450301] [[34mDEBUG[0m] [bran::arch::x86_64::task] [CPU0] INIT KERNEL CTX: entry=0xffffffff800532f0 kstack_top=0xffffffffb00a3b60 arg=0xffffffffb0074380
+[35499062478] [[34mDEBUG[0m] [kernel::sched::spawn] [CPU0] SPAWN_FROM_PATH: Phase 1 complete, ID=6, applying inserts
+[35499642915] [[34mDEBUG[0m] [kernel::sched] [CPU0] REGISTRY: Applying 1 deferred inserts
+[35500125177] [[34mDEBUG[0m] [kernel::sched] [CPU0] REGISTRY: Inserting TID=6
+[35500685451] [[34mDEBUG[0m] [kernel::sched] [CPU0] REGISTRY: Inserts applied
+[35501188965] [[34mDEBUG[0m] [kernel::sched::spawn] [CPU0] SPAWN_FROM_PATH: Inserts applied, entering Phase 2
+[35514262476] [[34mDEBUG[0m] [kernel::sched::spawn] [CPU0] SETUP_STDIO: stdin=Fd(3) stdout=Fd(4) stderr=Fd(5)
+[35527927446] [[34mDEBUG[0m] [kernel::sched::spawn] [CPU0] SPAWN_FROM_PATH: Phase 2 complete, waking task 6
+[35535094749] [[34mDEBUG[0m] [kernel::sched::spawn] [CPU0] SPAWN_FROM_PATH: Task 6 woken, restoring IRQs
+[35535720132] [[34mDEBUG[0m] [kernel::sched::spawn] [CPU0] SPAWN_FROM_PATH: Done for /bin/sh
+[35537207046] [[34mDEBUG[0m] [kernel::syscall::handlers::process] [CPU0] SYSCALL SPAWN_PROCESS_EX: name='/bin/sh' TID=6 PID=6
+[35543440383] [[32mINFO [0m] [sprout::pipelines] [CPU0] SPROUT: Spawned serial shell '/bin/sh' (PID=6)
+[35545984056] [[35mTRACE[0m] [kernel::syscall::handlers::vfs] [CPU0] sys_fs_close: fd=3
+[35547508623] [[34mDEBUG[0m] [kernel::sched::spawn] [CPU3] USER_TRAMPOLINE: PC=0x200000 SP=0x800000 ARG0=0x0
+[35548547463] [[34mDEBUG[0m] [bran::arch::x86_64] [CPU3] ENTER_USER: TID=6 entry_pc=200000 user_sp=800000
+[35550914421] [[35mTRACE[0m] [kernel::syscall::handlers::vfs] [CPU0] sys_fs_close: fd=4
+[35551285737] [[34mDEBUG[0m] [kernel::syscall::handlers::process] [CPU3] sys_auxv_get: tid=6 buf_len=0
+[35552593560] [[34mDEBUG[0m] [kernel::syscall::handlers::process] [CPU3] sys_auxv_get: tid=6 buf_len=100
+[35553630981] [[35mTRACE[0m] [kernel::syscall::handlers::vfs] [CPU0] sys_fs_close: fd=5
+[35555213892] [[32mINFO [0m] [sh] [CPU3] SH: starting v0.1.0-debug
+[35558097564] [[35mTRACE[0m] [kernel::syscall::handlers::vfs] [CPU3] VFS: sys_fs_open path='/run/motd' tid=6
+[35560815609] [[35mTRACE[0m] [kernel::syscall::handlers::vfs] [CPU3] VFS: sys_fs_open path='/etc/motd' tid=6
+[35563124124] [[32mINFO [0m] [sprout::supervisor] [CPU0] SPROUT: Serial shell launched; yielding 50ms so the prompt can take the foreground
+[35563700205] [[35mTRACE[0m] [kernel::syscall::handlers::vfs] [CPU3] sys_fs_close: fd=6
+[35570572059] [[35mTRACE[0m] [kernel::vfs::devfs] [CPU3] vfs: /dev/console write by PID=6 len=610
+[35571112929] [[34mDEBUG[0m] [kernel] [CPU0] deferred_bootfb_gradient elapsed_ticks=19404
+[1;32m
+        .-.
+       /   \        [1;36mTHING-OS[1;32m
+      |     |       [0;36m"People, places, things."[1;32m
+       \   /        
+        `-'        
+       /   \        v0.1  •  
+      |     |       2026-04-16
+       \   /
+        `-'
+[0m
+[2m--------------------------------------------------------------[0m
+[1m sprout has taken root. the system is awake.[0m
+
+  try:
+    [36mls /bin[0m       browse available shoots
+    [36mps[0m            observe living processes
+    [36mcat /version[0m  inspect the genome
+
+[2m--------------------------------------------------------------[0m
+[35579561127] [[35mTRACE[0m] [kernel::syscall::handlers::vfs] [CPU3] VFS: sys_fs_open path='/etc/profile' tid=6
+[35606408475] [[35mTRACE[0m] [kernel::syscall::handlers::vfs] [CPU3] sys_fs_close: fd=6
+[35615323458] [[35mTRACE[0m] [kernel::vfs::devfs] [CPU3] vfs: /dev/console write by PID=6 len=97
+[1;95mTHING[0m[1;96m-OS[0m [2;94m[[0m[1;95mBOOT[0m[2;94m][0m [1;93m/[0m [1;96m>[0m [35620527063] [[35mTRACE[0m] [kernel::vfs::devfs] [CPU3] vfs: /dev/console write by PID=6 len=6
+[?25h[35622559698] [[35mTRACE[0m] [kernel::vfs::devfs] [CPU3] vfs: /dev/console read by PID=6 len=1
+[35732898135] [[32mINFO [0m] [sprout::supervisor] [CPU0] SPROUT: Continuing supervisor startup
+[35734787484] [[32mINFO [0m] [sprout::supervisor] [CPU0] SPROUT: Spawning cambium for driver discovery...
+[35739577302] [[34mDEBUG[0m] [kernel::task::loader] [CPU0] LOADER: Loading module '/bin/cambium' (len=144760, base=0x200000)
+[35740217469] [[35mTRACE[0m] [kernel::task::loader] [CPU0]   Header: [7f, 45, 4c, 46, 02, 01, 01, 00, 00, 00, 00, 00, 00, 00, 00, 00]
+[35741283534] [[34mDEBUG[0m] [kernel::task::loader] [CPU0] LOADER: ELF info: entry=200000, min_vaddr=200000, bias=0, entry_pc=200000
+[35741861265] [[35mTRACE[0m] [kernel::task::loader] [CPU0] Segment: vaddr=200000 exec=true
+[35743913667] [[35mTRACE[0m] [kernel::task::loader] [CPU0]   COPIED at 0x201420: [8d, 3c, f0, 48, 83, c7, 70, 48]
+[35753959428] [[35mTRACE[0m] [kernel::task::loader] [CPU0] Segment: vaddr=217000 exec=false
+[35755854123] [[35mTRACE[0m] [kernel::task::loader] [CPU0] Segment: vaddr=21a000 exec=false
+[35764067592] [[34mDEBUG[0m] [kernel::task::loader] [CPU0] LOADER: TLS block: tp=0x21b000 filesz=0 memsz=0 align=1
+[35769585951] [[34mDEBUG[0m] [bran::arch::x86_64::task] [CPU0] INIT KERNEL CTX: entry=0xffffffff800532f0 kstack_top=0xffffffffb00bd5e0 arg=0xffffffffb00ad260
+[35771365047] [[34mDEBUG[0m] [kernel::sched] [CPU0] REGISTRY: Applying 1 deferred inserts
+[35772440055] [[34mDEBUG[0m] [kernel::sched] [CPU0] REGISTRY: Inserting TID=7
+[35776076655] [[34mDEBUG[0m] [kernel::sched] [CPU0] REGISTRY: Inserts applied
+[35782720677] [[34mDEBUG[0m] [kernel::sched::spawn] [CPU0] SCHED: TID 7 → task '/bin/cambium' (pid=7 from boot module)
+[35788287183] [[34mDEBUG[0m] [kernel::sched::spawn] [CPU1] USER_TRAMPOLINE: PC=0x200000 SP=0x800000 ARG0=0x0
+[35788944345] [[34mDEBUG[0m] [sprout::supervisor] [CPU0] SPROUT: Spawned cambium (PID=7)
+[35790091095] [[34mDEBUG[0m] [bran::arch::x86_64] [CPU1] ENTER_USER: TID=7 entry_pc=200000 user_sp=800000
+[35793013641] [[34mDEBUG[0m] [kernel::syscall::handlers::process] [CPU1] sys_auxv_get: tid=7 buf_len=0
+[35793130758] [[32mINFO [0m] [sprout::pipelines] [CPU0] SPROUT: Skipping early /hosts mount; mesocarp is disabled in init
+[35794446633] [[34mDEBUG[0m] [kernel::syscall::handlers::process] [CPU1] sys_auxv_get: tid=7 buf_len=100
+[35796314664] [[34mDEBUG[0m] [sprout::supervisor] [CPU0] SPROUT: Deferring netd until /dev/net/virtio0/rx is ready...
+[35797567608] [[32mINFO [0m] [cambium] [CPU1] CAMBIUM: main started
+[35797879062] [[34mDEBUG[0m] [sprout::supervisor] [CPU0] SPROUT: Waiting for /dev/net/virtio0/rx before spawning netd...
+[35800206321] [[32mINFO [0m] [sprout::supervisor] [CPU0] SPROUT: Starting full pipeline (graphics + input)
+[35801842461] [[32mINFO [0m] [sprout::supervisor] [CPU0] SPROUT: Entering supervisor service loop (tick=100ms)
+[35803655382] [[35mTRACE[0m] [sprout::supervisor] [CPU0] SPROUT: Supervisor tick...
+[35805634722] [[35mTRACE[0m] [sprout::supervisor] [CPU0] SPROUT: Loop iteration: spawn_bristle_if_needed
+[35817605604] [[34mDEBUG[0m] [kernel::sched::spawn] [CPU0] SPAWN: page cache miss for '/bin/bristle', caching 68744 bytes
+[35821301043] [[34mDEBUG[0m] [kernel::task::loader] [CPU0] LOADER: Loading module 'bristle' (len=68744, base=0x200000)
+[35821892403] [[35mTRACE[0m] [kernel::task::loader] [CPU0]   Header: [7f, 45, 4c, 46, 02, 01, 01, 00, 00, 00, 00, 00, 00, 00, 00, 00]
+[35823037932] [[34mDEBUG[0m] [kernel::task::loader] [CPU0] LOADER: ELF info: entry=200000, min_vaddr=200000, bias=0, entry_pc=200000
+[35823651831] [[35mTRACE[0m] [kernel::task::loader] [CPU0] Segment: vaddr=200000 exec=true
+[35825682948] [[35mTRACE[0m] [kernel::task::loader] [CPU0]   COPIED at 0x201420: [cc, fc, ff, ff, 45, 31, ff, e9]
+[35826662421] [[32mINFO [0m] [cambium] [CPU1] CAMBIUM: starting device discovery manager (daemon mode)
+[35827802571] [[35mTRACE[0m] [kernel::syscall::handlers::vfs] [CPU1] VFS: sys_fs_open path='/drivers' tid=7
+[35829760065] [[35mTRACE[0m] [kernel::task::loader] [CPU0] Segment: vaddr=209000 exec=false
+[35830712313] [[35mTRACE[0m] [kernel::syscall::handlers::vfs] [CPU1] sys_fs_readdir: fd=3 len=4096
+[35831136957] [[35mTRACE[0m] [kernel::task::loader] [CPU0] Segment: vaddr=20b000 exec=false
+[35832233712] [[34mDEBUG[0m] [kernel::task::loader] [CPU0] LOADER: TLS block: tp=0x20c000 filesz=0 memsz=0 align=1
+[35832398151] [[35mTRACE[0m] [kernel::syscall::handlers::vfs] [CPU1] sys_fs_readdir: natural phase begin offset=0
+[35836753161] [[34mDEBUG[0m] [kernel::sched::spawn] [CPU0] SPAWN_FROM_PATH: Starting Phase 1 for /bin/bristle
+[35841315708] [[34mDEBUG[0m] [bran::arch::x86_64::task] [CPU0] INIT KERNEL CTX: entry=0xffffffff800532f0 kstack_top=0xffffffffb00e8c60 arg=0xffffffffb00d7880
+[35849961081] [[34mDEBUG[0m] [kernel::sched::spawn] [CPU0] SPAWN_FROM_PATH: Phase 1 complete, ID=8, applying inserts
+[35850504360] [[34mDEBUG[0m] [kernel::sched] [CPU0] REGISTRY: Applying 1 deferred inserts
+[35853425553] [[34mDEBUG[0m] [kernel::sched] [CPU0] REGISTRY: Inserting TID=8
+[35853980646] [[34mDEBUG[0m] [kernel::sched] [CPU0] REGISTRY: Inserts applied
+[35854526961] [[34mDEBUG[0m] [kernel::sched::spawn] [CPU0] SPAWN_FROM_PATH: Inserts applied, entering Phase 2
+[35856190491] [[34mDEBUG[0m] [kernel::sched::spawn] [CPU0] SETUP_STDIO: stdin=Null stdout=Inherit stderr=Inherit
+[35860366674] [[34mDEBUG[0m] [kernel::sched::spawn] [CPU0] SPAWN_FROM_PATH: Phase 2 complete, waking task 8
+[35861452836] [[35mTRACE[0m] [kernel::syscall::handlers::vfs] [CPU1] sys_fs_close: fd=3
+[35861495175] [[34mDEBUG[0m] [kernel::sched::spawn] [CPU0] SPAWN_FROM_PATH: Task 8 woken, restoring IRQs
+[35862280443] [[34mDEBUG[0m] [kernel::sched::spawn] [CPU0] SPAWN_FROM_PATH: Done for /bin/bristle
+[35862856557] [[34mDEBUG[0m] [kernel::syscall::handlers::process] [CPU0] SYSCALL SPAWN_PROCESS_EX: name='/bin/bristle' TID=8 PID=8
+[35863658391] [[34mDEBUG[0m] [kernel::sched::spawn] [CPU2] USER_TRAMPOLINE: PC=0x200000 SP=0x800000 ARG0=0x0
+[35864556618] [[35mTRACE[0m] [kernel::syscall::handlers::vfs] [CPU1] VFS: sys_fs_open path='/drivers/ahci_disk' tid=7
+[35865087489] [[34mDEBUG[0m] [bran::arch::x86_64] [CPU2] ENTER_USER: TID=8 entry_pc=200000 user_sp=800000
+[35866325979] [[34mDEBUG[0m] [kernel::syscall::handlers::process] [CPU2] sys_auxv_get: tid=8 buf_len=0
+[35867512626] [[34mDEBUG[0m] [kernel::syscall::handlers::process] [CPU2] sys_auxv_get: tid=8 buf_len=100
+[35876067843] [[32mINFO [0m] [sprout::pipelines] [CPU0] SPROUT: Spawned bristle (PID=8)
+[35879285442] [[35mTRACE[0m] [sprout::supervisor] [CPU0] SPROUT: Loop iteration: spawn_display_if_needed
+[35880924882] [[32mINFO [0m] [sprout::supervisor] [CPU0] SPROUT: Starting display pipeline setup
+[35882428527] [[32mINFO [0m] [sprout::pipelines] [CPU0] SPROUT: Probing /dev/fb0 for boot framebuffer metadata
+[35883857757] [[35mTRACE[0m] [kernel::syscall::handlers::vfs] [CPU0] VFS: sys_fs_open path='/dev/fb0' tid=5
+[35884590423] [[34mDEBUG[0m] [kernel::syscall::handlers::vfs] [CPU0] sys_fs_open: path='/dev/fb0' len=8 flags=0x0
+[35885635665] [[35mTRACE[0m] [kernel::syscall::handlers::vfs] [CPU2] VFS: sys_fs_open path='/session/active_ui' tid=8
+[35886103209] [[35mTRACE[0m] [kernel::vfs::devfs] [CPU0] devfs: lookup entry path='fb0' len=3
+[35887160727] [[34mDEBUG[0m] [kernel::vfs::devfs] [CPU0] devfs: dynamic registry hit path='fb0'
+[35888905965] [[34mDEBUG[0m] [kernel::syscall::handlers::vfs] [CPU0] sys_fs_open: resolved node for /dev/fb0 mode=0o20666 size=32 ino=4
+[35889748917] [[34mDEBUG[0m] [kernel::syscall::handlers::vfs] [CPU0] sys_fs_open: process info present for /dev/fb0
+[35890542138] [[34mDEBUG[0m] [kernel::syscall::handlers::vfs] [CPU0] sys_fs_open: handle_table.open('/dev/fb0') -> 3
+[35893850157] [[35mTRACE[0m] [kernel::syscall::handlers::vfs] [CPU2] sys_fs_close: fd=3
+[35897437686] [[35mTRACE[0m] [bristle] [CPU2] bristle: active_ui set to 'bloom'
+[35900239089] [[35mTRACE[0m] [kernel::vfs::devfs] [CPU0] FbNode::read: off=0 n=32 buf_len=32 total=32
+[35901694257] [[35mTRACE[0m] [kernel::syscall::handlers::vfs] [CPU2] VFS: sys_fs_open path='/run/bristle/pid' tid=8
+[35903593110] [[35mTRACE[0m] [kernel::syscall::handlers::vfs] [CPU0] sys_fs_close: fd=3
+[35905899612] [[32mINFO [0m] [sprout::pipelines] [CPU0] SPROUT: /dev/fb0 ready width=1920 height=1080 stride=7680 format=2
+[35907626568] [[35mTRACE[0m] [kernel::syscall::handlers::vfs] [CPU0] VFS: sys_fs_open path='/drivers/display_virtio_gpu' tid=5
+[35910345537] [[35mTRACE[0m] [kernel::syscall::handlers::vfs] [CPU0] sys_fs_close: fd=3
+[35912143674] [[32mINFO [0m] [sprout::pipelines] [CPU0] SPROUT: Selected display driver '/drivers/display_virtio_gpu'
+[35913796908] [[32mINFO [0m] [sprout::pipelines] [CPU0] SPROUT: Creating display request port
+[35917847592] [[34mDEBUG[0m] [kernel::ipc] [CPU0] CREATE_PORT: capacity=4096
+[35919494787] [[34mDEBUG[0m] [kernel::ipc] [CPU0] CREATE_PORT: appended id=PortId(0)
+[35924347569] [[34mDEBUG[0m] [kernel::ipc::handles] [CPU0] ALLOC_HANDLE: handle=1 port_id=PortId(0) mode=Write
+[35925960411] [[34mDEBUG[0m] [kernel::ipc::handles] [CPU0] ALLOC_HANDLE: handle=2 port_id=PortId(0) mode=Read
+[35930119236] [[35mTRACE[0m] [kernel::syscall::handlers::vfs] [CPU2] sys_fs_close: fd=3
+[35931706701] [[32mINFO [0m] [sprout::pipelines] [CPU0] SPROUT: Creating display response port
+[35931730692] [[32mINFO [0m] [bristle] [CPU2] bristle: published pid 8 to /run/bristle/pid
+[35933580243] [[34mDEBUG[0m] [kernel::ipc] [CPU2] CREATE_PORT: capacity=4096
+[35934322611] [[34mDEBUG[0m] [kernel::ipc] [CPU2] CREATE_PORT: appended id=PortId(1)
+[35935777020] [[34mDEBUG[0m] [kernel::ipc::handles] [CPU2] ALLOC_HANDLE: handle=1 port_id=PortId(1) mode=Write
+[35935837311] [[34mDEBUG[0m] [kernel::ipc] [CPU0] CREATE_PORT: capacity=4096
+[35936708874] [[34mDEBUG[0m] [kernel::ipc] [CPU0] CREATE_PORT: appended id=PortId(2)
+[35937275187] [[34mDEBUG[0m] [kernel::ipc::handles] [CPU2] ALLOC_HANDLE: handle=2 port_id=PortId(1) mode=Read
+[35937304821] [[34mDEBUG[0m] [kernel::ipc::handles] [CPU0] ALLOC_HANDLE: handle=3 port_id=PortId(2) mode=Write
+[35938162227] [[34mDEBUG[0m] [kernel::ipc::handles] [CPU0] ALLOC_HANDLE: handle=4 port_id=PortId(2) mode=Read
+[35939571690] [[34mDEBUG[0m] [kernel::ipc] [CPU2] CREATE_PORT: capacity=4096
+[35939996202] [[34mDEBUG[0m] [kernel::ipc] [CPU2] CREATE_PORT: appended id=PortId(3)
+[35940488397] [[34mDEBUG[0m] [kernel::ipc::handles] [CPU2] ALLOC_HANDLE: handle=3 port_id=PortId(3) mode=Write
+[35940967656] [[34mDEBUG[0m] [kernel::ipc::handles] [CPU2] ALLOC_HANDLE: handle=4 port_id=PortId(3) mode=Read
+[35943764901] [[35mTRACE[0m] [kernel::syscall::handlers::vfs] [CPU2] VFS: sys_fs_open path='/run/bristle/kbd_in' tid=8
+[35946621612] [[32mINFO [0m] [sprout::pipelines] [CPU0] SPROUT: Creating display bootstrap memfd
+[35947354476] [[35mTRACE[0m] [kernel::syscall::handlers::vfs] [CPU2] sys_fs_close: fd=3
+[35948644809] [[35mTRACE[0m] [kernel::syscall::handlers::vfs] [CPU2] VFS: sys_fs_open path='/run/bristle/mouse_in' tid=8
+[35955740832] [[35mTRACE[0m] [kernel::syscall::handlers::vfs] [CPU2] sys_fs_close: fd=3
+[35957421126] [[32mINFO [0m] [bristle] [CPU2] bristle: published device handles kbd_in=1 mouse_in=3
+[35958344235] [[35mTRACE[0m] [kernel::syscall::handlers::vfs] [CPU2] VFS: sys_fs_open path='/proc/self/inbox' tid=8
+[35960889426] [[32mINFO [0m] [sprout::pipelines] [CPU0] SPROUT: Mapping display bootstrap memfd
+[35966797449] [[34mDEBUG[0m] [kernel::handle::bridge] [CPU2] BRIDGE: handle=2 -> fd=4 node=0xffffffffb00d77d0 port=0xffffffffb00f53b0
+[35967063792] [[32mINFO [0m] [sprout::pipelines] [CPU0] SPROUT: Launching display driver '/drivers/display_virtio_gpu' (boot_fd=3, bind_id=322371585)
+[35972178363] [[34mDEBUG[0m] [kernel::handle::bridge] [CPU2] BRIDGE: handle=4 -> fd=5 node=0xffffffffb01f9390 port=0xffffffffb00f8eb0
+[35973806781] [[32mINFO [0m] [bristle] [CPU2] bristle: online (kbd_tok=Some(WaitToken(2)), mouse_tok=Some(WaitToken(3)))
+[35996535036] [[34mDEBUG[0m] [kernel::sched::spawn] [CPU0] SPAWN: page cache miss for '/drivers/display_virtio_gpu', caching 187560 bytes
+[35997886848] [[34mDEBUG[0m] [kernel::task::loader] [CPU0] LOADER: Loading module 'display_virtio_gpu' (len=187560, base=0x200000)
+[35998460883] [[35mTRACE[0m] [kernel::task::loader] [CPU0]   Header: [7f, 45, 4c, 46, 02, 01, 01, 03, 00, 00, 00, 00, 00, 00, 00, 00]
+[35999767254] [[34mDEBUG[0m] [kernel::task::loader] [CPU0] LOADER: ELF info: entry=200000, min_vaddr=200000, bias=0, entry_pc=200000
+[36000348945] [[35mTRACE[0m] [kernel::task::loader] [CPU0] Segment: vaddr=200000 exec=true
+[36004309968] [[35mTRACE[0m] [kernel::task::loader] [CPU0]   COPIED at 0x201420: [48, b9, ff, ff, ff, ff, ff, ff]
+[36022590483] [[35mTRACE[0m] [kernel::task::loader] [CPU0] Segment: vaddr=21e000 exec=false
+[36025334961] [[35mTRACE[0m] [kernel::task::loader] [CPU0] Segment: vaddr=223000 exec=false
+[36026955063] [[34mDEBUG[0m] [kernel::task::loader] [CPU0] LOADER: TLS block: tp=0x225000 filesz=0 memsz=0 align=1
+[36031020828] [[34mDEBUG[0m] [kernel::sched::spawn] [CPU0] SPAWN_FROM_PATH: Starting Phase 1 for /drivers/display_virtio_gpu
+[36031683633] [[34mDEBUG[0m] [bran::arch::x86_64::task] [CPU0] INIT KERNEL CTX: entry=0xffffffff800532f0 kstack_top=0xffffffffb0237500 arg=0xffffffffb02272e0
+[36033143817] [[34mDEBUG[0m] [kernel::sched::spawn] [CPU0] SPAWN_FROM_PATH: Phase 1 complete, ID=9, applying inserts
+[36033675414] [[34mDEBUG[0m] [kernel::sched] [CPU0] REGISTRY: Applying 1 deferred inserts
+[36034248558] [[34mDEBUG[0m] [kernel::sched] [CPU0] REGISTRY: Inserting TID=9
+[36036380721] [[34mDEBUG[0m] [kernel::sched] [CPU0] REGISTRY: Inserts applied
+[36036937002] [[34mDEBUG[0m] [kernel::sched::spawn] [CPU0] SPAWN_FROM_PATH: Inserts applied, entering Phase 2
+[36039062994] [[34mDEBUG[0m] [kernel::sched::spawn] [CPU0] SETUP_STDIO: stdin=Null stdout=Inherit stderr=Inherit
+[36043202514] [[34mDEBUG[0m] [kernel::sched::spawn] [CPU0] SPAWN_FROM_PATH: Phase 2 complete, waking task 9
+[36044263893] [[34mDEBUG[0m] [kernel::sched::spawn] [CPU0] SPAWN_FROM_PATH: Task 9 woken, restoring IRQs
+[36044884689] [[34mDEBUG[0m] [kernel::sched::spawn] [CPU0] SPAWN_FROM_PATH: Done for /drivers/display_virtio_gpu
+[36045550398] [[34mDEBUG[0m] [kernel::syscall::handlers::process] [CPU0] SYSCALL SPAWN_PROCESS_EX: name='/drivers/display_virtio_gpu' TID=9 PID=9
+[36047249766] [[34mDEBUG[0m] [kernel::sched::spawn] [CPU3] USER_TRAMPOLINE: PC=0x200000 SP=0x800000 ARG0=0x3
+[36047868417] [[34mDEBUG[0m] [bran::arch::x86_64] [CPU3] ENTER_USER: TID=9 entry_pc=200000 user_sp=800000
+[36048714834] [[34mDEBUG[0m] [kernel::syscall::handlers::process] [CPU3] sys_auxv_get: tid=9 buf_len=0
+[36049798752] [[34mDEBUG[0m] [kernel::syscall::handlers::process] [CPU3] sys_auxv_get: tid=9 buf_len=100
+[36053373378] [[32mINFO [0m] [display_virtio_gpu] [CPU3] display_virtio_gpu: starting v0.4.1 (boot_arg=3)
+[36054363345] [[34mDEBUG[0m] [display_virtio_gpu] [CPU3] display_virtio_gpu: Starting VFS-native VirtIO GPU driver...
+[36055111785] [[34mDEBUG[0m] [display_virtio_gpu] [CPU3] display_virtio_gpu: boot_arg=3
+[36056072745] [[34mDEBUG[0m] [display_virtio_gpu] [CPU3] display_virtio_gpu: Mapping bootstrap memfd 3 size=4096...
+[36058086339] [[34mDEBUG[0m] [display_virtio_gpu] [CPU3] display_virtio_gpu: vm_map success at 0x400000001000
+[36059358951] [[34mDEBUG[0m] [display_virtio_gpu] [CPU3] display_virtio_gpu: Recovered handles: req_read=2, resp_write=3, svc=0, id=322371585
+[36060184974] [[34mDEBUG[0m] [display_virtio_gpu] [CPU3] display_virtio_gpu: starting (drv_req_r=2, drv_resp_w=3, svc=0, id=322371585)
+[36060920742] [[35mTRACE[0m] [display_virtio_gpu] [CPU3] display_virtio_gpu: Scanning /sys/devices for PCI GPU...
+[36061555629] [[35mTRACE[0m] [kernel::syscall::handlers::vfs] [CPU3] VFS: sys_fs_open path='/sys/devices' tid=9
+[36063126396] [[34mDEBUG[0m] [kernel::vfs::sysfs] [CPU3] sysfs: lookup path='devices'
+[36069844668] [[35mTRACE[0m] [kernel::syscall::handlers::vfs] [CPU3] sys_fs_readdir: fd=4 len=4096
+[36071468730] [[35mTRACE[0m] [kernel::syscall::handlers::vfs] [CPU3] sys_fs_readdir: natural phase begin offset=0
+[36074388636] [[35mTRACE[0m] [kernel::vfs::sysfs] [CPU3] sysfs: readdir found 13 slots
+[36076997814] [[35mTRACE[0m] [kernel::vfs::sysfs] [CPU3] sysfs: readdir wrote 191 bytes
+[36078028140] [[35mTRACE[0m] [kernel::syscall::handlers::vfs] [CPU3] sys_fs_close: fd=4
+[36089222004] [[32mINFO [0m] [sprout::supervisor] [CPU0] SPROUT: Display pipeline initialized (backend=virtio_gpu)
+[36091362219] [[35mTRACE[0m] [sprout::supervisor] [CPU0] SPROUT: Loop iteration: spawn_bloom_if_ready
+[36093030864] [[34mDEBUG[0m] [sprout::supervisor] [CPU0] SPROUT: Checking if bloom is ready to spawn (/dev/display/card0 mounted=false, service_ready=false)...
+[36095122800] [[34mDEBUG[0m] [sprout::supervisor] [CPU0] SPROUT: display card not ready for bloom yet
+[36096599253] [[35mTRACE[0m] [sprout::supervisor] [CPU0] SPROUT: Loop iteration: spawn_wayland_hello_if_ready
+[36098299116] [[35mTRACE[0m] [sprout::supervisor] [CPU0] SPROUT: Loop iteration: spawn_clock_if_ready
+[36099807249] [[35mTRACE[0m] [sprout::supervisor] [CPU0] SPROUT: Loop iteration: spawn_leaf_if_ready
+[36101503449] [[35mTRACE[0m] [sprout::supervisor] [CPU0] SPROUT: Loop iteration: tick complete
+[36103148334] [[35mTRACE[0m] [kernel::syscall::handlers::vfs] [CPU0] VFS: sys_fs_open path='/proc/self/inbox' tid=5
+[36104602776] [[35mTRACE[0m] [kernel::syscall::handlers::vfs] [CPU3] VFS: sys_fs_open path='/sys/devices/platform-fb000000/vendor' tid=9
+[36106131963] [[34mDEBUG[0m] [kernel::vfs::sysfs] [CPU3] sysfs: lookup path='devices/platform-fb000000/vendor'
+[36108755265] [[34mDEBUG[0m] [kernel::vfs::sysfs] [CPU3] sysfs: matched device file 'platform-fb000000/vendor'
+[36110322963] [[34mDEBUG[0m] [sprout::supervisor] [CPU0] SPROUT: ServiceLoop waiting for next event...
+[36111336129] [[35mTRACE[0m] [kernel::syscall::handlers::vfs] [CPU3] sys_fs_close: fd=4
+[36113221815] [[35mTRACE[0m] [kernel::syscall::handlers::vfs] [CPU3] VFS: sys_fs_open path='/sys/devices/platform-fb000000/device' tid=9
+[36114285702] [[34mDEBUG[0m] [kernel::vfs::sysfs] [CPU3] sysfs: lookup path='devices/platform-fb000000/device'
+[36115416876] [[34mDEBUG[0m] [kernel::vfs::sysfs] [CPU3] sysfs: matched device file 'platform-fb000000/device'
+[36117143997] [[35mTRACE[0m] [kernel::syscall::handlers::vfs] [CPU3] sys_fs_close: fd=4
+[36118270848] [[35mTRACE[0m] [kernel::syscall::handlers::vfs] [CPU3] VFS: sys_fs_open path='/sys/devices/platform-fb000000/class' tid=9
+[36119271705] [[34mDEBUG[0m] [kernel::vfs::sysfs] [CPU3] sysfs: lookup path='devices/platform-fb000000/class'
+[36120463434] [[34mDEBUG[0m] [kernel::vfs::sysfs] [CPU3] sysfs: matched device file 'platform-fb000000/class'
+[36121986252] [[35mTRACE[0m] [kernel::syscall::handlers::vfs] [CPU3] sys_fs_close: fd=4
+[36122946618] [[35mTRACE[0m] [kernel::syscall::handlers::vfs] [CPU3] VFS: sys_fs_open path='/sys/devices/pci-0000:00:00.0/vendor' tid=9
+[36123986052] [[34mDEBUG[0m] [kernel::vfs::sysfs] [CPU3] sysfs: lookup path='devices/pci-0000:00:00.0/vendor'
+[36124802901] [[34mDEBUG[0m] [kernel::vfs::sysfs] [CPU3] sysfs: matched device file 'pci-0000:00:00.0/vendor'
+[36126559854] [[35mTRACE[0m] [kernel::syscall::handlers::vfs] [CPU3] sys_fs_close: fd=4
+[36127330206] [[35mTRACE[0m] [kernel::syscall::handlers::vfs] [CPU3] VFS: sys_fs_open path='/sys/devices/pci-0000:00:00.0/device' tid=9
+[36127350237] [[35mTRACE[0m] [kernel::syscall::handlers::vfs] [CPU1] sys_fs_close: fd=3
+[36128348553] [[34mDEBUG[0m] [kernel::vfs::sysfs] [CPU3] sysfs: lookup path='devices/pci-0000:00:00.0/device'
+[36129251136] [[34mDEBUG[0m] [kernel::vfs::sysfs] [CPU3] sysfs: matched device file 'pci-0000:00:00.0/device'
+[36132042078] [[35mTRACE[0m] [kernel::syscall::handlers::vfs] [CPU3] sys_fs_close: fd=4
+[36133878627] [[35mTRACE[0m] [kernel::syscall::handlers::vfs] [CPU3] VFS: sys_fs_open path='/sys/devices/pci-0000:00:00.0/class' tid=9
+[36134303172] [[32mINFO [0m] [cambium::catalog] [CPU1] DEVD CATALOG: registered driver '/drivers/ahci_disk' name='ahci_disk' class=Block kind='dev.storage.Ahci' start='thingos_driver_start_safe'
+[36135030690] [[34mDEBUG[0m] [kernel::vfs::sysfs] [CPU3] sysfs: lookup path='devices/pci-0000:00:00.0/class'
+[36135687588] [[35mTRACE[0m] [kernel::syscall::handlers::vfs] [CPU1] VFS: sys_fs_open path='/drivers/ata_disk' tid=7
+[36135881892] [[34mDEBUG[0m] [kernel::vfs::sysfs] [CPU3] sysfs: matched device file 'pci-0000:00:00.0/class'
+[36137716395] [[35mTRACE[0m] [kernel::syscall::handlers::vfs] [CPU3] sys_fs_close: fd=4
+[36138459423] [[35mTRACE[0m] [kernel::syscall::handlers::vfs] [CPU3] VFS: sys_fs_open path='/sys/devices/pci-0000:00:01.0/vendor' tid=9
+[36139533837] [[34mDEBUG[0m] [kernel::vfs::sysfs] [CPU3] sysfs: lookup path='devices/pci-0000:00:01.0/vendor'
+[36140390913] [[34mDEBUG[0m] [kernel::vfs::sysfs] [CPU3] sysfs: matched device file 'pci-0000:00:01.0/vendor'
+[36141734970] [[35mTRACE[0m] [kernel::syscall::handlers::vfs] [CPU3] sys_fs_close: fd=4
+[36142530039] [[35mTRACE[0m] [kernel::syscall::handlers::vfs] [CPU3] VFS: sys_fs_open path='/sys/devices/pci-0000:00:01.0/device' tid=9
+[36143826477] [[34mDEBUG[0m] [kernel::vfs::sysfs] [CPU3] sysfs: lookup path='devices/pci-0000:00:01.0/device'
+[36144938709] [[34mDEBUG[0m] [kernel::vfs::sysfs] [CPU3] sysfs: matched device file 'pci-0000:00:01.0/device'
+[36147697773] [[35mTRACE[0m] [kernel::syscall::handlers::vfs] [CPU3] sys_fs_close: fd=4
+[36148632201] [[35mTRACE[0m] [kernel::syscall::handlers::vfs] [CPU3] VFS: sys_fs_open path='/sys/devices/pci-0000:00:01.0/class' tid=9
+[36149723115] [[34mDEBUG[0m] [kernel::vfs::sysfs] [CPU3] sysfs: lookup path='devices/pci-0000:00:01.0/class'
+[36150718725] [[34mDEBUG[0m] [kernel::vfs::sysfs] [CPU3] sysfs: matched device file 'pci-0000:00:01.0/class'
+[36152048724] [[35mTRACE[0m] [kernel::syscall::handlers::vfs] [CPU3] sys_fs_close: fd=4
+[36157777887] [[34mDEBUG[0m] [kernel::syscall::handlers::device] [CPU3] DEVICE: task 9 claimed device 'pci-0000:00:01.0' (handle 0)
+[36158897445] [[35mTRACE[0m] [kernel::syscall::handlers::vfs] [CPU3] VFS: sys_fs_open path='/sys/devices/pci-0000:00:01.0/virtio/common_bar' tid=9
+[36160057395] [[34mDEBUG[0m] [kernel::vfs::sysfs] [CPU3] sysfs: lookup path='devices/pci-0000:00:01.0/virtio/common_bar'
+[36166542456] [[35mTRACE[0m] [kernel::syscall::handlers::vfs] [CPU3] sys_fs_close: fd=4
+[36168159555] [[35mTRACE[0m] [kernel::syscall::handlers::vfs] [CPU3] VFS: sys_fs_open path='/sys/devices/pci-0000:00:01.0/virtio/common_offset' tid=9
+[36169328514] [[34mDEBUG[0m] [kernel::vfs::sysfs] [CPU3] sysfs: lookup path='devices/pci-0000:00:01.0/virtio/common_offset'
+[36173150673] [[35mTRACE[0m] [kernel::syscall::handlers::vfs] [CPU3] sys_fs_close: fd=4
+[36174549576] [[35mTRACE[0m] [kernel::syscall::handlers::vfs] [CPU3] VFS: sys_fs_open path='/sys/devices/pci-0000:00:01.0/virtio/notify_bar' tid=9
+[36175776582] [[34mDEBUG[0m] [kernel::vfs::sysfs] [CPU3] sysfs: lookup path='devices/pci-0000:00:01.0/virtio/notify_bar'
+[36178753743] [[35mTRACE[0m] [kernel::syscall::handlers::vfs] [CPU3] sys_fs_close: fd=4
+[36179794695] [[35mTRACE[0m] [kernel::syscall::handlers::vfs] [CPU3] VFS: sys_fs_open path='/sys/devices/pci-0000:00:01.0/virtio/notify_offset' tid=9
+[36182855412] [[34mDEBUG[0m] [kernel::vfs::sysfs] [CPU3] sysfs: lookup path='devices/pci-0000:00:01.0/virtio/notify_offset'
+[36185524188] [[35mTRACE[0m] [kernel::syscall::handlers::vfs] [CPU3] sys_fs_close: fd=4
+[36186537387] [[35mTRACE[0m] [kernel::syscall::handlers::vfs] [CPU3] VFS: sys_fs_open path='/sys/devices/pci-0000:00:01.0/virtio/notify_multiplier' tid=9
+[36189052416] [[34mDEBUG[0m] [kernel::vfs::sysfs] [CPU3] sysfs: lookup path='devices/pci-0000:00:01.0/virtio/notify_multiplier'
+[36191632620] [[35mTRACE[0m] [kernel::syscall::handlers::vfs] [CPU3] sys_fs_close: fd=4
+[36192829728] [[32mINFO [0m] [virtio_gpu] [CPU3] virtio_gpu: caps from sysfs - common BAR2 off=0x1000, notify BAR2 off=0x3000 mult=4
+[36195017265] [[34mDEBUG[0m] [kernel::syscall::handlers::device] [CPU3] DEVICE: mapping BAR2 (phys=0xc000000000, size=0x4000) for task 9
+[36197674458] [[34mDEBUG[0m] [kernel::syscall::handlers::device] [CPU3] DEVICE: Mapped BAR2 phys=0xc000000000 size=0x4000 -> virt=0x10000000
+[36201918258] [[34mDEBUG[0m] [kernel::syscall::handlers::device] [CPU3] DEVICE: DMA alloc 1 pages phys=0x2332000 -> user_va=0x10004000
+[36204228588] [[34mDEBUG[0m] [kernel::syscall::handlers::device] [CPU3] DEVICE: DMA alloc 1 pages phys=0x2333000 -> user_va=0x10005000
+[36207106122] [[32mINFO [0m] [virtio_gpu] [CPU3] virtio_gpu: device features=0x30000002 virgl=false
+[36211333059] [[34mDEBUG[0m] [kernel::syscall::handlers::device] [CPU3] DEVICE: DMA alloc 4 pages phys=0x2334000 -> user_va=0x10006000
+[36216241248] [[34mDEBUG[0m] [kernel::syscall::handlers::device] [CPU3] DEVICE: DMA alloc 4 pages phys=0x2338000 -> user_va=0x1000a000
+[36218415486] [[32mINFO [0m] [virtio_gpu] [CPU3] virtio_gpu: cursor queue (queue 1) configured
+[36219499305] [[32mINFO [0m] [display_virtio_gpu] [CPU3] display_virtio_gpu: GPU initialized successfully
+[36220373541] [[32mINFO [0m] [display_virtio_gpu] [CPU3] display_virtio_gpu: composition paths: gpu_opaque_copy=enabled cpu_alpha_blend=enabled
+[36222492273] [[34mDEBUG[0m] [display_virtio_gpu] [CPU3] display_virtio_gpu: Virgl 3D not supported, using 2D only
+[36223268334] [[35mTRACE[0m] [kernel::syscall::handlers::vfs] [CPU3] VFS: sys_fs_open path='/sys/firmware/framebuffer' tid=9
+[36224553750] [[34mDEBUG[0m] [kernel::vfs::sysfs] [CPU3] sysfs: lookup path='firmware/framebuffer'
+[36228837480] [[35mTRACE[0m] [kernel::syscall::handlers::vfs] [CPU3] sys_fs_close: fd=4
+[36234979737] [[32mINFO [0m] [display_virtio_gpu] [CPU3] display_virtio_gpu: host scanout 1280x800 enabled=true (bootfb was 1920x1080)
+[36235975017] [[34mDEBUG[0m] [display_virtio_gpu] [CPU3] display_virtio_gpu: creating frame pool 1x 1280x800 stride=5120 format=1
+[36305704512] [[35mTRACE[0m] [kernel::syscall::handlers::vfs] [CPU1] sys_fs_close: fd=3
+[36309120012] [[32mINFO [0m] [cambium::catalog] [CPU1] DEVD CATALOG: registered driver '/drivers/ata_disk' name='ata_disk' class=Block kind='dev.storage.Ide' start='thingos_driver_start_safe'
+[36310612239] [[35mTRACE[0m] [kernel::syscall::handlers::vfs] [CPU1] VFS: sys_fs_open path='/drivers/chime' tid=7
+[36426458145] [[35mTRACE[0m] [sprout::supervisor] [CPU0] SPROUT: Supervisor tick...
+[36428767551] [[35mTRACE[0m] [sprout::supervisor] [CPU0] SPROUT: Loop iteration: spawn_bristle_if_needed
+[36430688118] [[35mTRACE[0m] [sprout::supervisor] [CPU0] SPROUT: Loop iteration: spawn_display_if_needed
+[36432266178] [[35mTRACE[0m] [sprout::supervisor] [CPU0] SPROUT: Loop iteration: spawn_bloom_if_ready
+[36433849914] [[34mDEBUG[0m] [sprout::supervisor] [CPU0] SPROUT: Checking if bloom is ready to spawn (/dev/display/card0 mounted=false, service_ready=false)...
+[36435665079] [[34mDEBUG[0m] [sprout::supervisor] [CPU0] SPROUT: display card not ready for bloom yet
+[36437041278] [[35mTRACE[0m] [sprout::supervisor] [CPU0] SPROUT: Loop iteration: spawn_wayland_hello_if_ready
+[36438768498] [[35mTRACE[0m] [sprout::supervisor] [CPU0] SPROUT: Loop iteration: spawn_clock_if_ready
+[36440123940] [[35mTRACE[0m] [sprout::supervisor] [CPU0] SPROUT: Loop iteration: spawn_leaf_if_ready
+[36441421467] [[35mTRACE[0m] [sprout::supervisor] [CPU0] SPROUT: Loop iteration: tick complete
+[36441427539] [[34mDEBUG[0m] [kernel::syscall::handlers::memory] [CPU3] sys_vm_map: large backing file mapping offset=0 len=4096000 total_size=4096000
+[36443765193] [[34mDEBUG[0m] [sprout::supervisor] [CPU0] SPROUT: ServiceLoop waiting for next event...
+[36475699920] [[34mDEBUG[0m] [display_virtio_gpu] [CPU3] display_virtio_gpu: frame pool ready (1 buffer)
+[36478100670] [[35mTRACE[0m] [kernel::syscall::handlers::vfs] [CPU1] sys_fs_close: fd=3
+[36480746610] [[34mDEBUG[0m] [kernel::syscall::handlers::device] [CPU3] DEVICE: DMA alloc 16 pages phys=0x2725000 -> user_va=0x1000e000
+[36481239762] [[32mINFO [0m] [cambium::catalog] [CPU1] DEVD CATALOG: registered driver '/drivers/chime' name='chime' class=Audio kind='dev.sound.Chime' start='thingos_driver_start_safe'
+[36482374797] [[35mTRACE[0m] [kernel::syscall::handlers::vfs] [CPU1] VFS: sys_fs_open path='/drivers/display_bootfb' tid=7
+[36482516400] [[32mINFO [0m] [display_virtio_gpu] [CPU3] display_virtio_gpu: cursor DMA buffer ready (16 pages at phys=0x2725000)
+[36486929820] [[34mDEBUG[0m] [kernel::ipc] [CPU3] CREATE_PORT: capacity=65536
+[36487551705] [[34mDEBUG[0m] [kernel::ipc] [CPU3] CREATE_PORT: appended id=PortId(4)
+[36488251140] [[34mDEBUG[0m] [kernel::ipc::handles] [CPU3] ALLOC_HANDLE: handle=5 port_id=PortId(4) mode=Write
+[36488774190] [[34mDEBUG[0m] [kernel::ipc::handles] [CPU3] ALLOC_HANDLE: handle=6 port_id=PortId(4) mode=Read
+[36489779601] [[34mDEBUG[0m] [kernel::handle::bridge] [CPU3] BRIDGE: handle=5 -> fd=5 node=0xffffffffb00ad270 port=0xffffffffb010a110
+[36491617074] [[35mTRACE[0m] [kernel::syscall::handlers::vfs] [CPU3] VFS: sys_fs_open path='/proc/5/inbox' tid=9
+[36518277246] [[35mTRACE[0m] [kernel::syscall::handlers::socket] [CPU3] SENDMSG: thing=6 data_len=44 caps_len=1 node=Pointer { addr: 0xffffffffb010a450, metadata: DynMetadata(0xffffffff802c7ed0) }
+[36527037261] [[34mDEBUG[0m] [display_virtio_gpu] [CPU3] display_virtio_gpu: Sent MSG_BIND_READY (ID: 322371585)
+[36528593376] [[34mDEBUG[0m] [display_virtio_gpu] [CPU3] display_virtio_gpu: Waiting for BIND_ASSIGNED...
+[36534806022] [[35mTRACE[0m] [kernel::syscall::handlers::socket] [CPU0] RECVMSG: thing=4 data_len=44 caps_len=1 node=Pointer { addr: 0xffffffffb0240b90, metadata: DynMetadata(0xffffffff802c7ed0) }
+[36541458129] [[34mDEBUG[0m] [sprout::supervisor] [CPU0] SPROUT: BIND_READY from instance_id=0x13370001
+[36542983356] [[34mDEBUG[0m] [sprout::supervisor] [CPU0] SPROUT: Registering DISPLAY_CARD at /dev/display/card0 (handle=5)
+[36551880288] [[34mDEBUG[0m] [kernel::ipc] [CPU0] CREATE_PORT: capacity=262400
+[36552426735] [[34mDEBUG[0m] [kernel::ipc] [CPU0] CREATE_PORT: appended id=PortId(5)
+[36554144022] [[34mDEBUG[0m] [kernel::ipc::handles] [CPU0] ALLOC_HANDLE: handle=7 port_id=PortId(5) mode=Write
+[36559793160] [[34mDEBUG[0m] [kernel::syscall::handlers::vfs] [CPU0] vfs: mounted userland provider at /dev/display/card0 (flags: 0x0) port=0xffffffffb010a110
+[36564015972] [[32mINFO [0m] [sprout::supervisor] [CPU0] SPROUT: Mounted /dev/display/card0 successfully
+[36566048673] [[34mDEBUG[0m] [sprout::supervisor] [CPU0] SPROUT: Handshake complete — task 'display' marked ready
+[36571788033] [[34mDEBUG[0m] [sprout::supervisor] [CPU0] SPROUT: Sent MSG_BIND_ASSIGNED to display pid 9 (res=Ok(()))
+[36573279996] [[32mINFO [0m] [display_virtio_gpu] [CPU3] display_virtio_gpu: Sovereign registration COMPLETE. Assigned: /dev/display/card0
+[36573352860] [[34mDEBUG[0m] [sprout::supervisor] [CPU0] SPROUT: ServiceLoop waiting for next event...
+[36574632633] [[35mTRACE[0m] [kernel::syscall::handlers::socket] [CPU3] SENDMSG: thing=6 data_len=44 caps_len=0 node=Pointer { addr: 0xffffffffb010a450, metadata: DynMetadata(0xffffffff802c7ed0) }
+[36575730279] [[34mDEBUG[0m] [display_virtio_gpu] [CPU3] display_virtio_gpu: Sent MSG_SERVICE_READY.
+[36576723084] [[34mDEBUG[0m] [kernel::handle::bridge] [CPU3] BRIDGE: handle=2 -> fd=7 node=0xffffffffb00f9370 port=0xffffffffb00f3630
+[36577744335] [[34mDEBUG[0m] [kernel::handle::bridge] [CPU3] BRIDGE: handle=3 -> fd=8 node=0xffffffffb011b330 port=0xffffffffb00f7130
+[36578502015] [[34mDEBUG[0m] [kernel::handle::bridge] [CPU3] BRIDGE: handle=6 -> fd=9 node=0xffffffffb011b3f0 port=0xffffffffb010a110
+[36580443867] [[32mINFO [0m] [display_virtio_gpu] [CPU3] display_virtio_gpu: VFS provider loop online
+[36584098815] [[35mTRACE[0m] [kernel::syscall::handlers::socket] [CPU0] RECVMSG: thing=4 data_len=44 caps_len=0 node=Pointer { addr: 0xffffffffb0240b90, metadata: DynMetadata(0xffffffff802c7ed0) }
+[36587225664] [[34mDEBUG[0m] [sprout::supervisor] [CPU0] SPROUT: SERVICE_READY from instance_id=0x13370001
+[36588943215] [[34mDEBUG[0m] [sprout::supervisor] [CPU0] SPROUT: Service 'display' reported ready
+[36590484348] [[32mINFO [0m] [sprout::supervisor] [CPU0] SPROUT: Display service is ready at /dev/display/card0
+[36592733232] [[34mDEBUG[0m] [sprout::supervisor] [CPU0] SPROUT: ServiceLoop waiting for next event...
+[36654506922] [[35mTRACE[0m] [kernel::syscall::handlers::vfs] [CPU1] sys_fs_close: fd=3
+[36656992317] [[32mINFO [0m] [cambium::catalog] [CPU1] DEVD CATALOG: registered driver '/drivers/display_bootfb' name='display_bootfb' class=Display kind='dev.display.Gpu' start='thingos_driver_start_safe'
+[36658095771] [[35mTRACE[0m] [kernel::syscall::handlers::vfs] [CPU1] VFS: sys_fs_open path='/drivers/display_virtio_gpu' tid=7
+[36845946555] [[35mTRACE[0m] [kernel::syscall::handlers::vfs] [CPU1] sys_fs_close: fd=3
+[36849072546] [[32mINFO [0m] [cambium::catalog] [CPU1] DEVD CATALOG: registered driver '/drivers/display_virtio_gpu' name='display_virtio_gpu' class=Display kind='dev.display.Gpu' start='thingos_driver_start_safe'
+[36850307307] [[35mTRACE[0m] [kernel::syscall::handlers::vfs] [CPU1] VFS: sys_fs_open path='/drivers/hdaudio' tid=7
+[36912244347] [[35mTRACE[0m] [sprout::supervisor] [CPU0] SPROUT: Supervisor tick...
+[36913891740] [[35mTRACE[0m] [sprout::supervisor] [CPU0] SPROUT: Loop iteration: spawn_bristle_if_needed
+[36915260976] [[35mTRACE[0m] [sprout::supervisor] [CPU0] SPROUT: Loop iteration: spawn_display_if_needed
+[36916599357] [[35mTRACE[0m] [sprout::supervisor] [CPU0] SPROUT: Loop iteration: spawn_bloom_if_ready
+[36918024561] [[34mDEBUG[0m] [sprout::supervisor] [CPU0] SPROUT: Checking if bloom is ready to spawn (/dev/display/card0 mounted=true, service_ready=true)...
+[36920757093] [[34mDEBUG[0m] [kernel::task::loader] [CPU0] LOADER: Loading module '/bin/bloom' (len=577280, base=0x200000)
+[36921355152] [[35mTRACE[0m] [kernel::task::loader] [CPU0]   Header: [7f, 45, 4c, 46, 02, 01, 01, 00, 00, 00, 00, 00, 00, 00, 00, 00]
+[36925446591] [[34mDEBUG[0m] [kernel::task::loader] [CPU0] LOADER: ELF info: entry=200000, min_vaddr=200000, bias=0, entry_pc=200000
+[36926028909] [[35mTRACE[0m] [kernel::task::loader] [CPU0] Segment: vaddr=200000 exec=true
+[36928159257] [[35mTRACE[0m] [kernel::task::loader] [CPU0]   COPIED at 0x201420: [24, a0, 00, 00, 00, 0f, 10, 04]
+[36983495571] [[35mTRACE[0m] [kernel::task::loader] [CPU0] Segment: vaddr=268000 exec=false
+[36990430818] [[35mTRACE[0m] [kernel::task::loader] [CPU0] Segment: vaddr=273000 exec=false
+[36993469689] [[34mDEBUG[0m] [kernel::task::loader] [CPU0] LOADER: TLS block: tp=0x277000 filesz=0 memsz=0 align=1
+[36997879677] [[34mDEBUG[0m] [bran::arch::x86_64::task] [CPU0] INIT KERNEL CTX: entry=0xffffffff800532f0 kstack_top=0xffffffffb012b9c0 arg=0xffffffffb00c6a20
+[36999393684] [[34mDEBUG[0m] [kernel::sched] [CPU0] REGISTRY: Applying 1 deferred inserts
+[36999973626] [[34mDEBUG[0m] [kernel::sched] [CPU0] REGISTRY: Inserting TID=10
+[37000582146] [[34mDEBUG[0m] [kernel::sched] [CPU0] REGISTRY: Inserts applied
+[37004137533] [[34mDEBUG[0m] [kernel::sched::spawn] [CPU0] SCHED: TID 10 → task '/bin/bloom' (pid=10 from boot module)
+[37017129039] [[35mTRACE[0m] [kernel::syscall::handlers::vfs] [CPU1] sys_fs_close: fd=3
+[37019273907] [[32mINFO [0m] [cambium::catalog] [CPU1] DEVD CATALOG: registered driver '/drivers/hdaudio' name='hdaudio' class=Audio kind='dev.sound.Hda' start='thingos_driver_start_safe'
+[37020700134] [[35mTRACE[0m] [kernel::syscall::handlers::vfs] [CPU1] VFS: sys_fs_open path='/drivers/hwrng' tid=7
+[37027672506] [[32mINFO [0m] [sprout::supervisor] [CPU0] SPROUT: Spawned bloom (PID=10)
+[37030311714] [[35mTRACE[0m] [sprout::supervisor] [CPU0] SPROUT: Loop iteration: spawn_wayland_hello_if_ready
+[37031918913] [[35mTRACE[0m] [sprout::supervisor] [CPU0] SPROUT: Loop iteration: spawn_clock_if_ready
+[37033458330] [[35mTRACE[0m] [sprout::supervisor] [CPU0] SPROUT: Loop iteration: spawn_leaf_if_ready
+[37034987517] [[35mTRACE[0m] [sprout::supervisor] [CPU0] SPROUT: Loop iteration: tick complete
+[37036314843] [[34mDEBUG[0m] [sprout::supervisor] [CPU0] SPROUT: ServiceLoop waiting for next event...
+[37117747095] [[34mDEBUG[0m] [kernel::sched::spawn] [CPU1] USER_TRAMPOLINE: PC=0x200000 SP=0x800000 ARG0=0x0
+[37119048714] [[34mDEBUG[0m] [bran::arch::x86_64] [CPU1] ENTER_USER: TID=10 entry_pc=200000 user_sp=800000
+[37121776032] [[34mDEBUG[0m] [kernel::syscall::handlers::process] [CPU1] sys_auxv_get: tid=10 buf_len=0
+[37123242222] [[34mDEBUG[0m] [kernel::syscall::handlers::process] [CPU1] sys_auxv_get: tid=10 buf_len=100
+[37125768768] [[32mINFO [0m] [bloom] [CPU1] bloom: ENTERING MAIN
+[37126732269] [[32mINFO [0m] [bloom] [CPU1] bloom: compositor service starting
+[37128660954] [[34mDEBUG[0m] [bloom] [CPU1] bloom: connect try 0...
+[37129480113] [[35mTRACE[0m] [kernel::syscall::handlers::vfs] [CPU1] VFS: sys_fs_open path='/dev/display/card0' tid=10
+[37131796449] [[34mDEBUG[0m] [kernel::vfs::provider] [CPU1] VFS_RPC: request op=Lookup len=4 tid=10
+[37147629387] [[35mTRACE[0m] [display_virtio_gpu] [CPU3] display_virtio_gpu: VFS RPC op=Lookup
+[37148781846] [[35mTRACE[0m] [display_virtio_gpu] [CPU3] DISP: vfs_lookup path=''
+[37149954666] [[35mTRACE[0m] [display_virtio_gpu] [CPU3] display_virtio_gpu: VFS RPC response begin op=Lookup req_id=1
+[37153826853] [[35mTRACE[0m] [display_virtio_gpu] [CPU3] display_virtio_gpu: VFS RPC response sent op=Lookup req_id=1
+[37251073530] [[34mDEBUG[0m] [kernel::vfs::provider] [CPU1] VFS_RPC: response op=Lookup id=1 -> OK(8)
+[37268471295] [[34mDEBUG[0m] [kernel::vfs::provider] [CPU1] VFS_RPC: request op=DeviceCall len=48 tid=10
+[37278898734] [[35mTRACE[0m] [kernel::syscall::handlers::vfs] [CPU1] sys_fs_close: fd=3
+[37279708455] [[35mTRACE[0m] [display_virtio_gpu] [CPU3] display_virtio_gpu: VFS RPC op=DeviceCall
+[37281293016] [[32mINFO [0m] [cambium::catalog] [CPU1] DEVD CATALOG: registered driver '/drivers/hwrng' name='hwrng' class=Other kind='dev.rng.HwRng' start='_RNvCs7wlZbVUrQWf_5hwrng20thingos_driver_start'
+[37282899489] [[35mTRACE[0m] [kernel::syscall::handlers::vfs] [CPU1] VFS: sys_fs_open path='/drivers/pci_stubd' tid=7
+[37284047724] [[35mTRACE[0m] [display_virtio_gpu] [CPU3] DISP: DISPLAY_OP_GET_INFO requested
+[37284859689] [[35mTRACE[0m] [display_virtio_gpu] [CPU3] DISP: Returning dimensions 1280x800
+[37285779597] [[35mTRACE[0m] [display_virtio_gpu] [CPU3] display_virtio_gpu: VFS RPC response begin op=DeviceCall req_id=2
+[37287778836] [[35mTRACE[0m] [display_virtio_gpu] [CPU3] display_virtio_gpu: VFS RPC response sent op=DeviceCall req_id=2
+[37370314575] [[34mDEBUG[0m] [kernel::vfs::provider] [CPU1] VFS_RPC: response op=DeviceCall id=2 -> OK(48)
+[37373492277] [[35mTRACE[0m] [sprout::supervisor] [CPU0] SPROUT: Supervisor tick...
+[37375064826] [[35mTRACE[0m] [sprout::supervisor] [CPU0] SPROUT: Loop iteration: spawn_bristle_if_needed
+[37376201346] [[32mINFO [0m] [bloom] [CPU1] bloom: connected to /dev/display/card0 on try 0
+[37376537649] [[35mTRACE[0m] [sprout::supervisor] [CPU0] SPROUT: Loop iteration: spawn_display_if_needed
+[37380519858] [[35mTRACE[0m] [sprout::supervisor] [CPU0] SPROUT: Loop iteration: spawn_bloom_if_ready
+[37382081253] [[35mTRACE[0m] [sprout::supervisor] [CPU0] SPROUT: Loop iteration: spawn_wayland_hello_if_ready
+[37383928857] [[35mTRACE[0m] [sprout::supervisor] [CPU0] SPROUT: Loop iteration: spawn_clock_if_ready
+[37385593905] [[35mTRACE[0m] [sprout::supervisor] [CPU0] SPROUT: Loop iteration: spawn_leaf_if_ready
+[37387136820] [[35mTRACE[0m] [sprout::supervisor] [CPU0] SPROUT: Loop iteration: tick complete
+[37388465070] [[34mDEBUG[0m] [sprout::supervisor] [CPU0] SPROUT: ServiceLoop waiting for next event...
+[37397150934] [[32mINFO [0m] [bloom] [CPU1] bloom: output0 1280x800 @ 60000mHz
+[37398169611] [[32mINFO [0m] [bloom] [CPU1] bloom: display driver does not support VBLANK
+[37398984975] [[32mINFO [0m] [bloom] [CPU1] bloom: display driver supports linear dmabuf import
+[37399675500] [[32mINFO [0m] [bloom] [CPU1] bloom: display driver supports GPU blit (hardware transfer/flush)
+[37400348205] [[32mINFO [0m] [bloom] [CPU1] bloom: display driver supports direct scanout (zero-copy path to display)
+[37401834756] [[32mINFO [0m] [bloom] [CPU1] bloom: display driver supports partial flush (damage regions)
+[37402830036] [[32mINFO [0m] [bloom] [CPU1] bloom: display driver supports resource cache (pre-allocated buffer pool)
+[37403544189] [[32mINFO [0m] [bloom] [CPU1] bloom: creating service port...
+[37407614904] [[34mDEBUG[0m] [kernel::ipc] [CPU1] CREATE_PORT: capacity=65536
+[37408282890] [[34mDEBUG[0m] [kernel::ipc] [CPU1] CREATE_PORT: appended id=PortId(6)
+[37409042220] [[34mDEBUG[0m] [kernel::ipc::handles] [CPU1] ALLOC_HANDLE: handle=5 port_id=PortId(6) mode=Write
+[37409681298] [[34mDEBUG[0m] [kernel::ipc::handles] [CPU1] ALLOC_HANDLE: handle=6 port_id=PortId(6) mode=Read
+[37413160587] [[35mTRACE[0m] [kernel::syscall::handlers::vfs] [CPU1] VFS: sys_fs_open path='/services/bloom' tid=10
+[37417863483] [[35mTRACE[0m] [kernel::syscall::handlers::vfs] [CPU1] sys_fs_close: fd=7
+[37427572446] [[35mTRACE[0m] [kernel::syscall::handlers::vfs] [CPU1] VFS: sys_fs_open path='/session/wayland/components' tid=10
+[37430822880] [[35mTRACE[0m] [kernel::syscall::handlers::vfs] [CPU1] sys_fs_close: fd=7
+[37431890133] [[35mTRACE[0m] [kernel::syscall::handlers::vfs] [CPU1] VFS: sys_fs_open path='/session/wayland/status' tid=10
+[37436022921] [[35mTRACE[0m] [kernel::syscall::handlers::vfs] [CPU1] sys_fs_close: fd=7
+[37437733839] [[35mTRACE[0m] [kernel::syscall::handlers::vfs] [CPU1] VFS: sys_fs_open path='/lib/libpistil.so' tid=10
+[37570796307] [[35mTRACE[0m] [kernel::syscall::handlers::vfs] [CPU1] sys_fs_close: fd=3
+[37573138284] [[32mINFO [0m] [cambium::catalog] [CPU1] DEVD CATALOG: registered driver '/drivers/pci_stubd' name='pci_stubd' class=Other kind='drv.PciStubd' start='thingos_driver_start_safe'
+[37574107989] [[35mTRACE[0m] [kernel::syscall::handlers::vfs] [CPU1] VFS: sys_fs_open path='/drivers/ps2_kbd' tid=7
+[37700868513] [[35mTRACE[0m] [sprout::supervisor] [CPU0] SPROUT: Supervisor tick...
+[37702410834] [[35mTRACE[0m] [sprout::supervisor] [CPU0] SPROUT: Loop iteration: spawn_bristle_if_needed
+[37703751657] [[35mTRACE[0m] [sprout::supervisor] [CPU0] SPROUT: Loop iteration: spawn_display_if_needed
+[37705113600] [[35mTRACE[0m] [sprout::supervisor] [CPU0] SPROUT: Loop iteration: spawn_bloom_if_ready
+[37706456667] [[35mTRACE[0m] [sprout::supervisor] [CPU0] SPROUT: Loop iteration: spawn_wayland_hello_if_ready
+[37707973116] [[35mTRACE[0m] [sprout::supervisor] [CPU0] SPROUT: Loop iteration: spawn_clock_if_ready
+[37709538735] [[35mTRACE[0m] [sprout::supervisor] [CPU0] SPROUT: Loop iteration: spawn_leaf_if_ready
+[37710969087] [[35mTRACE[0m] [sprout::supervisor] [CPU0] SPROUT: Loop iteration: tick complete
+[37712473359] [[34mDEBUG[0m] [sprout::supervisor] [CPU0] SPROUT: ServiceLoop waiting for next event...
+[37726135260] [[35mTRACE[0m] [kernel::syscall::handlers::vfs] [CPU1] sys_fs_close: fd=3
+[37728073779] [[32mINFO [0m] [cambium::catalog] [CPU1] DEVD CATALOG: registered driver '/drivers/ps2_kbd' name='ps2_kbd' class=Input kind='drv.Ps2Keyboard' start='thingos_driver_start_safe'
+[37728974745] [[35mTRACE[0m] [kernel::syscall::handlers::vfs] [CPU1] VFS: sys_fs_open path='/drivers/ps2_mouse' tid=7
+[38030128884] [[35mTRACE[0m] [sprout::supervisor] [CPU0] SPROUT: Supervisor tick...
+[38031642825] [[35mTRACE[0m] [sprout::supervisor] [CPU0] SPROUT: Loop iteration: spawn_bristle_if_needed
+[38033061660] [[35mTRACE[0m] [sprout::supervisor] [CPU0] SPROUT: Loop iteration: spawn_display_if_needed
+[38034439674] [[35mTRACE[0m] [sprout::supervisor] [CPU0] SPROUT: Loop iteration: spawn_bloom_if_ready
+[38035812408] [[35mTRACE[0m] [sprout::supervisor] [CPU0] SPROUT: Loop iteration: spawn_wayland_hello_if_ready
+[38037361560] [[35mTRACE[0m] [sprout::supervisor] [CPU0] SPROUT: Loop iteration: spawn_clock_if_ready
+[38038848474] [[35mTRACE[0m] [sprout::supervisor] [CPU0] SPROUT: Loop iteration: spawn_leaf_if_ready
+[38040305886] [[35mTRACE[0m] [sprout::supervisor] [CPU0] SPROUT: Loop iteration: tick complete
+[38041798179] [[34mDEBUG[0m] [sprout::supervisor] [CPU0] SPROUT: ServiceLoop waiting for next event...
+[38054938251] [[35mTRACE[0m] [kernel::syscall::handlers::vfs] [CPU1] sys_fs_close: fd=7
+[38111388678] [[32mINFO [0m] [bloom::render] [CPU1] bloom: pistil background renderer loaded from /lib/libpistil.so
+[38112512724] [[32mINFO [0m] [bloom::render] [CPU1] bloom: pistil font text renderer loaded with default /share/fonts/Inter-Regular.ttf
+[38113366632] [[32mINFO [0m] [bloom::render] [CPU1] bloom: pistil symbol renderer loaded with /share/fonts/NotoSansSymbol2-Regular.ttf
+[38114436987] [[35mTRACE[0m] [kernel::syscall::handlers::vfs] [CPU1] VFS: sys_fs_open path='/session/desktop/theme' tid=10
+[38116825494] [[35mTRACE[0m] [kernel::syscall::handlers::vfs] [CPU1] VFS: sys_fs_open path='/session/desktop/theme' tid=10
+[38120703687] [[35mTRACE[0m] [kernel::syscall::handlers::vfs] [CPU1] sys_fs_close: fd=7
+[38122725201] [[32mINFO [0m] [bloom] [CPU1] bloom: initial theme configured Facet Frame
+[38322259338] [[34mDEBUG[0m] [kernel::syscall::handlers::memory] [CPU1] sys_vm_map: large backing file mapping offset=0 len=4096000 total_size=4096000
+[38363586393] [[35mTRACE[0m] [sprout::supervisor] [CPU0] SPROUT: Supervisor tick...
+[38365087926] [[35mTRACE[0m] [sprout::supervisor] [CPU0] SPROUT: Loop iteration: spawn_bristle_if_needed
+[38365448616] [[34mDEBUG[0m] [kernel::vfs::provider] [CPU1] VFS_RPC: request op=DeviceCall len=96 tid=10
+[38366034927] [[35mTRACE[0m] [sprout::supervisor] [CPU0] SPROUT: Loop iteration: spawn_display_if_needed
+[38368497090] [[35mTRACE[0m] [sprout::supervisor] [CPU0] SPROUT: Loop iteration: spawn_bloom_if_ready
+[38369422080] [[35mTRACE[0m] [display_virtio_gpu] [CPU3] display_virtio_gpu: VFS RPC op=DeviceCall
+[38369502105] [[35mTRACE[0m] [kernel::syscall::handlers::vfs] [CPU1] sys_fs_close: fd=3
+[38371487121] [[35mTRACE[0m] [sprout::supervisor] [CPU0] SPROUT: Loop iteration: spawn_wayland_hello_if_ready
+[38371551009] [[35mTRACE[0m] [display_virtio_gpu] [CPU3] DISP: DISPLAY_OP_IMPORT_BUFFER requested: memfd=10, size=1280x800
+[38371538007] [[32mINFO [0m] [cambium::catalog] [CPU1] DEVD CATALOG: registered driver '/drivers/ps2_mouse' name='ps2_mouse' class=Input kind='drv.Ps2Mouse' start='thingos_driver_start_safe'
+[38373119994] [[34mDEBUG[0m] [kernel::syscall::handlers::memory] [CPU3] sys_vm_map: large backing file mapping offset=0 len=4096000 total_size=4096000
+[38373130785] [[35mTRACE[0m] [kernel::syscall::handlers::vfs] [CPU1] VFS: sys_fs_open path='/drivers/rtc_cmos' tid=7
+[38373618558] [[35mTRACE[0m] [sprout::supervisor] [CPU0] SPROUT: Loop iteration: spawn_clock_if_ready
+[38379701679] [[35mTRACE[0m] [sprout::supervisor] [CPU0] SPROUT: Loop iteration: spawn_leaf_if_ready
+[38381183412] [[35mTRACE[0m] [sprout::supervisor] [CPU0] SPROUT: Loop iteration: tick complete
+[38382548259] [[34mDEBUG[0m] [sprout::supervisor] [CPU0] SPROUT: ServiceLoop waiting for next event...
+[38404632783] [[34mDEBUG[0m] [display_virtio_gpu] [CPU3] DISP: imported buffer as ID=1
+[38406085344] [[35mTRACE[0m] [display_virtio_gpu] [CPU3] display_virtio_gpu: VFS RPC response begin op=DeviceCall req_id=3
+[38408340432] [[35mTRACE[0m] [display_virtio_gpu] [CPU3] display_virtio_gpu: VFS RPC response sent op=DeviceCall req_id=3
+[38456491788] [[34mDEBUG[0m] [kernel::vfs::provider] [CPU1] VFS_RPC: response op=DeviceCall id=3 -> OK(12)
+[38459210724] [[34mDEBUG[0m] [bloom::display] [CPU1] bloom: imported buffer 1280x800 as ID=1
+[38460444924] [[35mTRACE[0m] [kernel::syscall::handlers::vfs] [CPU1] VFS: sys_fs_open path='/session/desktop/wallpaper' tid=10
+[38462898837] [[35mTRACE[0m] [kernel::syscall::handlers::vfs] [CPU1] VFS: sys_fs_open path='/session/desktop/wallpaper' tid=10
+[38467089045] [[35mTRACE[0m] [kernel::syscall::handlers::vfs] [CPU1] sys_fs_close: fd=8
+[38468533950] [[32mINFO [0m] [bloom] [CPU1] bloom: initial wallpaper configured /share/wallpapers/flower.png
+[38477194239] [[35mTRACE[0m] [kernel::syscall::handlers::vfs] [CPU1] VFS: sys_fs_open path='/share/cursors/future/default.svg' tid=10
+[38489146905] [[35mTRACE[0m] [kernel::syscall::handlers::vfs] [CPU1] sys_fs_close: fd=9
+[38598469272] [[34mDEBUG[0m] [kernel::vfs::provider] [CPU1] VFS_RPC: request op=DeviceCall len=96 tid=10
+[38628866166] [[35mTRACE[0m] [display_virtio_gpu] [CPU3] display_virtio_gpu: VFS RPC op=DeviceCall
+[38630319189] [[35mTRACE[0m] [display_virtio_gpu] [CPU3] DISP: DISPLAY_OP_IMPORT_BUFFER requested: memfd=11, size=48x48
+[38632440990] [[34mDEBUG[0m] [display_virtio_gpu] [CPU3] DISP: imported buffer as ID=2
+[38636025549] [[35mTRACE[0m] [display_virtio_gpu] [CPU3] display_virtio_gpu: VFS RPC response begin op=DeviceCall req_id=4
+[38638867377] [[35mTRACE[0m] [display_virtio_gpu] [CPU3] display_virtio_gpu: VFS RPC response sent op=DeviceCall req_id=4
+[38676856284] [[34mDEBUG[0m] [kernel::vfs::provider] [CPU1] VFS_RPC: response op=DeviceCall id=4 -> OK(12)
+[38680093881] [[34mDEBUG[0m] [bloom::display] [CPU1] bloom: imported buffer 48x48 as ID=2
+[38681925480] [[32mINFO [0m] [bloom::render] [CPU1] bloom: cursor ready buffer=2 size=48x48 hotspot=11,6
+[38687032857] [[34mDEBUG[0m] [kernel::ipc] [CPU1] CREATE_PORT: capacity=65536
+[38687690250] [[34mDEBUG[0m] [kernel::ipc] [CPU1] CREATE_PORT: appended id=PortId(7)
+[38689092717] [[34mDEBUG[0m] [kernel::ipc::handles] [CPU1] ALLOC_HANDLE: handle=7 port_id=PortId(7) mode=Write
+[38690654376] [[34mDEBUG[0m] [kernel::ipc::handles] [CPU1] ALLOC_HANDLE: handle=8 port_id=PortId(7) mode=Read
+[38690742684] [[35mTRACE[0m] [sprout::supervisor] [CPU0] SPROUT: Supervisor tick...
+[38693535639] [[35mTRACE[0m] [sprout::supervisor] [CPU0] SPROUT: Loop iteration: spawn_bristle_if_needed
+[38693927910] [[35mTRACE[0m] [kernel::syscall::handlers::vfs] [CPU1] sys_fs_close: fd=3
+[38695844352] [[35mTRACE[0m] [sprout::supervisor] [CPU0] SPROUT: Loop iteration: spawn_display_if_needed
+[38696466270] [[32mINFO [0m] [cambium::catalog] [CPU1] DEVD CATALOG: registered driver '/drivers/rtc_cmos' name='rtc_cmos' class=Other kind='dev.rtc.Cmos' start='thingos_driver_start_safe'
+[38697053736] [[35mTRACE[0m] [sprout::supervisor] [CPU0] SPROUT: Loop iteration: spawn_bloom_if_ready
+[38697640443] [[35mTRACE[0m] [kernel::syscall::handlers::vfs] [CPU1] VFS: sys_fs_open path='/drivers/rtl8168d' tid=7
+[38701035417] [[35mTRACE[0m] [sprout::supervisor] [CPU0] SPROUT: Loop iteration: spawn_wayland_hello_if_ready
+[38704638819] [[35mTRACE[0m] [sprout::supervisor] [CPU0] SPROUT: Loop iteration: spawn_clock_if_ready
+[38706090786] [[35mTRACE[0m] [sprout::supervisor] [CPU0] SPROUT: Loop iteration: spawn_leaf_if_ready
+[38707478502] [[35mTRACE[0m] [sprout::supervisor] [CPU0] SPROUT: Loop iteration: tick complete
+[38708760024] [[34mDEBUG[0m] [sprout::supervisor] [CPU0] SPROUT: ServiceLoop waiting for next event...
+[38857257021] [[35mTRACE[0m] [kernel::syscall::handlers::vfs] [CPU1] sys_fs_close: fd=3
+[38859652788] [[32mINFO [0m] [cambium::catalog] [CPU1] DEVD CATALOG: registered driver '/drivers/rtl8168d' name='rtl8168d' class=Net kind='dev.net.Nic' start='thingos_driver_start_safe'
+[38861200719] [[35mTRACE[0m] [kernel::syscall::handlers::vfs] [CPU1] VFS: sys_fs_open path='/drivers/virtio_netd' tid=7
+[39018484857] [[35mTRACE[0m] [sprout::supervisor] [CPU0] SPROUT: Supervisor tick...
+[39020001933] [[35mTRACE[0m] [sprout::supervisor] [CPU0] SPROUT: Loop iteration: spawn_bristle_if_needed
+[39021461028] [[35mTRACE[0m] [sprout::supervisor] [CPU0] SPROUT: Loop iteration: spawn_display_if_needed
+[39022971372] [[35mTRACE[0m] [sprout::supervisor] [CPU0] SPROUT: Loop iteration: spawn_bloom_if_ready
+[39025026018] [[35mTRACE[0m] [sprout::supervisor] [CPU0] SPROUT: Loop iteration: spawn_wayland_hello_if_ready
+[39025978068] [[32mINFO [0m] [bloom] [CPU1] bloom: watching wallpaper config /session/desktop/wallpaper
+[39027498939] [[35mTRACE[0m] [sprout::supervisor] [CPU0] SPROUT: Loop iteration: spawn_clock_if_ready
+[39028014795] [[32mINFO [0m] [bloom] [CPU1] bloom: watching theme config /session/desktop/theme
+[39029732775] [[35mTRACE[0m] [sprout::supervisor] [CPU0] SPROUT: Loop iteration: spawn_leaf_if_ready
+[39030029610] [[34mDEBUG[0m] [kernel::handle::bridge] [CPU1] BRIDGE: handle=6 -> fd=11 node=0xffffffffb00f9350 port=0xffffffffb0156290
+[39032717889] [[34mDEBUG[0m] [kernel::handle::bridge] [CPU1] BRIDGE: handle=8 -> fd=12 node=0xffffffffb0148290 port=0xffffffffb0147ef0
+[39033278955] [[34mDEBUG[0m] [kernel::task::loader] [CPU0] LOADER: Loading module '/bin/leaf' (len=97432, base=0x200000)
+[39033857049] [[35mTRACE[0m] [kernel::task::loader] [CPU0]   Header: [7f, 45, 4c, 46, 02, 01, 01, 00, 00, 00, 00, 00, 00, 00, 00, 00]
+[39034886220] [[34mDEBUG[0m] [kernel::task::loader] [CPU0] LOADER: ELF info: entry=200000, min_vaddr=200000, bias=0, entry_pc=200000
+[39034966410] [[35mTRACE[0m] [kernel::syscall::handlers::vfs] [CPU1] VFS: sys_fs_open path='/session/desktop/wallpaper' tid=10
+[39035651325] [[35mTRACE[0m] [kernel::task::loader] [CPU0] Segment: vaddr=200000 exec=true
+[39037325976] [[35mTRACE[0m] [kernel::syscall::handlers::vfs] [CPU1] sys_fs_close: fd=13
+[39037850412] [[35mTRACE[0m] [kernel::task::loader] [CPU0]   COPIED at 0x201420: [4e, 8b, 44, 24, 2c, 89, 44, 24]
+[39039014223] [[35mTRACE[0m] [kernel::syscall::handlers::vfs] [CPU1] VFS: sys_fs_open path='/session/desktop/theme' tid=10
+[39040945812] [[35mTRACE[0m] [kernel::syscall::handlers::vfs] [CPU1] sys_fs_close: fd=13
+[39045058569] [[34mDEBUG[0m] [kernel::ipc] [CPU1] CREATE_PORT: capacity=65536
+[39045086982] [[35mTRACE[0m] [kernel::task::loader] [CPU0] Segment: vaddr=20f000 exec=false
+[39045625608] [[34mDEBUG[0m] [kernel::ipc] [CPU1] CREATE_PORT: appended id=PortId(8)
+[39046276929] [[34mDEBUG[0m] [kernel::ipc::handles] [CPU1] ALLOC_HANDLE: handle=9 port_id=PortId(8) mode=Write
+[39046833540] [[34mDEBUG[0m] [kernel::ipc::handles] [CPU1] ALLOC_HANDLE: handle=10 port_id=PortId(8) mode=Read
+[39047347251] [[35mTRACE[0m] [kernel::task::loader] [CPU0] Segment: vaddr=212000 exec=false
+[39048518520] [[34mDEBUG[0m] [kernel::task::loader] [CPU0] LOADER: TLS block: tp=0x213000 filesz=0 memsz=0 align=1
+[39049861719] [[35mTRACE[0m] [kernel::syscall::handlers::vfs] [CPU1] sys_fs_close: fd=3
+[39052380543] [[32mINFO [0m] [cambium::catalog] [CPU1] DEVD CATALOG: registered driver '/drivers/virtio_netd' name='virtio_netd' class=Net kind='dev.net.Nic' start='thingos_driver_start_safe'
+[39053291970] [[35mTRACE[0m] [kernel::syscall::handlers::vfs] [CPU1] VFS: sys_fs_open path='/drivers/virtio_sound' tid=7
+[39053267847] [[34mDEBUG[0m] [bran::arch::x86_64::task] [CPU0] INIT KERNEL CTX: entry=0xffffffff800532f0 kstack_top=0xffffffffb0186400 arg=0xffffffffb0109400
+[39068082075] [[34mDEBUG[0m] [kernel::sched] [CPU0] REGISTRY: Applying 1 deferred inserts
+[39068701353] [[34mDEBUG[0m] [kernel::sched] [CPU0] REGISTRY: Inserting TID=11
+[39069758772] [[34mDEBUG[0m] [kernel::sched] [CPU0] REGISTRY: Inserts applied
+[39074341647] [[34mDEBUG[0m] [kernel::sched::spawn] [CPU0] SCHED: TID 11 → task '/bin/leaf' (pid=11 from boot module)
+[39079830504] [[34mDEBUG[0m] [kernel::sched::spawn] [CPU2] USER_TRAMPOLINE: PC=0x200000 SP=0x800000 ARG0=0x0
+[39080553996] [[34mDEBUG[0m] [bran::arch::x86_64] [CPU2] ENTER_USER: TID=11 entry_pc=200000 user_sp=800000
+[39081804927] [[34mDEBUG[0m] [kernel::syscall::handlers::process] [CPU2] sys_auxv_get: tid=11 buf_len=0
+[39082959696] [[34mDEBUG[0m] [kernel::syscall::handlers::process] [CPU2] sys_auxv_get: tid=11 buf_len=100
+[39086502444] [[32mINFO [0m] [leaf::thingos_app] [CPU2] leaf: starting
+[39087449445] [[35mTRACE[0m] [kernel::syscall::handlers::vfs] [CPU2] VFS: sys_fs_open path='/share/fonts/unifont.hex' tid=11
+[39099668619] [[32mINFO [0m] [sprout::supervisor] [CPU0] SPROUT: Spawned leaf (PID=11)
+[39101676504] [[35mTRACE[0m] [sprout::supervisor] [CPU0] SPROUT: Loop iteration: tick complete
+[39103071414] [[34mDEBUG[0m] [sprout::supervisor] [CPU0] SPROUT: ServiceLoop waiting for next event...
+[39212825751] [[35mTRACE[0m] [kernel::syscall::handlers::vfs] [CPU1] sys_fs_close: fd=3
+[39215125719] [[32mINFO [0m] [cambium::catalog] [CPU1] DEVD CATALOG: registered driver '/drivers/virtio_sound' name='virtio_sound' class=Audio kind='dev.sound.Virtio' start='thingos_driver_start_safe'
+[39216232572] [[35mTRACE[0m] [kernel::syscall::handlers::vfs] [CPU1] VFS: sys_fs_open path='/drivers/xhci' tid=7
+[39315850431] [[34mDEBUG[0m] [kernel::ipc] [CPU1] CREATE_PORT: capacity=65536
+[39316657446] [[34mDEBUG[0m] [kernel::ipc] [CPU1] CREATE_PORT: appended id=PortId(9)
+[39317425818] [[34mDEBUG[0m] [kernel::ipc::handles] [CPU1] ALLOC_HANDLE: handle=11 port_id=PortId(9) mode=Write
+[39317942367] [[34mDEBUG[0m] [kernel::ipc::handles] [CPU1] ALLOC_HANDLE: handle=12 port_id=PortId(9) mode=Read
+[39318964443] [[34mDEBUG[0m] [kernel::handle::bridge] [CPU1] BRIDGE: handle=10 -> fd=13 node=0xffffffffb0146030 port=0xffffffffb01493b0
+[39319867059] [[34mDEBUG[0m] [kernel::handle::bridge] [CPU1] BRIDGE: handle=12 -> fd=14 node=0xffffffffb0155130 port=0xffffffffb0154f10
+[39331345119] [[34mDEBUG[0m] [kernel::sched::spawn] [CPU1] SCHED: Task 12 (user thread) assigned to CPU 3
+[39335359404] [[34mDEBUG[0m] [kernel::sched] [CPU1] REGISTRY: Applying 1 deferred inserts
+[39335933571] [[34mDEBUG[0m] [kernel::sched] [CPU1] REGISTRY: Inserting TID=12
+[39336362076] [[34mDEBUG[0m] [kernel::sched] [CPU1] REGISTRY: Inserts applied
+[39337513446] [[34mDEBUG[0m] [kernel::sched::spawn] [CPU1] SCHED: Sending post-unlock Resched IPI to CPU 3 for task 12
+[39338877633] [[32mINFO [0m] [bloom] [CPU1] bloom: Wayland server thread spawned
+[39340437609] [[32mINFO [0m] [bloom::loop_types] [CPU1] bloom: service loop started
+[39341153676] [[32mINFO [0m] [bloom::loop_types] [CPU1] bloom: output0 1280x800 @ 60000mHz ready
+[39343126185] [[32mINFO [0m] [bloom::wayland] [CPU3] wayland-server: starting
+[39344462355] [[35mTRACE[0m] [kernel::syscall::handlers::vfs] [CPU3] VFS: sys_fs_open path='/proc/self/inbox' tid=12
+[39349120800] [[34mDEBUG[0m] [kernel::vfs::provider] [CPU1] VFS_RPC: request op=DeviceCall len=296 tid=10
+[39359731488] [[35mTRACE[0m] [display_virtio_gpu] [CPU3] display_virtio_gpu: VFS RPC op=DeviceCall
+[39362328258] [[35mTRACE[0m] [display_virtio_gpu] [CPU3] display_virtio_gpu: [batch 0] copy_rect using CPU
+[39372697188] [[35mTRACE[0m] [display_virtio_gpu] [CPU3] display_virtio_gpu: [batch 0] alpha_blit using CPU
+[39392342550] [[35mTRACE[0m] [display_virtio_gpu] [CPU3] display_virtio_gpu: VFS RPC response begin op=DeviceCall req_id=5
+[39396448806] [[35mTRACE[0m] [display_virtio_gpu] [CPU3] display_virtio_gpu: VFS RPC response sent op=DeviceCall req_id=5
+[39413939895] [[35mTRACE[0m] [sprout::supervisor] [CPU0] SPROUT: Supervisor tick...
+[39416762187] [[35mTRACE[0m] [sprout::supervisor] [CPU0] SPROUT: Loop iteration: spawn_bristle_if_needed
+[39418315629] [[35mTRACE[0m] [sprout::supervisor] [CPU0] SPROUT: Loop iteration: spawn_display_if_needed
+[39419868015] [[35mTRACE[0m] [sprout::supervisor] [CPU0] SPROUT: Loop iteration: spawn_bloom_if_ready
+[39421368459] [[35mTRACE[0m] [sprout::supervisor] [CPU0] SPROUT: Loop iteration: spawn_wayland_hello_if_ready
+[39423701955] [[34mDEBUG[0m] [kernel::task::loader] [CPU0] LOADER: Loading module '/bin/wayland_hello' (len=86696, base=0x200000)
+[39424339383] [[35mTRACE[0m] [kernel::task::loader] [CPU0]   Header: [7f, 45, 4c, 46, 02, 01, 01, 00, 00, 00, 00, 00, 00, 00, 00, 00]
+[39424601139] [[35mTRACE[0m] [kernel::syscall::handlers::vfs] [CPU1] sys_fs_close: fd=3
+[39425836296] [[34mDEBUG[0m] [kernel::task::loader] [CPU0] LOADER: ELF info: entry=200000, min_vaddr=200000, bias=0, entry_pc=200000
+[39426439173] [[35mTRACE[0m] [kernel::task::loader] [CPU0] Segment: vaddr=200000 exec=true
+[39426873189] [[32mINFO [0m] [cambium::catalog] [CPU1] DEVD CATALOG: registered driver '/drivers/xhci' name='xhci' class=Block kind='dev.usb.Xhci' start='thingos_driver_start_safe'
+[39428445903] [[32mINFO [0m] [cambium::catalog] [CPU1] DEVD CATALOG: 15 driver(s) found
+[39428938131] [[35mTRACE[0m] [kernel::task::loader] [CPU0]   COPIED at 0x201420: [24, 28, 48, 85, f6, 74, 0f, 48]
+[39429343866] [[35mTRACE[0m] [kernel::syscall::handlers::vfs] [CPU1] VFS: sys_fs_open path='/sys/device_snapshot' tid=7
+[39430441512] [[34mDEBUG[0m] [kernel::vfs::sysfs] [CPU1] sysfs: lookup path='device_snapshot'
+[39435387750] [[35mTRACE[0m] [kernel::task::loader] [CPU0] Segment: vaddr=20d000 exec=false
+[39435527472] [[35mTRACE[0m] [kernel::syscall::handlers::vfs] [CPU1] sys_fs_close: fd=3
+[39437016168] [[35mTRACE[0m] [kernel::task::loader] [CPU0] Segment: vaddr=20f000 exec=false
+[39438079197] [[32mINFO [0m] [bloom::wayland] [CPU3] wayland-server: listening on /run/wayland-0
+[39439022106] [[34mDEBUG[0m] [kernel::task::loader] [CPU0] LOADER: TLS block: tp=0x211000 filesz=0 memsz=0 align=1
+[39439162125] [[32mINFO [0m] [bloom::wayland] [CPU3] wayland-server: advertising globals wl_compositor wl_shm xdg_wm_base wl_seat wl_output wl_subcompositor wl_data_device_manager zwp_linux_dmabuf_v1
+[39440586207] [[34mDEBUG[0m] [cambium] [CPU1] CAMBIUM: discovered device slot=pci-0000:00:00.0 kind=pci_device vendor=0x8086 device=0x29c0 class=0x060000 present=true
+[39444766185] [[34mDEBUG[0m] [bran::arch::x86_64::task] [CPU0] INIT KERNEL CTX: entry=0xffffffff800532f0 kstack_top=0xffffffffb01b7a60 arg=0xffffffffb0154c20
+[39446393976] [[34mDEBUG[0m] [kernel::sched] [CPU0] REGISTRY: Applying 1 deferred inserts
+[39446925144] [[34mDEBUG[0m] [kernel::sched] [CPU0] REGISTRY: Inserting TID=13
+[39447511653] [[34mDEBUG[0m] [kernel::sched] [CPU0] REGISTRY: Inserts applied
+[39449066613] [[34mDEBUG[0m] [kernel::vfs::provider] [CPU1] VFS_RPC: response op=DeviceCall id=5 -> OK(8)
+[39450790236] [[34mDEBUG[0m] [bloom::world] [CPU1] bloom: presented cursor buffer=2 at 629,394 size=48x48
+[39452407533] [[32mINFO [0m] [bloom::loop_types] [CPU1] First frame rendered
+[39456429804] [[34mDEBUG[0m] [cambium] [CPU1] CAMBIUM: discovered device slot=pci-0000:00:01.0 kind=pci_device vendor=0x1af4 device=0x1050 class=0x030000 present=true
+[39458417229] [[34mDEBUG[0m] [cambium] [CPU1] CAMBIUM: discovered device slot=pci-0000:00:02.0 kind=pci_device vendor=0x1af4 device=0x1000 class=0x020000 present=true
+[39458871573] [[34mDEBUG[0m] [kernel::sched::spawn] [CPU0] SCHED: TID 13 → task '/bin/wayland_hello' (pid=13 from boot module)
+[39459610938] [[34mDEBUG[0m] [cambium] [CPU1] CAMBIUM: isolation mode skipping driver '/drivers/virtio_netd' class=Net for pci-0000:00:02.0
+[39462270276] [[34mDEBUG[0m] [kernel::sched::spawn] [CPU1] USER_TRAMPOLINE: PC=0x200000 SP=0x800000 ARG0=0x0
+[39462876585] [[34mDEBUG[0m] [bran::arch::x86_64] [CPU1] ENTER_USER: TID=13 entry_pc=200000 user_sp=800000
+[39463937073] [[34mDEBUG[0m] [kernel::syscall::handlers::process] [CPU1] sys_auxv_get: tid=13 buf_len=0
+[39464968059] [[34mDEBUG[0m] [kernel::syscall::handlers::process] [CPU1] sys_auxv_get: tid=13 buf_len=100
+[39475674942] [[32mINFO [0m] [wayland_hello] [CPU1] wayland_hello: connected to /run/wayland-0
+[39477043320] [[35mTRACE[0m] [kernel::syscall::handlers::vfs] [CPU1] VFS: sys_fs_open path='/lib/libpistil.so' tid=13
+[39487550685] [[32mINFO [0m] [sprout::supervisor] [CPU0] SPROUT: Spawned wayland_hello (PID=13)
+[39490125807] [[35mTRACE[0m] [sprout::supervisor] [CPU0] SPROUT: Loop iteration: spawn_clock_if_ready
+[39492715680] [[34mDEBUG[0m] [kernel::task::loader] [CPU0] LOADER: Loading module '/bin/clock' (len=83048, base=0x200000)
+[39493409142] [[35mTRACE[0m] [kernel::task::loader] [CPU0]   Header: [7f, 45, 4c, 46, 02, 01, 01, 00, 00, 00, 00, 00, 00, 00, 00, 00]
+[39493946118] [[34mDEBUG[0m] [bloom::wayland] [CPU3] wayland-server: new client fd=17
+[39494592951] [[34mDEBUG[0m] [kernel::task::loader] [CPU0] LOADER: ELF info: entry=200000, min_vaddr=200000, bias=0, entry_pc=200000
+[39495236088] [[35mTRACE[0m] [kernel::task::loader] [CPU0] Segment: vaddr=200000 exec=true
+[39498733956] [[35mTRACE[0m] [kernel::task::loader] [CPU0]   COPIED at 0x201420: [48, 83, c4, 58, c3, cc, cc, cc]
+[39506476020] [[35mTRACE[0m] [kernel::task::loader] [CPU0] Segment: vaddr=20c000 exec=false
+[39507721803] [[35mTRACE[0m] [kernel::task::loader] [CPU0] Segment: vaddr=20e000 exec=false
+[39509390448] [[34mDEBUG[0m] [kernel::task::loader] [CPU0] LOADER: TLS block: tp=0x210000 filesz=0 memsz=0 align=1
+[39513834591] [[34mDEBUG[0m] [bran::arch::x86_64::task] [CPU0] INIT KERNEL CTX: entry=0xffffffff800532f0 kstack_top=0xffffffffb01d3300 arg=0xffffffffb01c0e00
+[39515448456] [[34mDEBUG[0m] [kernel::sched] [CPU0] REGISTRY: Applying 1 deferred inserts
+[39516007113] [[34mDEBUG[0m] [kernel::sched] [CPU0] REGISTRY: Inserting TID=14
+[39516777630] [[34mDEBUG[0m] [kernel::sched] [CPU0] REGISTRY: Inserts applied
+[39520605597] [[34mDEBUG[0m] [kernel::sched::spawn] [CPU0] SCHED: TID 14 → task '/bin/clock' (pid=14 from boot module)
+[39531631293] [[32mINFO [0m] [sprout::supervisor] [CPU0] SPROUT: Spawned clock (PID=14)
+[39533852325] [[35mTRACE[0m] [sprout::supervisor] [CPU0] SPROUT: Loop iteration: spawn_leaf_if_ready
+[39535493217] [[35mTRACE[0m] [sprout::supervisor] [CPU0] SPROUT: Loop iteration: tick complete
+[39537046725] [[34mDEBUG[0m] [sprout::supervisor] [CPU0] SPROUT: ServiceLoop waiting for next event...
+[39546315699] [[34mDEBUG[0m] [cambium] [CPU1] CAMBIUM: discovered device slot=pci-0000:00:03.0 kind=pci_device vendor=0x1af4 device=0x1059 class=0x040100 present=true
+[39547947153] [[34mDEBUG[0m] [cambium] [CPU1] CAMBIUM: isolation mode skipping driver '/drivers/virtio_sound' class=Audio for pci-0000:00:03.0
+[39548841321] [[34mDEBUG[0m] [cambium] [CPU1] CAMBIUM: discovered device slot=pci-0000:00:1f.0 kind=pci_device vendor=0x8086 device=0x2918 class=0x060100 present=true
+[39550094067] [[34mDEBUG[0m] [cambium] [CPU1] CAMBIUM: discovered device slot=pci-0000:00:1f.2 kind=pci_device vendor=0x8086 device=0x2922 class=0x010601 present=true
+[39551759610] [[35mTRACE[0m] [kernel::syscall::handlers::vfs] [CPU1] VFS: sys_fs_open path='/sys/devices/pci-0000:00:1f.2/status' tid=7
+[39553586292] [[34mDEBUG[0m] [kernel::vfs::sysfs] [CPU1] sysfs: lookup path='devices/pci-0000:00:1f.2/status'
+[39556218636] [[34mDEBUG[0m] [kernel::vfs::sysfs] [CPU1] sysfs: matched device file 'pci-0000:00:1f.2/status'
+[39557975358] [[35mTRACE[0m] [kernel::syscall::handlers::vfs] [CPU1] sys_fs_close: fd=3
+[39571101669] [[34mDEBUG[0m] [kernel::sched::spawn] [CPU1] SPAWN: page cache miss for '/drivers/ahci_disk', caching 53784 bytes
+[39572269242] [[34mDEBUG[0m] [kernel::task::loader] [CPU1] LOADER: Loading module 'ahci_disk' (len=53784, base=0x200000)
+[39572715468] [[35mTRACE[0m] [kernel::task::loader] [CPU1]   Header: [7f, 45, 4c, 46, 02, 01, 01, 03, 00, 00, 00, 00, 00, 00, 00, 00]
+[39573776385] [[34mDEBUG[0m] [kernel::task::loader] [CPU1] LOADER: ELF info: entry=200000, min_vaddr=200000, bias=0, entry_pc=200000
+[39574482849] [[35mTRACE[0m] [kernel::task::loader] [CPU1] Segment: vaddr=200000 exec=true
+[39576760410] [[35mTRACE[0m] [kernel::task::loader] [CPU1]   COPIED at 0x201420: [24, 0c, e8, 59, 0e, 00, 00, bf]
+[39579885378] [[35mTRACE[0m] [kernel::task::loader] [CPU1] Segment: vaddr=207000 exec=false
+[39580862475] [[35mTRACE[0m] [kernel::task::loader] [CPU1] Segment: vaddr=208000 exec=false
+[39582500397] [[34mDEBUG[0m] [kernel::task::loader] [CPU1] LOADER: TLS block: tp=0x209000 filesz=0 memsz=0 align=1
+[39592442703] [[34mDEBUG[0m] [kernel::sched::spawn] [CPU1] SPAWN: driver entrypoint override 'thingos_driver_start_safe' => VA 0x201000 + bias 0x0 = PC 0x201000
+[39594437619] [[34mDEBUG[0m] [kernel::sched::spawn] [CPU1] SPAWN_FROM_PATH: Starting Phase 1 for /drivers/ahci_disk
+[39597025314] [[34mDEBUG[0m] [bran::arch::x86_64::task] [CPU1] INIT KERNEL CTX: entry=0xffffffff800532f0 kstack_top=0xffffffffb0250d40 arg=0xffffffffb01dc9e0
+[39598645251] [[34mDEBUG[0m] [kernel::sched::spawn] [CPU1] SPAWN_FROM_PATH: Phase 1 complete, ID=15, applying inserts
+[39599212125] [[34mDEBUG[0m] [kernel::sched] [CPU1] REGISTRY: Applying 1 deferred inserts
+[39599740983] [[34mDEBUG[0m] [kernel::sched] [CPU1] REGISTRY: Inserting TID=15
+[39600773256] [[34mDEBUG[0m] [kernel::sched] [CPU1] REGISTRY: Inserts applied
+[39601439361] [[34mDEBUG[0m] [kernel::sched::spawn] [CPU1] SPAWN_FROM_PATH: Inserts applied, entering Phase 2
+[39604373820] [[34mDEBUG[0m] [kernel::sched::spawn] [CPU1] SETUP_STDIO: stdin=Inherit stdout=Inherit stderr=Inherit
+[39608822616] [[34mDEBUG[0m] [kernel::sched::spawn] [CPU1] SPAWN_FROM_PATH: Phase 2 complete, waking task 15
+[39610523733] [[34mDEBUG[0m] [kernel::sched::spawn] [CPU1] SPAWN_FROM_PATH: Task 15 woken, restoring IRQs
+[39611295207] [[34mDEBUG[0m] [kernel::sched::spawn] [CPU1] SPAWN_FROM_PATH: Done for /drivers/ahci_disk
+[39612268245] [[34mDEBUG[0m] [kernel::syscall::handlers::process] [CPU1] SYSCALL SPAWN_PROCESS_EX: name='/drivers/ahci_disk' TID=15 PID=15
+[39614657346] [[34mDEBUG[0m] [cambium::spawn] [CPU1] CAMBIUM: launched driver /drivers/ahci_disk for pci-0000:00:1f.2 (entry='thingos_driver_start_safe', pid=15)
+[39617242368] [[34mDEBUG[0m] [cambium::spawn] [CPU1] CAMBIUM: sent DRIVER_READY to Sprout (pid=5) for driver pid=15
+
+[hunter] desktop readiness pending; missing=["bloom: registered bristle pointer sink"]
+
+[hunter] desktop readiness pending; missing=["bloom: registered bristle pointer sink"]
+
+[hunter] desktop readiness pending; missing=["bloom: registered bristle pointer sink"]
+
+[hunter] [hunter] pre-desktop silence detected after 15.1s in session 0008; missing=["bloom: registered bristle pointer sink"]

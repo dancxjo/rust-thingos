@@ -1,0 +1,15 @@
+[32mINFO [0m] [cambium::catalog] [CPU1] DEVD CATALOG: registered driver '/drivers/display_bootfb' name='display_bootfb' class=Display kind='dev.display.Gpu' start='thingos_driver_start_safe'
+[35987542767] [[32mINFO [0m] [cambium::catalog] [CPU1] DEVD CATALOG: registered driver '/drivers/display_virtio_gpu' name='display_virtio_gpu' class=Display kind='dev.display.Gpu' start='thingos_driver_start_safe'
+[36015418923] [[32mINFO [0m] [sprout::supervisor] [CPU0] SPROUT: Spawned bloom (PID=10)
+[36091427394] [[32mINFO [0m] [bloom] [CPU1] bloom: ENTERING MAIN
+[36092546094] [[32mINFO [0m] [bloom] [CPU1] bloom: compositor service starting
+[36241326396] [[32mINFO [0m] [bloom] [CPU1] bloom: connected to /dev/display/card0 on try 0
+[36260645949] [[32mINFO [0m] [bloom] [CPU1] bloom: output0 1280x800 @ 60000mHz
+[36261538764] [[32mINFO [0m] [bloom] [CPU1] bloom: display driver does not support VBLANK
+[36262184046] [[32mINFO [0m] [bloom] [CPU1] bloom: display driver supports linear dmabuf import
+[36262866981] [[32mINFO [0m] [bloom] [CPU1] bloom: display driver supports GPU blit (hardware transfer/flush)
+[36263507643] [[32mINFO [0m] [bloom] [CPU1] bloom: display driver supports direct scanout (zero-copy path to display)
+[36264183021] [[32mINFO [0m] [bloom] [CPU1] bloom: display driver supports partial flush (damage regions)
+[36264893610] [[32mINFO [0m] [bloom] [CPU1] bloom: display driver supports resource cache (pre-allocated buffer pool)
+[36265584861] [[32mINFO [0m] [bloom] [CPU1] bloom: creating service port...
+[36564939345] [

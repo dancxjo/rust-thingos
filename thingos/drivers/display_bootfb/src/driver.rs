@@ -4,13 +4,13 @@ use core::default::Default;
 extern crate alloc;
 use alloc::collections::BTreeMap;
 
+use abi::display::accel2d::{
+    ACCEL2D_CMD_ALPHA_BLIT, ACCEL2D_CMD_CLEAR_RECT, ACCEL2D_CMD_COPY_RECT,
+    ACCEL2D_CMD_FLUSH_DAMAGE, ACCEL2D_CMD_MASKED_BLIT, ACCEL2D_CMD_ROUNDED_CLIP_BLIT,
+    ACCEL2D_CMD_STRETCH_BLIT, Accel2dBatch, Accel2dCommand,
+};
 use abi::display::{
     BufferId, CommitFlags, CommitRequest, DEFAULT_REFRESH_MHZ, DisplayInfo, PlaneCommit, PlaneId,
-    accel2d::{
-        Accel2dBatch, Accel2dCommand, ACCEL2D_CMD_ALPHA_BLIT, ACCEL2D_CMD_CLEAR_RECT,
-        ACCEL2D_CMD_COPY_RECT, ACCEL2D_CMD_FLUSH_DAMAGE, ACCEL2D_CMD_MASKED_BLIT,
-        ACCEL2D_CMD_ROUNDED_CLIP_BLIT, ACCEL2D_CMD_STRETCH_BLIT,
-    },
 };
 use abi::display_driver_protocol::FB_INFO_PAYLOAD_SIZE;
 use abi::display_protocol::Rect;
@@ -362,11 +362,9 @@ impl BootFbDriver {
         for row in 0..h {
             for col in 0..w {
                 unsafe {
-                    let ptr = self
-                        .fb
-                        .base
-                        .add((y + row) * self.fb.stride as usize + (x + col) * bpp)
-                        as *mut u32;
+                    let ptr =
+                        self.fb.base.add((y + row) * self.fb.stride as usize + (x + col) * bpp)
+                            as *mut u32;
                     core::ptr::write_unaligned(ptr, color);
                 }
             }
@@ -392,14 +390,16 @@ impl BootFbDriver {
         if bpp != fb_bpp || bpp == 0 {
             return Err(Errno::ENOSYS);
         }
-        let copy_w =
-            src_rect.w.min(dst_rect.w).min(buf.width.saturating_sub(src_rect.x)).min(
-                self.fb.width.saturating_sub(dst_rect.x),
-            ) as usize;
-        let copy_h =
-            src_rect.h.min(dst_rect.h).min(buf.height.saturating_sub(src_rect.y)).min(
-                self.fb.height.saturating_sub(dst_rect.y),
-            ) as usize;
+        let copy_w = src_rect
+            .w
+            .min(dst_rect.w)
+            .min(buf.width.saturating_sub(src_rect.x))
+            .min(self.fb.width.saturating_sub(dst_rect.x)) as usize;
+        let copy_h = src_rect
+            .h
+            .min(dst_rect.h)
+            .min(buf.height.saturating_sub(src_rect.y))
+            .min(self.fb.height.saturating_sub(dst_rect.y)) as usize;
         let row_bytes = copy_w * bpp;
         if row_bytes == 0 || copy_h == 0 {
             return Ok(());
@@ -468,12 +468,10 @@ impl BootFbDriver {
                 let sx = (dx * src_w / dst_w).min(src_w.saturating_sub(1));
                 unsafe {
                     let src_pixel = core::ptr::read_unaligned(
-                        src_ptr.add((src_y0 + sy) * src_stride + (src_x0 + sx) * bpp)
-                            as *const u32,
+                        src_ptr.add((src_y0 + sy) * src_stride + (src_x0 + sx) * bpp) as *const u32,
                     );
-                    let dst_ptr = fb_ptr
-                        .add((dst_y0 + dy) * fb_stride + (dst_x0 + dx) * fb_bpp)
-                        as *mut u32;
+                    let dst_ptr =
+                        fb_ptr.add((dst_y0 + dy) * fb_stride + (dst_x0 + dx) * fb_bpp) as *mut u32;
                     core::ptr::write_unaligned(dst_ptr, src_pixel);
                 }
             }
@@ -528,10 +526,15 @@ impl BootFbDriver {
                     let s_ptr = src_ptr.add((src_y + row) * src_stride + (src_x + col) * bpp);
                     let d_ptr =
                         fb_ptr.add((dst_y + row) * fb_stride + (dst_x + col) * fb_bpp) as *mut u32;
-                    let src_px =
-                        source_argb_for_blend(core::ptr::read_unaligned(s_ptr as *const u32), src_format);
+                    let src_px = source_argb_for_blend(
+                        core::ptr::read_unaligned(s_ptr as *const u32),
+                        src_format,
+                    );
                     let dst_px = core::ptr::read_unaligned(d_ptr);
-                    core::ptr::write_unaligned(d_ptr, alpha_over_argb(src_px, dst_px, global_alpha));
+                    core::ptr::write_unaligned(
+                        d_ptr,
+                        alpha_over_argb(src_px, dst_px, global_alpha),
+                    );
                 }
             }
         }
@@ -608,8 +611,7 @@ impl BootFbDriver {
                         src_format,
                     );
                     let m_raw = core::ptr::read_unaligned(
-                        msk_ptr.add((my0 + row) * msk_stride + (mx0 + col) * msk_bpp)
-                            as *const u32,
+                        msk_ptr.add((my0 + row) * msk_stride + (mx0 + col) * msk_bpp) as *const u32,
                     );
                     // Use mask alpha channel; fall back to luminance for opaque formats.
                     let mask_a = if msk_format.has_alpha() {
@@ -678,11 +680,7 @@ impl BootFbDriver {
         for row in 0..copy_h {
             for col in 0..copy_w {
                 let coverage = rounded_clip_coverage(
-                    radius_u32,
-                    col as u32,
-                    row as u32,
-                    dst_rect.w,
-                    dst_rect.h,
+                    radius_u32, col as u32, row as u32, dst_rect.w, dst_rect.h,
                 );
                 if coverage == 0 {
                     continue;
@@ -690,8 +688,7 @@ impl BootFbDriver {
                 unsafe {
                     let s_px = source_argb_for_blend(
                         core::ptr::read_unaligned(
-                            src_ptr.add((sy0 + row) * src_stride + (sx0 + col) * bpp)
-                                as *const u32,
+                            src_ptr.add((sy0 + row) * src_stride + (sx0 + col) * bpp) as *const u32,
                         ),
                         src_format,
                     );

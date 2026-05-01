@@ -1,0 +1,15 @@
+[32mINFO [0m] [ahci_disk] [CPU2] AHCI: Starting AHCI VFS driver
+[39000656838] [[32mINFO [0m] [ahci_disk] [CPU2] AHCI: Claimed device /sys/devices/pci-0000:00:1f.2
+[39017887755] [[32mINFO [0m] [ahci_disk] [CPU2] AHCI: Mounted atapi2 at /dev/storage/atapi2
+[39018843336] [[32mINFO [0m] [ahci_disk] [CPU2] AHCI: Provider loop online at /dev/storage/atapi2
+[39035977695] [[32mINFO [0m] [rtc_cmos] [CPU3] RTC: claimed /sys/devices/isa-0070 (handle=2)
+[39054671601] [[32mINFO [0m] [rtc_cmos] [CPU3] RTC: 2026-05-01 20:46:17 = 1777668377 unix_secs
+[39055768290] [[32mINFO [0m] [kernel::time] [CPU3] System clock anchored: unix_secs=1777668377, mono_ns=19527715977, offset=1777668357472284023ns
+[39056548212] [[32mINFO [0m] [rtc_cmos] [CPU3] RTC: System clock anchored to 1777668377 unix_secs
+[39066499230] [[32mINFO [0m] [kernel::time] [CPU0] System clock tick: utc=2026-05-01 20:46:17.004168114 unix_secs=1777668377.004168114
+[39115658076] [[32mINFO [0m] [ps2_mouse] [CPU2] ps2_mouse: bristle pid=8
+[39123582432] [[32mINFO [0m] [ps2_kbd] [CPU1] ps2_kbd: bristle pid=8
+[39134536056] [[32mINFO [0m] [ps2_kbd] [CPU1] ps2_kbd: read scancode 0x47
+[39136960599] [[32mINFO [0m] [ps2_kbd] [CPU1] ps2_kbd: edge detected: Down { key: Unknown, mods: Mods(0), repeat: false }
+[39139534599] [[32mINFO [0m] [ps2_kbd] [CPU1] ps2_kbd: sent Unknown to bristle (pid=8)
+[39142624422

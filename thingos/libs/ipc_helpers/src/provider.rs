@@ -182,6 +182,12 @@ impl ProviderLoop {
         self.read_handle
     }
 
+    /// Number of raw bytes buffered while waiting for a complete request frame.
+    #[inline]
+    pub fn pending_len(&self) -> usize {
+        self.pending.len()
+    }
+
     fn try_parse_one(&mut self) -> Result<Option<ProviderRequest>, Errno> {
         let hdr_size = core::mem::size_of::<VfsRpcReqHeader>();
         if self.pending.len() < hdr_size {

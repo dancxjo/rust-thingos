@@ -1,0 +1,12 @@
+
+[hunter] session=0021 arch=x86_64 timeout=15s desktop_ready_timeout=180s loglevel=5
+
+[hunter] waiting for desktop readiness before random actions: bloom: service loop started, bloom: output0, bloom: cursor ready, First frame rendered, wayland-server: listening on /run/wayland-0, bloom: registered bristle pointer sink
+[2J[01;01H[=3h[2J[01;01H[2J[01;01H[8;042;160t0[2J[01;01H[2J[01;01H[8;056;240t0[2J[01;01H
+[hunter] desktop readiness pending; missing=["bloom: service loop started", "bloom: output0", "bloom: cursor ready", "First frame rendered", "wayland-server: listening on /run/wayland-0", "bloom: registered bristle pointer sink"]
+
+[hunter] desktop readiness pending; missing=["bloom: service loop started", "bloom: output0", "bloom: cursor ready", "First frame rendered", "wayland-server: listening on /run/wayland-0", "bloom: registered bristle pointer sink"]
+
+[hunter] desktop readiness pending; missing=["bloom: service loop started", "bloom: output0", "bloom: cursor ready", "First frame rendered", "wayland-server: listening on /run/wayland-0", "bloom: registered bristle pointer sink"]
+
+[hunter] [hunter] pre-desktop silence detected after 15.1s in session 0021; missing=["bloom: service loop started", "bloom: output0", "bloom: cursor ready", "First frame rendered", "wayland-server: listening on /run/wayland-0", "bloom: registered bristle pointer sink"]

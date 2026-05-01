@@ -1,0 +1,24 @@
+[32mINFO [0m] [kernel::time] [CPU0] System clock tick: utc=2026-05-01 20:38:46.042211068 unix_secs=1777667926.042211068
+[64629409581] [[32mINFO [0m] [kernel::time] [CPU0] System clock tick: utc=2026-05-01 20:38:49.055383367 unix_secs=1777667929.055383367
+[70654805496] [[32mINFO [0m] [kernel::time] [CPU0] System clock tick: utc=2026-05-01 20:38:52.068117971 unix_secs=1777667932.068117971
+[74242034097] [[32mINFO [0m] [clock] [CPU1] clock: tick local=2026-05-01 12:38:53 UTC-8 system_unix=1777667933.860692227
+[76681120758] [[32mINFO [0m] [kernel::time] [CPU0] System clock tick: utc=2026-05-01 20:38:55.081256132 unix_secs=1777667935.081256132
+[82706908878] [[32mINFO [0m] [kernel::time] [CPU0] System clock tick: utc=2026-05-01 20:38:58.094159729 unix_secs=1777667938.094159729
+[88733031222] [[32mINFO [0m] [kernel::time] [CPU0] System clock tick: utc=2026-05-01 20:39:01.107190079 unix_secs=1777667941.107190079
+[94758922335] [[32mINFO [0m] [kernel::time] [CPU0] System clock tick: utc=2026-05-01 20:39:04.120150238 unix_secs=1777667944.120150238
+[100785060057] [[32mINFO [0m] [kernel::time] [CPU0] System clock tick: utc=2026-05-01 20:39:07.133227696 unix_secs=1777667947.133227696
+[106810856361] [[32mINFO [0m] [kernel::time] [CPU0] System clock tick: utc=2026-05-01 20:39:10.146144196 unix_secs=1777667950.146144196
+[109517299848] [[32mINFO [0m] [ps2_kbd] [CPU1] ps2_kbd: read scancode 0x38
+[109519845501] [[32mINFO [0m] [ps2_kbd] [CPU1] ps2_kbd: edge detected: Down { key: LeftAlt, mods: Mods(4), repeat: false }
+[109522262058] [[32mINFO [0m] [ps2_kbd] [CPU1] ps2_kbd: sent LeftAlt to bristle (pid=8)
+[109527763323] [[32mINFO [0m] [bristle] [CPU2] bristle: KeyDown received: LeftAlt
+[109535733681] [[32mINFO [0m] [bloom::input] [CPU1] bloom: KeyDown received: LeftAlt (raw=0x00e2, mods=Mods(4), repeat=false)
+[112817719674] [[32mINFO [0m] [ps2_kbd] [CPU1] ps2_kbd: read scancode 0x41
+[112818869625] [[32mINFO [0m] [ps2_kbd] [CPU1] ps2_kbd: edge detected: Down { key: F7, mods: Mods(4), repeat: false }
+[112821077721] [[32mINFO [0m] [ps2_kbd] [CPU1] ps2_kbd: sent F7 to bristle (pid=8)
+[112824244764] [[32mINFO [0m] [bristle] [CPU2] bristle: KeyDown received: F7
+[112836678306] [[32mINFO [0m] [kernel::time] [CPU0] System clock tick: utc=2026-05-01 20:39:13.159039790 unix_secs=1777667953.159039790
+[112853753463] [[32mINFO [0m] [bloom::input] [CPU1] bloom: KeyDown received: F7 (raw=0x0040, mods=Mods(4), repeat=false)
+[112854827184] [[32mINFO [0m] [bloom::input] [CPU1] bloom: pointer debug overlay enabled
+[112920286116] [[32mINFO [0m] [bloom::render] [CPU1] bloom: pointer debug overlay ready buffer=10 size=460x144
+[112994969142] [
