@@ -113,13 +113,13 @@ Remaining open items are in the **known gaps** section below.
 
 | Event           | Status | Notes                                              |
 |-----------------|--------|----------------------------------------------------|
-| `enter`         | ✅      | Routed from `WEVT_POINTER_ENTER`                   |
-| `leave`         | ✅      | Routed from `WEVT_POINTER_LEAVE`                   |
-| `motion`        | ✅      | Coalesced; routed from `WEVT_POINTER_MOTION`       |
-| `button`        | ✅      | Routed from `WEVT_POINTER_BUTTON`; evdev mapping   |
-| `axis`          | ❌      | Scroll wheel not yet implemented                   |
-| `frame`         | ❌      | Not yet sent after pointer event batches           |
-| `axis_source`   | ❌      | Not yet implemented                                |
+| `enter`         | ✅      | Routed from `WEVT_POINTER_ENTER`; followed by `frame` |
+| `leave`         | ✅      | Routed from `WEVT_POINTER_LEAVE`; followed by `frame` |
+| `motion`        | ✅      | Coalesced; routed from `WEVT_POINTER_MOTION`; followed by `frame` |
+| `button`        | ✅      | Routed from `WEVT_POINTER_BUTTON`; evdev mapping; followed by `frame` |
+| `axis`          | ✅      | Routed from `WEVT_POINTER_SCROLL`; vertical and horizontal |
+| `frame`         | ✅      | Sent after every pointer event group (v5+)         |
+| `axis_source`   | ✅      | Emitted as `wheel` before axis events              |
 | `set_cursor`    | ⚠️ no-op| Accepted; bloom manages cursor internally          |
 | `release`       | ✅      | Destroys the pointer object                        |
 
@@ -269,7 +269,6 @@ Remaining open items are in the **known gaps** section below.
 
 | Item                                  | Priority | Notes                                               |
 |---------------------------------------|----------|-----------------------------------------------------|
-| `wl_pointer.axis` / `axis_source` / `frame` | Medium | Scroll-wheel events not yet forwarded         |
 | `wl_touch`                            | Low      | Touch input not yet connected                       |
 | `xdg_popup.popup_done`                | Medium   | Compositor should dismiss popups on click outside   |
 | `zwlr_layer_surface_v1.closed` event  | Low      | Needed for compositor-initiated layer surface close |
@@ -282,6 +281,7 @@ Remaining open items are in the **known gaps** section below.
 | `ext_session_lock_v1`                 | Low      | Session lock protocol                              |
 | Server-side decorations (`zxdg_decoration_manager_v1`) | Low | Chrome entirely compositor-drawn |
 | `wl_surface.set_opaque_region` (real) | Low      | Currently a no-op; could optimise composition      |
+| `wl_pointer.axis_discrete` / `axis_value120` | Low | High-resolution scroll (v8+) not yet emitted |
 
 ---
 

@@ -29,6 +29,7 @@
 //! | `WEVT_TOPLEVEL_ACTION` | The compositor requests a toplevel action  |
 //! | `WEVT_POINTER_*` | Focused pointer events from Bristle/Bloom    |
 //! | `WEVT_KEYBOARD_*` | Focused keyboard events from Bristle/Bloom  |
+//! | `WEVT_POINTER_SCROLL` | Scroll-wheel event for the focused surface |
 
 // ── Discriminants ────────────────────────────────────────────────────────────
 
@@ -55,6 +56,7 @@ pub const WEVT_KEYBOARD_ENTER: u8 = 9;
 pub const WEVT_KEYBOARD_LEAVE: u8 = 10;
 pub const WEVT_KEYBOARD_KEY: u8 = 11;
 pub const WEVT_OUTPUT_INFO: u8 = 12;
+pub const WEVT_POINTER_SCROLL: u8 = 13;
 
 pub const TOPLEVEL_ACTION_CLOSE: u8 = 1;
 pub const TOPLEVEL_ACTION_MINIMIZE: u8 = 2;
@@ -282,6 +284,22 @@ pub struct WEvtPointerButton {
     pub pressed: u8,
     pub _pad: u8,
     pub bloom_surface_id: u32,
+    pub timestamp_ms: u32,
+}
+
+/// [`WEVT_POINTER_SCROLL`] — scroll-wheel event for the pointer-focused surface.
+///
+/// `dx` and `dy` are in the same device units emitted by the input driver's
+/// `ScrollPayload` (typically ±1 per wheel detent).  The Wayland server maps
+/// these to `wl_pointer.axis` values scaled to surface-local pixels.
+#[repr(C, packed)]
+#[derive(Clone, Copy)]
+pub struct WEvtPointerScroll {
+    pub msg_type: u8, // = WEVT_POINTER_SCROLL
+    pub _pad: [u8; 3],
+    pub bloom_surface_id: u32,
+    pub dx: i16,
+    pub dy: i16,
     pub timestamp_ms: u32,
 }
 
@@ -587,6 +605,25 @@ pub fn encode_pointer_button(
     };
     let mut out = [0u8; 12];
     out.copy_from_slice(as_bytes!(msg, WEvtPointerButton));
+    out
+}
+
+pub fn encode_pointer_scroll(
+    bloom_surface_id: u32,
+    dx: i16,
+    dy: i16,
+    timestamp_ns: u64,
+) -> [u8; 16] {
+    let msg = WEvtPointerScroll {
+        msg_type: WEVT_POINTER_SCROLL,
+        _pad: [0; 3],
+        bloom_surface_id,
+        dx,
+        dy,
+        timestamp_ms: (timestamp_ns / 1_000_000) as u32,
+    };
+    let mut out = [0u8; 16];
+    out.copy_from_slice(as_bytes!(msg, WEvtPointerScroll));
     out
 }
 
