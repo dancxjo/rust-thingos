@@ -3,5 +3,10 @@ name = "accel2d_cpu"
 version = "0.1.0"
 edition = "2021"
 
+[features]
+# Enable SIMD fast paths (SSE2/AVX2 on x86/x86_64).  Disable for bringup/debug.
+default = ["simd"]
+simd = []
+
 [dependencies]
 abi = { path = "../../abi" }
