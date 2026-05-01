@@ -94,3 +94,28 @@ Feature: xHCI userspace driver
   @timeout-120s
   Scenario: REQUEST SENSE is invoked on TEST UNIT READY CHECK CONDITION
     Then the serial output should contain "ums: REQUEST SENSE key=" within 120s
+
+  @smoke
+  @timeout-120s
+  Scenario: USB block device is mounted at /dev/block/usb0
+    Then the serial output should contain "ums: mounted read-only block device at /dev/block/usb0" within 120s
+
+  @smoke
+  @timeout-120s
+  Scenario: /dev/disk/usb0 alias is created
+    Then the serial output should contain "ums: created /dev/disk/usb0" within 120s
+
+  @smoke
+  @timeout-120s
+  Scenario: /dev/disk/by-bus/usb0 alias is created
+    Then the serial output should contain "ums: created /dev/disk/by-bus/usb0" within 120s
+
+  @smoke
+  @timeout-120s
+  Scenario: Partition scan reads LBA 0 from USB block device
+    Then the serial output should contain "ums: partition scan: read LBA 0 ok" within 120s
+
+  @smoke
+  @timeout-120s
+  Scenario: MBR partition table is detected and at least one partition is mounted
+    Then the serial output should contain "ums: mounted partition 1 at /dev/block/usb0p1" within 120s
