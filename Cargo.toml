@@ -182,6 +182,7 @@ members = [
   "thingos/utils/true",
   "thingos/utils/vfs_hello",
   "thingos/utils/vfs_test_provider",
+  "thingos/utils/wayland_dnd_test",
   "thingos/utils/wayland_hello",
   "thingos/utils/wc",
   "thingos/utils/yes",

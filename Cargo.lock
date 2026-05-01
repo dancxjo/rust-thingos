@@ -9732,6 +9732,13 @@ dependencies = [
 ]
 
 [[package]]
+name = "wayland_dnd_test"
+version = "0.1.0"
+dependencies = [
+ "stem",
+]
+
+[[package]]
 name = "wayland_hello"
 version = "0.1.0"
 dependencies = [

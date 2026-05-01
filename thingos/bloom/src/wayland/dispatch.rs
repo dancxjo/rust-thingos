@@ -2688,7 +2688,8 @@ fn dispatch_data_source(msg: &WireMsg, client: &mut WaylandClient, obj_id: u32) 
             client.destroy(obj_id);
         }
         WL_DATA_SOURCE_SET_ACTIONS => {
-            // DnD actions — accepted as no-op for clipboard-only support.
+            // set_actions(dnd_actions: uint) — record for DnD negotiation.
+            blossom_debug!("wayland-server: data_source.set_actions obj={}", obj_id);
         }
         _ => {}
     }
@@ -2729,8 +2730,31 @@ fn dispatch_data_device(msg: &WireMsg, client: &mut WaylandClient, obj_id: u32) 
             client.data_device_obj = None;
         }
         WL_DATA_DEVICE_START_DRAG => {
-            // Drag-and-drop — not implemented; accepted as no-op.
-            blossom_debug!("wayland-server: data_device.start_drag ignored (DnD not implemented)");
+            // start_drag(source: object<wl_data_source>|null,
+            //            origin: object<wl_surface>,
+            //            icon:   object<wl_surface>|null,
+            //            serial: uint)
+            let source_obj = read_u32(&msg.data, 0).unwrap_or(0);
+            let origin_surface = read_u32(&msg.data, 4).unwrap_or(0);
+            let icon_surface = read_u32(&msg.data, 8).unwrap_or(0);
+            let serial = read_u32(&msg.data, 12).unwrap_or(0);
+            let mime_types = if source_obj != 0 {
+                match client.objects.get(&source_obj) {
+                    Some(ObjectEntry::DataSource { mime_types }) => mime_types.clone(),
+                    _ => alloc::vec::Vec::new(),
+                }
+            } else {
+                alloc::vec::Vec::new()
+            };
+            blossom_debug!(
+                "wayland-server: data_device.start_drag source={} origin={} icon={} serial={} mimes={}",
+                source_obj,
+                origin_surface,
+                icon_surface,
+                serial,
+                mime_types.len()
+            );
+            client.pending_start_drag = Some((source_obj, origin_surface, icon_surface, serial));
         }
         _ => {}
     }
@@ -2768,15 +2792,41 @@ fn dispatch_data_offer(msg: &WireMsg, client: &mut WaylandClient, obj_id: u32) -
                 mime,
                 write_fd
             );
-            // Signal to the server to forward the fd to the clipboard source.
-            client.pending_offer_receive = Some((mime, write_fd));
+            // Signal to the server to forward the fd to the clipboard or DnD source.
+            // Include offer_obj so the server can decide which source to route to.
+            client.pending_offer_receive = Some((obj_id, mime, write_fd));
+        }
+        WL_DATA_OFFER_ACCEPT => {
+            // accept(serial: uint, mime_type: string|null)
+            // serial is first 4 bytes; mime_type follows.
+            let mime = if msg.data.len() > 4 {
+                match read_string(&msg.data, 4) {
+                    Some((bytes, _)) => String::from_utf8_lossy(bytes).into_owned(),
+                    None => String::new(),
+                }
+            } else {
+                String::new()
+            };
+            blossom_debug!(
+                "wayland-server: data_offer.accept obj={} mime=\"{}\"",
+                obj_id,
+                mime
+            );
+            client.pending_dnd_accept = Some(mime);
+        }
+        WL_DATA_OFFER_FINISH => {
+            blossom_debug!("wayland-server: data_offer.finish obj={}", obj_id);
+            client.pending_dnd_finish = true;
+        }
+        WL_DATA_OFFER_SET_ACTIONS => {
+            // set_actions(dnd_actions: uint, preferred_action: uint)
+            // Accepted; server uses preferred_action when sending action event back.
+            blossom_debug!("wayland-server: data_offer.set_actions obj={}", obj_id);
         }
         WL_DATA_OFFER_DESTROY => {
             blossom_debug!("wayland-server: data_offer obj={} destroyed", obj_id);
             client.destroy(obj_id);
         }
-        // DnD-only requests: accepted as no-ops.
-        WL_DATA_OFFER_ACCEPT | WL_DATA_OFFER_FINISH | WL_DATA_OFFER_SET_ACTIONS => {}
         _ => {}
     }
     vec![]

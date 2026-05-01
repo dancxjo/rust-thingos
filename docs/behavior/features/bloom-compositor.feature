@@ -292,6 +292,16 @@ Feature: Bloom compositor service loop and responsiveness
     And I type "wayland_clipboard_test" on the serial console
     Then the serial output should contain "wayland-server: clipboard selection set" within 60s
 
+  Scenario: wl_data_device.start_drag initiates a drag-and-drop session
+    # Verifies that calling wl_data_device.start_drag causes bloom to record
+    # the drag owner and MIME types, transitioning into DnD-active state.
+    Given the machine is booted
+    Then the serial output should contain "wayland-server: listening on /run/wayland-0" within 60s
+    When I wait for the shell prompt
+    And I type "wayland_dnd_test" on the serial console
+    Then the serial output should contain "wayland-server: DnD started" within 60s
+    And the serial output should contain "wayland_dnd_test: start_drag acknowledged by compositor" within 60s
+
   Scenario: virtio-GPU display driver advertises hardware cursor capability
     # When bloom connects to display_virtio_gpu and the cursor virtqueue is
     # available, DISPLAY_OP_GET_INFO must return DisplayCaps::HARDWARE_CURSOR so

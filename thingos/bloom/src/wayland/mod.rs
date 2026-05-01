@@ -110,6 +110,21 @@ struct WaylandServer {
     clipboard_mime_types: Vec<String>,
     /// Counter for server-assigned Wayland object IDs (range [0xFF000001, 0xFFFFFFFF]).
     next_server_id: u32,
+    // ── Drag-and-drop state ──────────────────────────────────────────────
+    /// True while a drag-and-drop operation is in progress.
+    dnd_active: bool,
+    /// Token of the client that initiated the drag.
+    dnd_owner: Option<WaitToken>,
+    /// wl_data_source object ID in the drag owner client.
+    dnd_source_obj: u32,
+    /// MIME types offered by the current drag source.
+    dnd_mime_types: Vec<String>,
+    /// bloom_surface_id of the surface currently under the drag pointer (0 = none).
+    dnd_target_surface: u32,
+    /// Token of the client that currently has the drag focus.
+    dnd_target_token: Option<WaitToken>,
+    /// wl_data_offer object ID sent to the drag target client (0 = none).
+    dnd_offer_id: u32,
 }
 
 impl WaylandServer {
@@ -205,6 +220,13 @@ impl WaylandServer {
             clipboard_source_obj: 0,
             clipboard_mime_types: Vec::new(),
             next_server_id: 0xFF00_0001,
+            dnd_active: false,
+            dnd_owner: None,
+            dnd_source_obj: 0,
+            dnd_mime_types: Vec::new(),
+            dnd_target_surface: 0,
+            dnd_target_token: None,
+            dnd_offer_id: 0,
         };
 
         server.event_loop()
@@ -439,9 +461,12 @@ impl WaylandServer {
         // Remove consumed bytes.
         client.recv_buf.drain(..consumed);
 
-        // Extract clipboard side-effects before reinserting the client.
+        // Extract clipboard and DnD side-effects before reinserting the client.
         let pending_clip = client.pending_clipboard_set.take();
         let pending_recv = client.pending_offer_receive.take();
+        let pending_drag = client.pending_start_drag.take();
+        let pending_finish = core::mem::replace(&mut client.pending_dnd_finish, false);
+        let pending_accept = client.pending_dnd_accept.take();
 
         // Reinsert client.
         self.clients.insert(token, client);
@@ -452,8 +477,23 @@ impl WaylandServer {
         }
 
         // Process data_offer.receive fd routing.
-        if let Some((mime_type, write_fd)) = pending_recv {
-            self.handle_offer_receive(write_fd, mime_type);
+        if let Some((offer_obj, mime_type, write_fd)) = pending_recv {
+            self.handle_offer_receive(offer_obj, mime_type, write_fd);
+        }
+
+        // Process start_drag.
+        if let Some((source_obj, origin_surface, icon_surface, serial)) = pending_drag {
+            self.handle_start_drag(token, source_obj, origin_surface, icon_surface, serial);
+        }
+
+        // Process data_offer.finish (DnD drop accepted).
+        if pending_finish {
+            self.handle_dnd_finish(token);
+        }
+
+        // Process data_offer.accept (target accepted a MIME type).
+        if let Some(mime) = pending_accept {
+            self.handle_dnd_accept(token, mime);
         }
     }
 
@@ -786,6 +826,17 @@ impl WaylandServer {
     }
 
     fn send_pointer_enter(&mut self, surface: u32, x: i32, y: i32, serial: u32) {
+        // When a drag is active, send DnD enter/leave to the appropriate data device.
+        if self.dnd_active {
+            // If we were over a different surface, leave it first.
+            if self.dnd_target_surface != 0 && self.dnd_target_surface != surface {
+                self.send_dnd_leave();
+            }
+            // Enter the new surface if it isn't the drag source's own surface.
+            if surface != 0 {
+                self.send_dnd_enter(surface, x, y, serial);
+            }
+        }
         for client in self.clients.values() {
             let Some(pointer) = client.pointer_object() else {
                 continue;
@@ -806,6 +857,10 @@ impl WaylandServer {
     }
 
     fn send_pointer_leave(&mut self, surface: u32, serial: u32) {
+        // When a drag is active, send DnD leave if leaving the current target.
+        if self.dnd_active && self.dnd_target_surface == surface && surface != 0 {
+            self.send_dnd_leave();
+        }
         for client in self.clients.values() {
             let Some(pointer) = client.pointer_object() else {
                 continue;
@@ -824,6 +879,10 @@ impl WaylandServer {
     }
 
     fn send_pointer_motion(&mut self, surface: u32, x: i32, y: i32, time: u32) {
+        // When a drag is active, also send DnD motion to the current target.
+        if self.dnd_active && self.dnd_target_surface == surface && surface != 0 {
+            self.send_dnd_motion(x, y, time);
+        }
         for client in self.clients.values() {
             let Some(pointer) = client.pointer_object() else {
                 continue;
@@ -850,6 +909,10 @@ impl WaylandServer {
         time: u32,
         serial: u32,
     ) {
+        // When the primary button is released during an active drag, complete the drop.
+        if self.dnd_active && !pressed && button == 0 {
+            self.send_dnd_drop();
+        }
         for client in self.clients.values() {
             let Some(pointer) = client.pointer_object() else {
                 continue;
@@ -1030,6 +1093,24 @@ impl WaylandServer {
                 self.broadcast_selection_null();
             }
         }
+        // If the DnD owner disconnected, cancel the drag (clear state without sending
+        // cancelled — the source is gone).
+        if self.dnd_owner == Some(token) {
+            if self.dnd_target_token.is_some() {
+                self.send_dnd_leave();
+            }
+            self.dnd_active = false;
+            self.dnd_owner = None;
+            self.dnd_source_obj = 0;
+            self.dnd_mime_types = Vec::new();
+            debug!("wayland-server: DnD owner disconnected, cancelling drag");
+        }
+        // If the DnD target disconnected during a drag, clear target state.
+        if self.dnd_target_token == Some(token) {
+            self.dnd_target_surface = 0;
+            self.dnd_target_token = None;
+            self.dnd_offer_id = 0;
+        }
     }
 
     // ── Clipboard helpers ────────────────────────────────────────────────
@@ -1142,11 +1223,49 @@ impl WaylandServer {
     }
 
     /// Handle `wl_data_offer.receive`:
-    /// forward the write end of the pipe to the clipboard source client so
-    /// it can write the requested data.
-    fn handle_offer_receive(&mut self, write_fd: u32, mime_type: String) {
+    /// forward the write end of the pipe to the clipboard or DnD source client
+    /// so it can write the requested data.
+    fn handle_offer_receive(&mut self, offer_obj: u32, mime_type: String, write_fd: u32) {
         use crate::wayland::wire::encode_string;
 
+        // If a drag is active and this offer is the DnD offer, route to DnD source.
+        if self.dnd_active && self.dnd_offer_id != 0 && offer_obj == self.dnd_offer_id {
+            let (source_client_fd, source_obj) = {
+                let owner_tok = match self.dnd_owner {
+                    Some(t) => t,
+                    None => {
+                        warn!("wayland-server: data_offer.receive (DnD): no drag owner");
+                        return;
+                    }
+                };
+                let owner = match self.clients.get(&owner_tok) {
+                    Some(c) => c,
+                    None => {
+                        warn!("wayland-server: data_offer.receive (DnD): drag owner gone");
+                        return;
+                    }
+                };
+                (owner.fd, self.dnd_source_obj)
+            };
+            for client in self.clients.values() {
+                if client.fd == source_client_fd {
+                    // wl_data_source.send(mime_type: string, fd: fd) — opcode 1
+                    client.send_with_fds(source_obj, 1, &encode_string(&mime_type), &[write_fd]);
+                    debug!(
+                        "wayland-server: routed DnD data_offer.receive fd={} mime=\"{}\" to source fd={}",
+                        write_fd, mime_type, source_client_fd
+                    );
+                    return;
+                }
+            }
+            warn!(
+                "wayland-server: data_offer.receive (DnD): source fd={} not found",
+                source_client_fd
+            );
+            return;
+        }
+
+        // Clipboard path — existing logic.
         let (source_client_fd, source_obj) = {
             let owner_tok = match self.clipboard_owner {
                 Some(t) => t,
@@ -1181,6 +1300,252 @@ impl WaylandServer {
             "wayland-server: data_offer.receive: source client fd={} not found",
             source_client_fd
         );
+    }
+
+    // ── Drag-and-drop helpers ────────────────────────────────────────────
+
+    /// Handle `wl_data_device.start_drag`:
+    /// record the drag owner and source; the compositor will synthesise
+    /// DnD enter/leave/motion/drop events as the pointer moves.
+    fn handle_start_drag(
+        &mut self,
+        owner_token: WaitToken,
+        source_obj: u32,
+        _origin_surface: u32,
+        _icon_surface: u32,
+        _serial: u32,
+    ) {
+        // Cancel any previous drag.
+        if self.dnd_active {
+            if self.dnd_target_token.is_some() {
+                self.send_dnd_leave();
+            }
+            if let Some(prev_tok) = self.dnd_owner {
+                if prev_tok != owner_token {
+                    if let Some(prev_client) = self.clients.get(&prev_tok) {
+                        // wl_data_source.cancelled — opcode 2
+                        prev_client.send(self.dnd_source_obj, 2, &[]);
+                    }
+                }
+            }
+        }
+
+        // Collect MIME types from the new source.
+        let mime_types = if source_obj != 0 {
+            match self.clients.get(&owner_token).and_then(|c| {
+                c.objects.get(&source_obj).and_then(|e| {
+                    if let crate::wayland::client::ObjectEntry::DataSource { mime_types } = e {
+                        Some(mime_types.clone())
+                    } else {
+                        None
+                    }
+                })
+            }) {
+                Some(mimes) => mimes,
+                None => Vec::new(),
+            }
+        } else {
+            Vec::new()
+        };
+
+        self.dnd_active = true;
+        self.dnd_owner = Some(owner_token);
+        self.dnd_source_obj = source_obj;
+        self.dnd_mime_types = mime_types;
+        self.dnd_target_surface = 0;
+        self.dnd_target_token = None;
+        self.dnd_offer_id = 0;
+
+        info!(
+            "wayland-server: DnD started source={} mimes={}",
+            source_obj,
+            self.dnd_mime_types.len()
+        );
+    }
+
+    /// Send `wl_data_device.enter` + supporting events to the client owning
+    /// `bloom_surface`.  Called when the pointer enters a new surface during a drag.
+    fn send_dnd_enter(&mut self, bloom_surface: u32, x: i32, y: i32, serial: u32) {
+        use crate::wayland::wire::encode_string;
+
+        // Find the client that owns this surface.
+        let (target_token, wl_surface, dd_obj) = {
+            let mut found = None;
+            for (tok, client) in &self.clients {
+                if let Some(ws) = client.wl_surface_for_bloom_surface(bloom_surface) {
+                    if let Some(dd) = client.data_device_obj {
+                        found = Some((*tok, ws, dd));
+                        break;
+                    }
+                }
+            }
+            match found {
+                Some(f) => f,
+                None => return, // target has no data device — skip
+            }
+        };
+
+        let offer_id = self.alloc_server_id();
+        let mime_types = self.dnd_mime_types.clone();
+
+        if let Some(client) = self.clients.get_mut(&target_token) {
+            // Register the offer object on the target client.
+            client.insert(offer_id, crate::wayland::client::ObjectEntry::DataOffer);
+
+            // wl_data_device.data_offer(offer_id) — opcode 0: announce new offer
+            client.send(dd_obj, 0, &offer_id.to_ne_bytes());
+
+            // wl_data_offer.offer(mime_type) — opcode 0: advertise each MIME type
+            for mime in &mime_types {
+                client.send(offer_id, 0, &encode_string(mime));
+            }
+
+            // wl_data_offer.source_actions(dnd_actions) — opcode 1
+            // Advertise copy (bit 0 = 1) as the supported DnD action.
+            client.send(offer_id, 1, &1u32.to_ne_bytes());
+
+            // wl_data_device.enter(serial, surface, x, y, offer) — opcode 1
+            let mut payload = Vec::new();
+            payload.extend_from_slice(&serial.to_ne_bytes());
+            payload.extend_from_slice(&wl_surface.to_ne_bytes());
+            payload.extend_from_slice(&wl_fixed(x).to_ne_bytes());
+            payload.extend_from_slice(&wl_fixed(y).to_ne_bytes());
+            payload.extend_from_slice(&offer_id.to_ne_bytes());
+            client.send(dd_obj, 1, &payload);
+
+            // wl_data_offer.action(dnd_action) — opcode 2: selected action = copy
+            client.send(offer_id, 2, &1u32.to_ne_bytes());
+
+            debug!(
+                "wayland-server: DnD enter surface={} offer={} x={} y={}",
+                bloom_surface, offer_id, x, y
+            );
+        }
+
+        self.dnd_target_surface = bloom_surface;
+        self.dnd_target_token = Some(target_token);
+        self.dnd_offer_id = offer_id;
+    }
+
+    /// Send `wl_data_device.leave` to the current drag target.
+    fn send_dnd_leave(&mut self) {
+        if let Some(tok) = self.dnd_target_token {
+            if let Some(client) = self.clients.get(&tok) {
+                if let Some(dd_obj) = client.data_device_obj {
+                    // wl_data_device.leave() — opcode 2, no payload
+                    client.send(dd_obj, 2, &[]);
+                    debug!("wayland-server: DnD leave surface={}", self.dnd_target_surface);
+                }
+            }
+        }
+        self.dnd_target_surface = 0;
+        self.dnd_target_token = None;
+        self.dnd_offer_id = 0;
+    }
+
+    /// Send `wl_data_device.motion` to the current drag target.
+    fn send_dnd_motion(&mut self, x: i32, y: i32, time: u32) {
+        if let Some(tok) = self.dnd_target_token {
+            if let Some(client) = self.clients.get(&tok) {
+                if let Some(dd_obj) = client.data_device_obj {
+                    // wl_data_device.motion(time_msec, x, y) — opcode 3
+                    let mut payload = Vec::new();
+                    payload.extend_from_slice(&time.to_ne_bytes());
+                    payload.extend_from_slice(&wl_fixed(x).to_ne_bytes());
+                    payload.extend_from_slice(&wl_fixed(y).to_ne_bytes());
+                    client.send(dd_obj, 3, &payload);
+                }
+            }
+        }
+    }
+
+    /// Send `wl_data_device.drop` to the current drag target and
+    /// `wl_data_source.dnd_drop_performed` to the drag source.
+    /// The drag is considered pending finish until the target calls
+    /// `wl_data_offer.finish` (handled in `handle_dnd_finish`).
+    fn send_dnd_drop(&mut self) {
+        // Send drop to target.
+        if let Some(tok) = self.dnd_target_token {
+            if let Some(client) = self.clients.get(&tok) {
+                if let Some(dd_obj) = client.data_device_obj {
+                    // wl_data_device.drop() — opcode 4, no payload
+                    client.send(dd_obj, 4, &[]);
+                    debug!("wayland-server: DnD drop surface={}", self.dnd_target_surface);
+                }
+            }
+        } else {
+            // No target — cancelled (pointer was not over any surface with a data device).
+            if let Some(tok) = self.dnd_owner {
+                if let Some(client) = self.clients.get(&tok) {
+                    if self.dnd_source_obj != 0 {
+                        // wl_data_source.cancelled — opcode 2
+                        client.send(self.dnd_source_obj, 2, &[]);
+                    }
+                }
+            }
+            self.dnd_active = false;
+            self.dnd_owner = None;
+            self.dnd_source_obj = 0;
+            self.dnd_mime_types = Vec::new();
+            return;
+        }
+
+        // Notify the source that the drop was performed.
+        if let Some(tok) = self.dnd_owner {
+            if let Some(client) = self.clients.get(&tok) {
+                if self.dnd_source_obj != 0 {
+                    // wl_data_source.dnd_drop_performed — opcode 3, no payload
+                    client.send(self.dnd_source_obj, 3, &[]);
+                }
+            }
+        }
+        // DnD state cleared by `handle_dnd_finish` once the target is done.
+    }
+
+    /// Handle `wl_data_offer.finish`:
+    /// the target has accepted the drop — send `wl_data_source.dnd_finished`
+    /// to the source and clear the DnD state.
+    fn handle_dnd_finish(&mut self, _receiver_token: WaitToken) {
+        if let Some(tok) = self.dnd_owner {
+            if let Some(client) = self.clients.get(&tok) {
+                if self.dnd_source_obj != 0 {
+                    // wl_data_source.dnd_finished — opcode 4, no payload
+                    client.send(self.dnd_source_obj, 4, &[]);
+                    debug!("wayland-server: DnD finished source={}", self.dnd_source_obj);
+                }
+            }
+        }
+        self.dnd_active = false;
+        self.dnd_owner = None;
+        self.dnd_source_obj = 0;
+        self.dnd_mime_types = Vec::new();
+        self.dnd_target_surface = 0;
+        self.dnd_target_token = None;
+        self.dnd_offer_id = 0;
+    }
+
+    /// Handle `wl_data_offer.accept`:
+    /// the target accepted (or rejected) a MIME type — forward
+    /// `wl_data_source.target(mime_type)` to the source.
+    fn handle_dnd_accept(&mut self, _receiver_token: WaitToken, mime: String) {
+        if !self.dnd_active {
+            return;
+        }
+        if let Some(tok) = self.dnd_owner {
+            if let Some(client) = self.clients.get(&tok) {
+                if self.dnd_source_obj != 0 {
+                    use crate::wayland::wire::encode_string;
+                    // wl_data_source.target(mime_type: string|null) — opcode 0
+                    // Empty mime means null (no accepted type).
+                    // Wayland null strings are encoded as a single 0-uint (no NUL byte).
+                    if mime.is_empty() {
+                        client.send(self.dnd_source_obj, 0, &0u32.to_ne_bytes());
+                    } else {
+                        client.send(self.dnd_source_obj, 0, &encode_string(&mime));
+                    }
+                }
+            }
+        }
     }
 }
 

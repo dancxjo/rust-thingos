@@ -164,10 +164,11 @@ Remaining open items are in the **known gaps** section below.
 | `create_data_source`  | ✅       |                                                    |
 | `get_data_device`     | ✅       |                                                    |
 | `set_selection`       | ✅       | Broadcasts `wl_data_offer` to all other clients    |
-| `data_offer.receive`  | ✅       | Routes write-fd to source client                   |
+| `data_offer.receive`  | ✅       | Routes write-fd to source client (clipboard + DnD) |
 | `selection` (event)   | ✅       | Null selection on owner disconnect                 |
-| `start_drag`          | ⚠️ no-op| Drag-and-drop not yet implemented                  |
-| `wl_data_offer.finish`| ⚠️ no-op| DnD only                                           |
+| `start_drag`          | ✅       | Tracks drag source; sends enter/leave/motion/drop  |
+| `wl_data_offer.accept`| ✅       | Forwards `wl_data_source.target` to source         |
+| `wl_data_offer.finish`| ✅       | Sends `wl_data_source.dnd_finished` to source      |
 
 ---
 
@@ -272,7 +273,8 @@ Remaining open items are in the **known gaps** section below.
 | `xdg_popup.popup_done`                | Medium   | Compositor should dismiss popups on click outside   |
 | `zwlr_layer_surface_v1.closed` event  | Low      | Needed for compositor-initiated layer surface close |
 | `zwp_linux_dmabuf_feedback_v1`        | Low      | DMABuf format/modifier feedback for v4+             |
-| `wl_data_device` drag-and-drop        | Low      | `start_drag` is a no-op                             |
+| `wl_pointer.frame` grouping           | Low      | Batching pointer events into frame groups           |
+| `wl_data_device` drag-and-drop        | ✅ Done  | `start_drag` implemented; enter/leave/motion/drop events sent |
 | `xdg_positioner` (full)               | Low      | Gravity, constraint adjustment not honoured         |
 | `wp_fractional_scale_v1`              | Low      | HiDPI fractional scaling                           |
 | `xdg_activation_v1`                  | Low      | Focus-stealing prevention                          |
