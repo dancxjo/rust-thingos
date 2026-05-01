@@ -10227,6 +10227,7 @@ name = "xhci"
 version = "0.1.0"
 dependencies = [
  "abi",
+ "ipc_helpers",
  "stem",
 ]
 
