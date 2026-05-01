@@ -47,9 +47,10 @@
 //!
 //! The `display_bootfb` driver provides a software fallback for all commands
 //! when the destination is `BufferId(0)` (the boot framebuffer).  Operations
-//! targeting other buffers return `EINVAL` on backends that do not support
-//! off-screen compositing.  Capability flags in [`super::types::DisplayCaps`]
-//! tell callers exactly which operations the backend supports.
+//! targeting other buffers are currently unsupported; see the **v1 Buffer
+//! Contract** section above for the errors they return.  Capability flags in
+//! [`super::types::DisplayCaps`] tell callers exactly which operations the
+//! backend supports.
 //!
 //! # Future: multi-buffer GPU path
 //!

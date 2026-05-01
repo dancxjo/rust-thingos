@@ -259,9 +259,13 @@ impl DisplayBufferDesc {
     /// 3. `modifier == 0` (linear).
     pub const fn is_valid_accel2d_src(&self) -> bool {
         let bpp = self.format.bytes_per_pixel();
-        bpp == 4
-            && self.stride as usize >= self.width as usize * bpp
-            && self.modifier == 0
+        if bpp != 4 {
+            return false;
+        }
+        // Use u64 arithmetic to avoid overflow on 32-bit targets where
+        // `usize` is 32 bits and `width * 4` could wrap for very large widths.
+        let min_stride = (self.width as u64).saturating_mul(bpp as u64);
+        self.stride as u64 >= min_stride && self.modifier == 0
     }
 }
 
