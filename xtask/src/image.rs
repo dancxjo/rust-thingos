@@ -209,6 +209,7 @@ pub fn default_programs() -> Vec<ProgramConfig> {
         },
         ProgramConfig { name: "bristle", is_init: false, boot_module: true, features: vec![] },
         ProgramConfig { name: "rtc_cmos", is_init: true, boot_module: true, features: vec![] },
+        ProgramConfig { name: "hwrng", is_init: true, boot_module: true, features: vec![] },
         ProgramConfig { name: "ps2_kbd", is_init: false, boot_module: true, features: vec![] },
         ProgramConfig { name: "sh", is_init: true, boot_module: true, features: vec![] },
         ProgramConfig { name: "ls", is_init: true, boot_module: true, features: vec![] },

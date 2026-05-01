@@ -88,7 +88,7 @@ pub static MANIFEST: ManifestHeader = ManifestHeader {
 
 /// Collect entropy from timing jitter between monotonic reads and mix in the
 /// current counter to ensure each sample is unique.
-fn collect_entropy(buf: &mut [u8; 64], counter: u64) {
+fn collect_entropy_jitter(buf: &mut [u8; 64], counter: u64) {
     // Sample the monotonic clock several times; the jitter between samples
     // contains genuine hardware timing noise.
     let mut accum: u64 = counter.wrapping_mul(0x9e3779b97f4a7c15);
@@ -119,6 +119,45 @@ fn collect_entropy(buf: &mut [u8; 64], counter: u64) {
     }
 }
 
+#[cfg(target_arch = "x86_64")]
+fn has_rdrand() -> bool {
+    let cpuid = unsafe { core::arch::x86_64::__cpuid(1) };
+    (cpuid.ecx & (1 << 30)) != 0
+}
+
+#[cfg(target_arch = "x86_64")]
+fn collect_entropy_rdrand(buf: &mut [u8; 64]) -> bool {
+    let mut i = 0;
+    while i < 64 {
+        let mut val: u64 = 0;
+        let success = unsafe { core::arch::x86_64::_rdrand64_step(&mut val) };
+        if success == 1 {
+            let bytes = val.to_ne_bytes();
+            let chunk_size = core::cmp::min(8, 64 - i);
+            buf[i..i + chunk_size].copy_from_slice(&bytes[..chunk_size]);
+            i += chunk_size;
+        } else {
+            // RDRAND failed, might be out of entropy temporarily
+            stem::yield_now();
+        }
+    }
+    true
+}
+
+fn collect_entropy(buf: &mut [u8; 64], counter: u64) {
+    #[cfg(target_arch = "x86_64")]
+    {
+        if has_rdrand() {
+            if collect_entropy_rdrand(buf) {
+                return;
+            }
+        }
+    }
+    
+    // Fallback to jitter if not x86_64 or rdrand is not available
+    collect_entropy_jitter(buf, counter);
+}
+
 #[stem::main]
 fn main(arg: usize) -> ! {
     let cpu = stem::arch::whoami();
@@ -136,6 +175,16 @@ fn main(arg: usize) -> ! {
     } else {
         debug!("hwrng: Starting without explicit context (phased boot mode).");
     }
+
+    #[cfg(target_arch = "x86_64")]
+    if has_rdrand() {
+        info!("hwrng: RDRAND instruction is available and will be used.");
+    } else {
+        info!("hwrng: RDRAND is not available, falling back to timing jitter.");
+    }
+    
+    #[cfg(not(target_arch = "x86_64"))]
+    info!("hwrng: Non-x86_64 architecture, using timing jitter.");
 
     // Perform an initial seeding of the kernel entropy pool.
     let mut entropy_buf = [0u8; 64];

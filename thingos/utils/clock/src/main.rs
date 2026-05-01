@@ -30,7 +30,7 @@ const TOPLEVEL_ID: u32 = 12;
 const PISTIL_PATH: &str = "/lib/libpistil.so";
 const DRAW_DSEG7_TEXT_SYMBOL: &[u8] = b"pistil_draw_dseg7_text";
 const DSEG7_FONT_PATH: &str = "/share/fonts/DSEG7Classic-Regular.ttf";
-const SERIAL_TICK_INTERVAL_NS: u64 = 3_000_000_000;
+const SERIAL_TICK_INTERVAL_NS: u64 = 37_000_000_000;
 const TZ_REFRESH_INTERVAL_NS: u64 = 60_000_000_000;
 const CLOCK_PRIORITY_LOW: usize = 1;
 const IDLE_SLEEP_MS: u64 = 250;
@@ -115,10 +115,10 @@ fn main(_arg: usize) -> ! {
         let realtime = local_datetime(tz_offset);
         let (time_text, date_text) = match realtime {
             Some((dt, _, _)) => (
-                format!("{:02}:{:02}:{:02}", dt.hour, dt.minute, dt.second),
+                format!("{:02}:{:02}", dt.hour, dt.minute),
                 format!("{:04}-{:02}-{:02} UTC{:+}", dt.year, dt.month, dt.day, tz_offset),
             ),
-            None => ("00:00:00".into(), format!("WAITING FOR RTC UTC{:+}", tz_offset)),
+            None => ("00:00".into(), format!("WAITING FOR RTC UTC{:+}", tz_offset)),
         };
 
         if now_ns.saturating_sub(last_serial_tick_ns) >= SERIAL_TICK_INTERVAL_NS {
@@ -335,7 +335,7 @@ fn render_clock(
             text_x,
             text_y,
             px_size,
-            "88:88:88",
+            "88:88",
             0x12B58900,
         );
         for (dx, dy, color) in
