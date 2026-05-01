@@ -397,6 +397,7 @@ impl BloomWorld {
         let (pointer_x, pointer_y) = self.input.visible_pointer_position();
         let cursor_kind = self.input.visible_cursor_kind();
         let cursor = self.visuals.cursor_plane(&self.display, cursor_kind, pointer_x, pointer_y);
+        let use_hw_cursor = self.display.supports_hw_cursor() && !self.input.has_pointer_grab();
 
         // ── Hardware cursor fast path ──────────────────────────────────────
         // When the display driver supports hardware cursor planes and there is
@@ -404,7 +405,7 @@ impl BloomWorld {
         // scene recomposition and issue a lightweight cursor position update
         // instead. Frames with content damage reassert the cursor after the
         // framebuffer commit so the scanout update cannot cover it.
-        if self.display.supports_hw_cursor() {
+        if use_hw_cursor {
             // (Re-)upload the cursor image whenever the buffer changes.
             if let Some(c) = cursor {
                 if self.hw_cursor_buffer != Some(c.buffer_id) {
@@ -466,6 +467,14 @@ impl BloomWorld {
                 // restore dirty so we retry on the next frame.
                 self.damage.mark_full(self.primary.width, self.primary.height);
             }
+        } else if self.hw_cursor_buffer.is_some()
+            && self.hw_cursor_position.map(|(_, _, visible)| visible).unwrap_or(true)
+        {
+            // During move/resize grabs, composite the cursor with the scene so
+            // the cursor and dragged window are presented atomically.
+            if self.display.move_cursor(pointer_x, pointer_y, false) {
+                self.hw_cursor_position = Some((pointer_x, pointer_y, false));
+            }
         }
 
         let pending_damage = self.damage.take();
@@ -479,11 +488,7 @@ impl BloomWorld {
         // independently; pass `None` to the software compositor so it is not
         // also blended as a plane.
         let compositor_cursor =
-            if self.display.supports_hw_cursor() && self.hw_cursor_buffer.is_some() {
-                None
-            } else {
-                cursor
-            };
+            if use_hw_cursor && self.hw_cursor_buffer.is_some() { None } else { cursor };
 
         let (body_overlay, chrome_overlay) = self.visuals.chrome_overlay_plane(
             &self.display,
