@@ -3,6 +3,7 @@
 
 extern crate alloc;
 
+mod compositor;
 mod damage;
 mod display;
 mod frame_clock;

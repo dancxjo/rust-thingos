@@ -9,6 +9,7 @@ use alloc::vec::Vec;
 
 use stem::syscall::port_send_all;
 
+use crate::compositor::cull_composition;
 use crate::damage::DamageTracker;
 use crate::display::{DisplayBackend, OutputInfo};
 use crate::input::InputState;
@@ -356,8 +357,24 @@ impl BloomWorld {
             flags.remove(abi::display::CommitFlags::VSYNC);
         }
 
+        // Apply opaque-region culling: remove planes fully hidden by opaque
+        // planes above them, and log aggregate debug counters.
+        let (culled_composition, cull_counters) =
+            cull_composition(&composition, self.primary.width, self.primary.height);
+        if cull_counters.hidden_regions_skipped > 0
+            || cull_counters.fullscreen_direct_present > 0
+        {
+            stem::trace!(
+                "bloom: cull opaque={} blend={} skipped={} fullscreen={}",
+                cull_counters.opaque_planes_copied,
+                cull_counters.alpha_blend_planes,
+                cull_counters.hidden_regions_skipped,
+                cull_counters.fullscreen_direct_present,
+            );
+        }
+
         let result = self.display.present(
-            &composition,
+            &culled_composition,
             &pending_damage,
             self.visuals.fallback_buffer_id(),
             body_overlay,
