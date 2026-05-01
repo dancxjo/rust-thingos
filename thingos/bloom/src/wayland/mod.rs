@@ -787,6 +787,29 @@ impl WaylandServer {
                 let refresh_mhz = u32::from_ne_bytes(data[12..16].try_into().unwrap_or([0; 4]));
                 self.handle_output_info(width, height, refresh_mhz);
             }
+            ipc::WEVT_CLOSE_LAYER_SURFACE => {
+                if data.len() < 8 {
+                    return;
+                }
+                let bloom_surface_id =
+                    u32::from_ne_bytes(data[4..8].try_into().unwrap_or([0; 4]));
+                for client in self.clients.values_mut() {
+                    if let Some(layer_obj_id) =
+                        client.layer_surface_for_bloom_surface(bloom_surface_id)
+                    {
+                        // zwlr_layer_surface_v1.closed — opcode 1, no payload.
+                        // This is a destructor event: the client must destroy
+                        // the object after receiving it.
+                        client.send(layer_obj_id, 1, &[]);
+                        client.destroy(layer_obj_id);
+                        info!(
+                            "wayland-server: sent zwlr_layer_surface_v1.closed obj={} surface={}",
+                            layer_obj_id, bloom_surface_id
+                        );
+                        break;
+                    }
+                }
+            }
             _ => {}
         }
     }
@@ -1699,6 +1722,7 @@ fn wayland_event_len(data: &[u8]) -> Option<usize> {
         ipc::WEVT_KEYBOARD_ENTER => 8,
         ipc::WEVT_KEYBOARD_LEAVE => 8,
         ipc::WEVT_KEYBOARD_KEY => 16,
+        ipc::WEVT_CLOSE_LAYER_SURFACE => 8,
         _ => 1,
     };
     Some(len)

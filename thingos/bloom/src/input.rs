@@ -1209,6 +1209,16 @@ fn send_wayland_toplevel_action(
     let _ = port_send_all(evt_write, &msg);
 }
 
+/// Ask the Wayland server to emit `zwlr_layer_surface_v1.closed` for the given
+/// surface and clean up the layer-surface object.
+pub fn send_wayland_close_layer_surface(wayland_evt_write: Option<u32>, surface_id: u32) {
+    let Some(evt_write) = wayland_evt_write else {
+        return;
+    };
+    let msg = ipc::encode_close_layer_surface(surface_id);
+    let _ = port_send_all(evt_write, &msg);
+}
+
 fn send_wayland_pointer_enter(wayland_evt_write: Option<u32>, surface_id: u32, x: i32, y: i32) {
     let Some(evt_write) = wayland_evt_write else {
         return;
