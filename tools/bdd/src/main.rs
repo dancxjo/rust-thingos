@@ -6,17 +6,13 @@
 //! - BDD_ARCH: Target architecture (default: x86_64)
 //! - BDD_FEATURE: Specific feature file to run (optional)
 
-mod artifacts;
-mod reporter;
-mod steps;
-mod world;
-
 use std::path::PathBuf;
 use std::{fs, io};
 
+use bdd::artifacts;
+use bdd::reporter::ThingOsReporter;
+use bdd::world::ThingOsWorld;
 use cucumber::World;
-use reporter::ThingOsReporter;
-use world::ThingOsWorld;
 
 #[derive(Default, Debug)]
 struct PngCompressionStats {

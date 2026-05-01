@@ -684,14 +684,14 @@ impl DisplayBackend {
                         entry.dest_rect,
                         corner_radius,
                     );
-                } else if entry.alpha == 255 && !is_scaled {
+                } else if entry.is_opaque() && !is_scaled {
                     batch.copy_rect(
                         BufferId(entry.buffer_id),
                         entry.src_rect,
                         BufferId(0),
                         entry.dest_rect,
                     );
-                } else if entry.alpha == 255 && is_scaled && supports_stretch {
+                } else if entry.is_opaque() && is_scaled && supports_stretch {
                     batch.stretch_blit(
                         BufferId(entry.buffer_id),
                         entry.src_rect,

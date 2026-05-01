@@ -7,7 +7,7 @@ use tokio::net::{TcpStream, UnixStream};
 use tokio::sync::Mutex;
 
 #[derive(Debug, Clone)]
-pub(crate) enum QmpEndpoint {
+pub enum QmpEndpoint {
     Unix(PathBuf),
     Tcp(SocketAddr),
 }

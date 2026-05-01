@@ -77,7 +77,7 @@ pub fn cull_composition(
     // fully-opaque fullscreen surface.
     if output_w > 0 && output_h > 0 {
         for entry in entries.iter().rev() {
-            if entry.is_fullscreen && is_fully_opaque(entry) {
+            if entry.is_fullscreen && entry.is_opaque() {
                 let dr = entry.dest_rect;
                 if dr.x == 0 && dr.y == 0 && dr.w >= output_w && dr.h >= output_h {
                     counters.fullscreen_direct_present += 1;
@@ -94,7 +94,7 @@ pub fn cull_composition(
             counters.hidden_regions_skipped += 1;
             continue;
         }
-        if is_fully_opaque(entry) {
+        if entry.is_opaque() {
             covered.push(entry.dest_rect);
             counters.opaque_planes_copied += 1;
         } else {
@@ -135,34 +135,6 @@ pub fn is_fully_covered(covered: &[Rect], rect: Rect) -> bool {
     covered.iter().any(|c| rect_contains(*c, rect))
 }
 
-/// Returns `true` when `entry` represents a fully-opaque plane.
-///
-/// A plane is fully opaque when **all** of the following hold:
-///
-/// * `alpha == 255` — per-plane opacity is fully opaque.
-/// * No compositor-drawn chrome — chrome (title bars, frames, rounded corners)
-///   makes the visual boundary partially transparent.
-/// * The surface has an explicitly committed opaque region that covers the
-///   entire source buffer area (`x = 0, y = 0, w ≥ src_rect.w,
-///   h ≥ src_rect.h`).
-pub fn is_fully_opaque(entry: &CompositionEntry) -> bool {
-    if entry.alpha < 255 {
-        return false;
-    }
-    // Surfaces with compositor-drawn chrome (title bars, frames) have
-    // rounded corners and shadows that leave partial transparency at the
-    // visual boundary.
-    if !entry.chrome.is_empty() {
-        return false;
-    }
-    let Some(opaque) = entry.opaque_region else {
-        return false;
-    };
-    opaque.x == 0
-        && opaque.y == 0
-        && opaque.w >= entry.src_rect.w
-        && opaque.h >= entry.src_rect.h
-}
 
 // ── unit tests ────────────────────────────────────────────────────────────────
 
@@ -271,20 +243,20 @@ mod tests {
     #[test]
     fn opaque_entry_is_detected() {
         let e = opaque_entry(1, r(0, 0, 800, 600));
-        assert!(is_fully_opaque(&e));
+        assert!(e.is_opaque());
     }
 
     #[test]
     fn no_opaque_region_is_not_opaque() {
         let e = alpha_entry(1, r(0, 0, 800, 600));
-        assert!(!is_fully_opaque(&e));
+        assert!(!e.is_opaque());
     }
 
     #[test]
     fn partial_opaque_region_is_not_fully_opaque() {
         // Opaque region covers only half the surface.
         let e = entry(1, r(0, 0, 800, 600), 800, 600, Some(r(0, 0, 400, 600)), SurfaceChrome::default());
-        assert!(!is_fully_opaque(&e));
+        assert!(!e.is_opaque());
     }
 
     #[test]
@@ -298,14 +270,14 @@ mod tests {
             Some(r(0, 0, 800, 600)),
             chrome,
         );
-        assert!(!is_fully_opaque(&e));
+        assert!(!e.is_opaque());
     }
 
     #[test]
     fn alpha_below_255_is_not_opaque() {
         let mut e = opaque_entry(1, r(0, 0, 800, 600));
         e.alpha = 200;
-        assert!(!is_fully_opaque(&e));
+        assert!(!e.is_opaque());
     }
 
     // ── cull_composition: no-cover cases ────────────────────────────────────

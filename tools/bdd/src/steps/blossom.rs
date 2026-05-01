@@ -3,7 +3,7 @@ use cucumber::{given, then, when};
 use super::basic::turn_on_machine;
 use super::helpers::{StepError, capture_failure_diagnostics, color_close};
 use crate::input::{
-    WindowInfo, drag_pointer, find_window as find_shared_window, qmp_mouse_rel,
+    WindowInfo, drag_pointer, find_window as find_shared_window,
     read_wayland_windows as read_shared_wayland_windows, send_qmp_sequence,
 };
 use crate::world::ThingOsWorld;

@@ -91,10 +91,8 @@ impl FatFs {
         let root_entry_count = u16::from_le_bytes([boot[17], boot[18]]) as u32;
 
         let total_sectors_16 = u16::from_le_bytes([boot[19], boot[20]]) as u64;
-        let total_sectors_32 =
-            u32::from_le_bytes([boot[32], boot[33], boot[34], boot[35]]) as u64;
-        let total_sectors =
-            if total_sectors_16 != 0 { total_sectors_16 } else { total_sectors_32 };
+        let total_sectors_32 = u32::from_le_bytes([boot[32], boot[33], boot[34], boot[35]]) as u64;
+        let total_sectors = if total_sectors_16 != 0 { total_sectors_16 } else { total_sectors_32 };
         if total_sectors == 0 {
             return None;
         }
@@ -103,10 +101,8 @@ impl FatFs {
 
         let (fat_type, fat_size_sectors, root_first_cluster) = if root_entry_count == 0 {
             // FAT32: root_entry_count is 0 and fat_size_16 is 0
-            let fat_size_32 =
-                u32::from_le_bytes([boot[36], boot[37], boot[38], boot[39]]);
-            let root_cluster =
-                u32::from_le_bytes([boot[44], boot[45], boot[46], boot[47]]);
+            let fat_size_32 = u32::from_le_bytes([boot[36], boot[37], boot[38], boot[39]]);
+            let root_cluster = u32::from_le_bytes([boot[44], boot[45], boot[46], boot[47]]);
             if fat_size_32 == 0 {
                 return None;
             }
@@ -119,10 +115,8 @@ impl FatFs {
         };
 
         // Root directory region (FAT16 only)
-        let root_dir_sectors =
-            (root_entry_count * 32 + bytes_per_sector - 1) / bytes_per_sector;
-        let root_dir_first_sector =
-            (reserved_sectors + num_fats * fat_size_sectors) as u64;
+        let root_dir_sectors = (root_entry_count * 32 + bytes_per_sector - 1) / bytes_per_sector;
+        let root_dir_first_sector = (reserved_sectors + num_fats * fat_size_sectors) as u64;
 
         // First sector of the data area (cluster 2)
         let data_start_sector = root_dir_first_sector + root_dir_sectors as u64;
@@ -150,11 +144,7 @@ impl FatFs {
     }
 
     /// Read the FAT entry for `cluster` and return the next cluster in the chain.
-    pub fn next_cluster(
-        &self,
-        dev: &dyn BlockDevice,
-        cluster: u32,
-    ) -> Option<u32> {
+    pub fn next_cluster(&self, dev: &dyn BlockDevice, cluster: u32) -> Option<u32> {
         let bytes_per_entry: u64 = match self.fat_type {
             FatType::Fat16 => 2,
             FatType::Fat32 => 4,
@@ -202,9 +192,8 @@ impl FatFs {
 
         if matches!(self.fat_type, FatType::Fat16) && first_cluster == 0 {
             // FAT16 root directory occupies a fixed region
-            let num_sectors =
-                (self.root_dir_entry_count * 32 + self.bytes_per_sector - 1)
-                    / self.bytes_per_sector;
+            let num_sectors = (self.root_dir_entry_count * 32 + self.bytes_per_sector - 1)
+                / self.bytes_per_sector;
             for i in 0..num_sectors {
                 let sector = self.root_dir_first_sector + i as u64;
                 let mut buf = [0u8; 512];
@@ -337,8 +326,7 @@ impl FatFs {
             return Vec::new();
         }
         let actual_len = len.min((size as u64 - offset) as usize);
-        let cluster_size =
-            (self.sectors_per_cluster as u64) * (self.bytes_per_sector as u64);
+        let cluster_size = (self.sectors_per_cluster as u64) * (self.bytes_per_sector as u64);
 
         let start_ci = (offset / cluster_size) as u32;
         let end_ci = ((offset + actual_len as u64 - 1) / cluster_size) as u32;
@@ -368,11 +356,9 @@ impl FatFs {
             let cluster_byte_end = cluster_byte_start + cluster_size;
 
             // Byte range within this cluster that we want
-            let want_start =
-                (offset.max(cluster_byte_start) - cluster_byte_start) as usize;
+            let want_start = (offset.max(cluster_byte_start) - cluster_byte_start) as usize;
             let want_end =
-                ((offset + actual_len as u64).min(cluster_byte_end) - cluster_byte_start)
-                    as usize;
+                ((offset + actual_len as u64).min(cluster_byte_end) - cluster_byte_start) as usize;
 
             let first_sector = self.cluster_to_sector(c);
             for s in 0..self.sectors_per_cluster as u64 {
@@ -438,10 +424,12 @@ fn parse_short_name(raw: &[u8]) -> Option<String> {
 
 #[cfg(test)]
 mod tests {
-    use super::*;
     use alloc::string::ToString;
     use alloc::vec;
+
     use stem::block::BlockError;
+
+    use super::*;
 
     struct MockDev {
         data: Vec<u8>,
@@ -465,6 +453,22 @@ mod tests {
     #[test]
     fn probe_rejects_invalid_signature() {
         let data = vec![0u8; 1024];
+        let dev = MockDev { data };
+        assert!(FatFs::probe(&dev).is_none());
+    }
+
+    #[test]
+    fn probe_rejects_invalid_cluster_size() {
+        let mut data = vec![0u8; 1024];
+        data[11..13].copy_from_slice(&512u16.to_le_bytes());
+        data[13] = 3; // FAT requires a non-zero power-of-two sectors/cluster.
+        data[14..16].copy_from_slice(&1u16.to_le_bytes());
+        data[16] = 1;
+        data[17..19].copy_from_slice(&16u16.to_le_bytes());
+        data[19..21].copy_from_slice(&32u16.to_le_bytes());
+        data[22..24].copy_from_slice(&1u16.to_le_bytes());
+        data[510] = 0x55;
+        data[511] = 0xAA;
         let dev = MockDev { data };
         assert!(FatFs::probe(&dev).is_none());
     }
@@ -530,7 +534,9 @@ mod tests {
         // Boot sector
         {
             let s = &mut img[0..SECTOR_SIZE];
-            s[0] = 0xEB; s[1] = 0x58; s[2] = 0x90;
+            s[0] = 0xEB;
+            s[1] = 0x58;
+            s[2] = 0x90;
             s[3..11].copy_from_slice(b"MSWIN4.1");
             s[11..13].copy_from_slice(&(SECTOR_SIZE as u16).to_le_bytes());
             s[13] = SECTORS_PER_CLUSTER as u8;
@@ -552,9 +558,12 @@ mod tests {
 
         // FAT1: entries 0+1 = media/EOC, entry 2 = EOC (hello.txt)
         let fat1 = RESERVED as usize * SECTOR_SIZE;
-        img[fat1] = 0xF8; img[fat1 + 1] = 0xFF; // entry 0
-        img[fat1 + 2] = 0xFF; img[fat1 + 3] = 0xFF; // entry 1
-        img[fat1 + 4] = 0xFF; img[fat1 + 5] = 0xFF; // entry 2 = EOC
+        img[fat1] = 0xF8;
+        img[fat1 + 1] = 0xFF; // entry 0
+        img[fat1 + 2] = 0xFF;
+        img[fat1 + 3] = 0xFF; // entry 1
+        img[fat1 + 4] = 0xFF;
+        img[fat1 + 5] = 0xFF; // entry 2 = EOC
 
         // FAT2 mirror
         let fat2 = (RESERVED + FAT_SIZE) as usize * SECTOR_SIZE;
@@ -599,5 +608,75 @@ mod tests {
         // Partial read
         let partial = fs.read_file(&dev, 2, content.len() as u32, 6, 4);
         assert_eq!(partial, b"test");
+    }
+
+    #[test]
+    fn roundtrip_fat32_root_file() {
+        const SECTOR_SIZE: usize = 512;
+        const TOTAL_SECTORS: u32 = 32;
+        const RESERVED: u32 = 1;
+        const NUM_FATS: u32 = 1;
+        const FAT_SIZE: u32 = 1;
+        const ROOT_CLUSTER: u32 = 2;
+        const FILE_CLUSTER: u32 = 3;
+
+        let mut img = vec![0u8; TOTAL_SECTORS as usize * SECTOR_SIZE];
+
+        {
+            let s = &mut img[0..SECTOR_SIZE];
+            s[0] = 0xEB;
+            s[1] = 0x58;
+            s[2] = 0x90;
+            s[3..11].copy_from_slice(b"MSWIN4.1");
+            s[11..13].copy_from_slice(&(SECTOR_SIZE as u16).to_le_bytes());
+            s[13] = 1;
+            s[14..16].copy_from_slice(&(RESERVED as u16).to_le_bytes());
+            s[16] = NUM_FATS as u8;
+            s[17..19].copy_from_slice(&0u16.to_le_bytes());
+            s[32..36].copy_from_slice(&TOTAL_SECTORS.to_le_bytes());
+            s[36..40].copy_from_slice(&FAT_SIZE.to_le_bytes());
+            s[44..48].copy_from_slice(&ROOT_CLUSTER.to_le_bytes());
+            s[82..90].copy_from_slice(b"FAT32   ");
+            s[510] = 0x55;
+            s[511] = 0xAA;
+        }
+
+        let fat = RESERVED as usize * SECTOR_SIZE;
+        img[fat..fat + 4].copy_from_slice(&0x0FFF_FFF8u32.to_le_bytes());
+        img[fat + 4..fat + 8].copy_from_slice(&0x0FFF_FFFFu32.to_le_bytes());
+        img[fat + (ROOT_CLUSTER as usize * 4)..fat + (ROOT_CLUSTER as usize * 4) + 4]
+            .copy_from_slice(&0x0FFF_FFFFu32.to_le_bytes());
+        img[fat + (FILE_CLUSTER as usize * 4)..fat + (FILE_CLUSTER as usize * 4) + 4]
+            .copy_from_slice(&0x0FFF_FFFFu32.to_le_bytes());
+
+        let data_start = (RESERVED + NUM_FATS * FAT_SIZE) as usize;
+        let root = data_start * SECTOR_SIZE;
+        img[root..root + 8].copy_from_slice(b"README  ");
+        img[root + 8..root + 11].copy_from_slice(b"TXT");
+        img[root + 11] = 0x20;
+        img[root + 20..root + 22].copy_from_slice(&((FILE_CLUSTER >> 16) as u16).to_le_bytes());
+        img[root + 26..root + 28].copy_from_slice(&((FILE_CLUSTER & 0xFFFF) as u16).to_le_bytes());
+        let content = b"fat32 hello\n";
+        img[root + 28..root + 32].copy_from_slice(&(content.len() as u32).to_le_bytes());
+
+        let file_sector = (data_start + (FILE_CLUSTER as usize - 2)) * SECTOR_SIZE;
+        img[file_sector..file_sector + content.len()].copy_from_slice(content);
+
+        let dev = MockDev { data: img };
+        let fs = FatFs::probe(&dev).expect("FAT32 probe should succeed");
+        assert_eq!(fs.fat_type, FatType::Fat32);
+        assert_eq!(fs.root_first_cluster, ROOT_CLUSTER);
+
+        let entries = fs.list_dir(&dev, ROOT_CLUSTER);
+        assert_eq!(entries.len(), 1);
+        assert_eq!(entries[0].name, "readme.txt");
+        assert_eq!(entries[0].first_cluster, FILE_CLUSTER);
+
+        let entry = fs.lookup_path(&dev, "README.TXT").expect("lookup should ignore case");
+        assert_eq!(entry.size, content.len() as u32);
+        assert_eq!(
+            fs.read_file(&dev, entry.first_cluster, entry.size, 0, entry.size as usize),
+            content
+        );
     }
 }

@@ -1,31 +1,24 @@
-Feature: USB FAT storage read-only mount
+Feature: Reading files from a USB FAT volume
+  A USB mass-storage device with a FAT partition should appear as ordinary
+  read-only media. Users should not need to care that xHCI, partition scanning,
+  and fatd are separate userland services.
 
   Background:
     Given the machine is booted with a USB FAT image
 
-  Scenario: USB block device appears in /dev/block
+  Scenario: The USB FAT partition is discovered and mounted
     When I wait for the shell prompt
-    Then the path "/dev/block/usb0" should exist
-
-  Scenario: Partition scanner detects the MBR partition table
-    When I wait for the shell prompt
-    Then the log should match pattern "ums: MBR partition 1 type="
-
-  Scenario: Partition block device is exposed in /dev/block
-    When I wait for the shell prompt
-    Then the path "/dev/block/usb0p1" should exist
-
-  Scenario: fatd mounts the FAT partition at /media/usb
-    When I wait for the shell prompt
-    Then the log should match pattern "fatd: found Fat(16|32) filesystem on /dev/block/usb0p1"
+    And I type "ls /dev/block/usb0" on the serial console
+    Then the command output should not contain "No such file"
+    And the log should match pattern "ums: MBR partition 1 type="
+    When I type "ls /dev/block/usb0p1" on the serial console
+    Then the command output should not contain "No such file"
+    And the log should match pattern "fatd: found Fat(16|32) filesystem on /dev/block/usb0p1"
     And the log should match pattern "fatd: mounted /dev/block/usb0p1 at /media/usb"
 
-  Scenario: ls shows directory contents of the mounted FAT volume
+  Scenario: Files on the USB FAT volume can be listed and read
     When I wait for the shell prompt
     And I type "ls /media/usb" on the serial console
-    Then the latest command output should not contain "No such file"
-
-  Scenario: cat reads a known file from the FAT volume
-    When I wait for the shell prompt
-    And I type "cat /media/usb/hello.txt" on the serial console
+    Then the command output should not contain "No such file"
+    When I type "cat /media/usb/hello.txt" on the serial console
     Then the latest command output should contain "hello"

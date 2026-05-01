@@ -178,6 +178,27 @@ enum Commands {
         #[arg(long)]
         loglevel: Option<String>,
     },
+    /// Run the Rust freeze hunter stress loop
+    FreezeHunter {
+        /// Target architecture
+        #[arg(long, short = 'a', default_value = "x86_64")]
+        arch: String,
+        /// Kernel serial silence timeout before a freeze is reported
+        #[arg(long, default_value_t = 15)]
+        timeout_secs: u64,
+        /// Kernel log level
+        #[arg(long, default_value = "5")]
+        loglevel: String,
+        /// Delay between randomized user-like actions
+        #[arg(long, default_value_t = 900)]
+        action_interval_ms: u64,
+        /// Stop after this many sessions; omit to run forever
+        #[arg(long)]
+        sessions: Option<u64>,
+        /// Deterministic random seed for reproducing an action stream
+        #[arg(long)]
+        seed: Option<u64>,
+    },
     /// Kill running QEMU instances
     Kill,
     /// Fetch vendor assets (Limine, OVMF, Fonts, Icons, Cursors)
@@ -271,6 +292,28 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
         Commands::Clean => clean(&sh)?,
         Commands::Distclean => distclean(&sh)?,
         Commands::Bdd { feature, tags, arch, loglevel } => bdd(&sh, feature, tags, arch, loglevel)?,
+        Commands::FreezeHunter {
+            arch,
+            timeout_secs,
+            loglevel,
+            action_interval_ms,
+            sessions,
+            seed,
+        } => {
+            let timeout_secs = timeout_secs.to_string();
+            let action_interval_ms = action_interval_ms.to_string();
+            let mut cmd = xshell::cmd!(
+                sh,
+                "cargo run -p bdd --bin freeze_hunter -- --arch {arch} --timeout-secs {timeout_secs} --loglevel {loglevel} --action-interval-ms {action_interval_ms}"
+            );
+            if let Some(sessions) = sessions {
+                cmd = cmd.arg("--sessions").arg(sessions.to_string());
+            }
+            if let Some(seed) = seed {
+                cmd = cmd.arg("--seed").arg(seed.to_string());
+            }
+            cmd.run()?;
+        }
         Commands::Kill => kill::run()?,
         Commands::Fetch => fetch()?,
         Commands::RustcThingos => {

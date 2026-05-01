@@ -175,6 +175,37 @@ pub struct CompositionEntry {
     pub opaque_region: Option<Rect>,
 }
 
+impl CompositionEntry {
+    /// Returns `true` when this entry represents a fully-opaque plane.
+    ///
+    /// A plane is fully opaque when **all** of the following hold:
+    ///
+    /// * `alpha == 255` — per-plane opacity is fully opaque.
+    /// * No compositor-drawn chrome — chrome (title bars, frames, rounded corners)
+    ///   makes the visual boundary partially transparent.
+    /// * The surface has an explicitly committed opaque region that covers the
+    ///   entire source buffer area (`x = 0, y = 0, w ≥ src_rect.w,
+    ///   h ≥ src_rect.h`).
+    pub fn is_opaque(&self) -> bool {
+        if self.alpha < 255 {
+            return false;
+        }
+        // Surfaces with compositor-drawn chrome (title bars, frames) have
+        // rounded corners and shadows that leave partial transparency at the
+        // visual boundary.
+        if !self.chrome.is_empty() {
+            return false;
+        }
+        let Some(opaque) = self.opaque_region else {
+            return false;
+        };
+        opaque.x == 0
+            && opaque.y == 0
+            && opaque.w >= self.src_rect.w
+            && opaque.h >= self.src_rect.h
+    }
+}
+
 pub struct Scene {
     next_client_id: u32,
     next_surface_id: u32,

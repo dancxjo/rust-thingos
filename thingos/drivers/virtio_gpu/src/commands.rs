@@ -251,7 +251,12 @@ pub struct VirtioGpuCmdSubmit3d {
 /// bits  8-15: object type (0 for non-object commands)
 /// bits 16-31: payload length in 32-bit DWORDs (excluding this header word)
 /// ```
-pub const VIRGL_CCMD_BLIT: u32 = 0x2d;
+/// Virgl context command opcode for `VIRGL_CCMD_BLIT`.
+///
+/// The protocol defines this as an enum value, not a sparse hex command ID:
+/// `NOP = 0`, `CREATE_OBJECT = 1`, ..., `SET_SCISSOR_STATE = 15`,
+/// `BLIT = 16`.
+pub const VIRGL_CCMD_BLIT: u32 = 16;
 
 /// Number of additional 32-bit DWORDs in the BLIT payload (after the header).
 pub const VIRGL_CMD_BLIT_SIZE: u32 = 21;
@@ -356,8 +361,8 @@ mod virgl_blit_tests {
     #[test]
     fn virgl_cmd0_encodes_correct_header() {
         // cmd in bits 0-7, obj in bits 8-15, len in bits 16-31
-        let hdr = virgl_cmd0(0x2d, 0, 21);
-        assert_eq!(hdr & 0xff, 0x2d, "opcode must be in low byte");
+        let hdr = virgl_cmd0(VIRGL_CCMD_BLIT, 0, 21);
+        assert_eq!(hdr & 0xff, VIRGL_CCMD_BLIT, "opcode must be in low byte");
         assert_eq!((hdr >> 8) & 0xff, 0, "object type must be 0");
         assert_eq!((hdr >> 16) & 0xffff, 21, "length must be 21");
     }
@@ -366,8 +371,8 @@ mod virgl_blit_tests {
     fn virgl_encode_blit_header_byte_layout() {
         let cmd = virgl_encode_blit(1, 2, 0, 0, 16, 16, 8, 8, 16, 16, 1, 2, false);
         // DWord 0 (bytes 0-3) is the virgl command header.
-        // Expected: virgl_cmd0(0x2d, 0, 21) in little-endian = [0x2d, 0x00, 0x15, 0x00]
-        assert_eq!(cmd[0], 0x2d, "opcode byte 0");
+        // Expected: virgl_cmd0(VIRGL_CCMD_BLIT, 0, 21) in little-endian = [0x10, 0x00, 0x15, 0x00]
+        assert_eq!(cmd[0], 0x10, "opcode byte 0");
         assert_eq!(cmd[1], 0x00, "opcode byte 1");
         assert_eq!(cmd[2], 0x15, "length low byte (21 = 0x15)");
         assert_eq!(cmd[3], 0x00, "length high byte");

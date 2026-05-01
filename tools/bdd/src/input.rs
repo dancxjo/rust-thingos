@@ -110,7 +110,13 @@ pub fn move_pointer_to(x: i32, y: i32) -> Vec<(String, Duration)> {
     ]
 }
 
-pub fn drag_pointer(from_x: i32, from_y: i32, to_x: i32, to_y: i32, steps: u32) -> Vec<(String, Duration)> {
+pub fn drag_pointer(
+    from_x: i32,
+    from_y: i32,
+    to_x: i32,
+    to_y: i32,
+    steps: u32,
+) -> Vec<(String, Duration)> {
     let steps = steps.max(1);
     let mut commands = move_pointer_to(from_x, from_y);
     commands.push((qmp_left_button(true), Duration::from_millis(80)));
@@ -162,10 +168,9 @@ pub async fn type_serial_command(
 }
 
 pub fn parse_wayland_windows(text: &str) -> Vec<WindowInfo> {
-    let re = Regex::new(
-        r#"(?m)^\s*\d+\s+(\d+)x(\d+)\+(-?\d+),(-?\d+)\s+z=(-?\d+)\s+title="([^"]*)""#,
-    )
-    .expect("valid Wayland window regex");
+    let re =
+        Regex::new(r#"(?m)^\s*\d+\s+(\d+)x(\d+)\+(-?\d+),(-?\d+)\s+z=(-?\d+)\s+title="([^"]*)""#)
+            .expect("valid Wayland window regex");
     re.captures_iter(&strip_ansi(text))
         .filter_map(|caps| {
             Some(WindowInfo {
@@ -181,19 +186,14 @@ pub fn parse_wayland_windows(text: &str) -> Vec<WindowInfo> {
 }
 
 pub async fn read_wayland_windows(world: &mut ThingOsWorld) -> InputResult<Vec<WindowInfo>> {
-    let output = type_serial_command(
-        world,
-        "cat /session/wayland/windows/index",
-        Duration::from_secs(30),
-    )
-    .await?;
+    let output =
+        type_serial_command(world, "cat /session/wayland/windows/index", Duration::from_secs(30))
+            .await?;
     Ok(parse_wayland_windows(&output))
 }
 
 pub fn find_window<'a>(windows: &'a [WindowInfo], title: &str) -> Option<&'a WindowInfo> {
-    windows
-        .iter()
-        .find(|window| window.title.to_lowercase().contains(&title.to_lowercase()))
+    windows.iter().find(|window| window.title.to_lowercase().contains(&title.to_lowercase()))
 }
 
 #[cfg(test)]

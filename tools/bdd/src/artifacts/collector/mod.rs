@@ -357,7 +357,7 @@ impl ArtifactCollector {
     /// - `passed`: at least one step ran and every step passed
     /// - `pending`: no steps ran or at least one step was skipped
     /// - `failed`: at least one step failed
-    pub(crate) fn count_scenarios(&self) -> (usize, usize, usize) {
+    pub fn count_scenarios(&self) -> (usize, usize, usize) {
         let total: Vec<_> = self.features.iter().flat_map(|f| &f.scenarios).collect();
         let passed = total.iter().filter(|s| s.outcome == ScenarioOutcome::Passed).count();
         let pending = total.iter().filter(|s| s.outcome == ScenarioOutcome::Pending).count();
@@ -365,7 +365,7 @@ impl ArtifactCollector {
         (passed, pending, failed)
     }
 
-    pub(crate) fn total_scenarios(&self) -> usize {
+    pub fn total_scenarios(&self) -> usize {
         self.features.iter().map(|f| f.scenarios.len()).sum()
     }
 
