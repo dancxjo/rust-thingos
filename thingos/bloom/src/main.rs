@@ -307,23 +307,22 @@ fn publish_service_handle(path: &str, handle: u32) {
 }
 
 /// Read `/dev/cmdline` and return `true` if the kernel command line contains
-/// `bloom.minimal=1`.  This enables the no-wallpaper / no-cursor boot mode
-/// which eliminates asset-loading from the first-frame path to help isolate
-/// display-handoff stalls.
+/// the exact token `bloom.minimal=1`.  This enables the no-wallpaper / no-cursor
+/// boot mode which eliminates asset-loading from the first-frame path to help
+/// isolate display-handoff stalls.
 fn read_minimal_boot_mode() -> bool {
     let Ok(fd) = vfs_open("/dev/cmdline", O_RDONLY) else {
         return false;
     };
     let mut buf = [0u8; 512];
-    let n = match vfs_read(fd, &mut buf) {
-        Ok(n) => n,
-        Err(e) => {
-            stem::warn!("bloom: failed to read /dev/cmdline: {:?}", e);
-            let _ = vfs_close(fd);
-            return false;
-        }
-    };
+    let n = vfs_read(fd, &mut buf).unwrap_or_else(|e| {
+        stem::warn!("bloom: failed to read /dev/cmdline: {:?}", e);
+        0
+    });
     let _ = vfs_close(fd);
+    if n == 0 {
+        return false;
+    }
     let cmdline = match core::str::from_utf8(&buf[..n]) {
         Ok(s) => s,
         Err(_) => {
@@ -331,5 +330,6 @@ fn read_minimal_boot_mode() -> bool {
             return false;
         }
     };
-    cmdline.contains("bloom.minimal=1")
+    // Match whole-token to avoid false positives like `bloom.minimal=10`.
+    cmdline.split_whitespace().any(|token| token == "bloom.minimal=1")
 }
