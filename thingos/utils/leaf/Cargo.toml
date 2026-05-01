@@ -4,9 +4,11 @@ version = "0.1.0"
 edition = "2021"
 
 [dependencies]
+terminal_core = { path = "../../libs/terminal_core" }
+
+[target.'cfg(target_os = "thingos")'.dependencies]
 stem = { path = "../../stem", features = ["rt"] }
 abi = { path = "../../abi" }
-terminal_core = { path = "../../libs/terminal_core" }
 
 [[bin]]
 name = "leaf"
