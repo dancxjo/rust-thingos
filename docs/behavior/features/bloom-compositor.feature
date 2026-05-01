@@ -198,6 +198,13 @@ Feature: Bloom compositor service loop and responsiveness
     Given the machine is booted
     Then the serial output should contain "bloom: output0" within 60s
     And the serial output should contain "bloom: display driver does not support VBLANK" within 60s
+
+  Scenario: desktop clock runs below compositor input priority
+    # The clock is a decorative Wayland client. It should not compete with
+    # Bloom's cursor/input path at normal scheduler priority.
+    Given the machine is booted
+    Then the serial output should contain "clock: running at low scheduler priority" within 60s
+
   @pointer-debug
   Scenario: pointer motion events are coalesced to latest-per-frame
     # Multiple PointerMove samples arriving between frames must be aggregated

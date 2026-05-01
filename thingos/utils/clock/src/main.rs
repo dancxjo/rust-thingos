@@ -13,7 +13,10 @@ use stem::info;
 use stem::syscall::socket::{connect, sendmsg, socket};
 use stem::syscall::socket_domain::AF_UNIX;
 use stem::syscall::socket_type::SOCK_STREAM;
-use stem::syscall::{memfd_create, sleep_ms, vfs_close, vfs_poll, vfs_read, vfs_write, vm_map};
+use stem::syscall::{
+    exit, get_tid, memfd_create, set_priority, sleep_ms, vfs_close, vfs_poll, vfs_read, vfs_write,
+    vm_map,
+};
 
 const REGISTRY_ID: u32 = 2;
 const COMPOSITOR_ID: u32 = 3;
@@ -29,6 +32,8 @@ const DRAW_DSEG7_TEXT_SYMBOL: &[u8] = b"pistil_draw_dseg7_text";
 const DSEG7_FONT_PATH: &str = "/share/fonts/DSEG7Classic-Regular.ttf";
 const SERIAL_TICK_INTERVAL_NS: u64 = 3_000_000_000;
 const TZ_REFRESH_INTERVAL_NS: u64 = 60_000_000_000;
+const CLOCK_PRIORITY_LOW: usize = 1;
+const IDLE_SLEEP_MS: u64 = 250;
 
 type DrawTextFn = extern "C" fn(*const u8, *mut u32, u32, u32, u32, i32, i32, f32, u32) -> i32;
 
@@ -68,6 +73,8 @@ struct DateTime {
 
 #[stem::main]
 fn main(_arg: usize) -> ! {
+    lower_clock_priority();
+
     let fd = connect_wayland();
     let text_renderer = load_text_renderer();
 
@@ -166,7 +173,14 @@ fn main(_arg: usize) -> ! {
             commit_surface(fd, SURFACE_ID);
         }
 
-        sleep_ms(100);
+        sleep_ms(IDLE_SLEEP_MS);
+    }
+}
+
+fn lower_clock_priority() {
+    match get_tid().and_then(|tid| set_priority(tid, CLOCK_PRIORITY_LOW).map(|_| tid)) {
+        Ok(tid) => info!("clock: running at low scheduler priority tid={}", tid),
+        Err(e) => stem::warn!("clock: failed to lower scheduler priority: {:?}", e),
     }
 }
 
@@ -240,8 +254,8 @@ fn read_events(fd: u32, pending: &mut PendingSurface, pending_frame_callbacks: &
                 }
             }
             (TOPLEVEL_ID, 1) => {
-                info!("clock: compositor requested close; idling");
-                idle_forever();
+                info!("clock: compositor requested close; exiting");
+                exit(0);
             }
             (_, 0) if pending_frame_callbacks.iter().any(|&id| id == object_id) => {
                 pending_frame_callbacks.retain(|&id| id != object_id);
@@ -579,12 +593,6 @@ fn unix_to_datetime(seconds: u64) -> DateTime {
     }
 
     DateTime { year, month, day: (remaining + 1) as u8, hour, minute, second }
-}
-
-fn idle_forever() -> ! {
-    loop {
-        sleep_ms(1000);
-    }
 }
 
 fn send_get_registry(fd: u32, new_id: u32) {

@@ -12,7 +12,7 @@ use stem::info;
 use stem::syscall::socket::{connect, sendmsg, socket};
 use stem::syscall::socket_domain::AF_UNIX;
 use stem::syscall::socket_type::SOCK_STREAM;
-use stem::syscall::{sleep_ms, vfs_close, vfs_read, vfs_write};
+use stem::syscall::{exit, sleep_ms, vfs_close, vfs_read, vfs_write};
 
 const REGISTRY_ID: u32 = 2;
 const COMPOSITOR_ID: u32 = 3;
@@ -153,8 +153,8 @@ fn main(_arg: usize) -> ! {
                     }
                 }
                 (TOPLEVEL_ID, 1) => {
-                    info!("wayland_hello: compositor requested close; idling");
-                    idle_forever();
+                    info!("wayland_hello: compositor requested close; exiting");
+                    exit(0);
                 }
                 (POINTER_ID, 0) if payload.len() >= 16 => {
                     info!(

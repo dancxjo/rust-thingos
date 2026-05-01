@@ -850,6 +850,30 @@ impl WaylandServer {
     fn remove_client(&mut self, token: WaitToken) {
         if let Some(client) = self.clients.remove(&token) {
             debug!("wayland-server: client disconnected fd={}", client.fd);
+
+            // Clean up all scene surfaces owned by this client.
+            // Collect unique bloom_surface_ids to avoid redundant destroy commands.
+            let mut destroyed = Vec::new();
+            for entry in client.objects.values() {
+                let bloom_id = match entry {
+                    crate::wayland::client::ObjectEntry::Surface { bloom_surface_id, .. } => {
+                        *bloom_surface_id
+                    }
+                    crate::wayland::client::ObjectEntry::XdgSurface { bloom_surface_id } => {
+                        *bloom_surface_id
+                    }
+                    crate::wayland::client::ObjectEntry::LayerSurface {
+                        bloom_surface_id, ..
+                    } => *bloom_surface_id,
+                    _ => 0,
+                };
+                if bloom_id != 0 && !destroyed.contains(&bloom_id) {
+                    let msg = ipc::encode_destroy_surface(bloom_id);
+                    let _ = stem::syscall::port_send_all(self.cmd_write, &msg);
+                    destroyed.push(bloom_id);
+                }
+            }
+
             let _ = vfs_close(client.fd);
             self.svc.remove(token);
         }
