@@ -947,25 +947,7 @@ pub fn surface_visual_rect(rect: Rect, chrome: SurfaceChrome) -> Rect {
     if chrome.is_empty() {
         return rect;
     }
-    // Shadows now fall only right+down (no symmetric expand).
-    // The widest active layer uses offset (7,8) with pad_right=6, pad_bottom=8,
-    // so the shadow reaches at most:
-    //   right:  x + w + 7 + 6 = x + w + 13
-    //   bottom: y + h + 8 + 8 = y + h + 16
-    // Left/top are barely affected (contact layer: offset 2,2 with no expand).
-    // Add a small margin to avoid clipping artifacts.
-    const SHADOW_PAD_LEFT: u32 = 2;
-    const SHADOW_PAD_TOP: u32 = 2;
-    const SHADOW_PAD_RIGHT: u32 = 18;
-    const SHADOW_PAD_BOTTOM: u32 = 22;
-
-
-    Rect {
-        x: rect.x.saturating_sub(SHADOW_PAD_LEFT),
-        y: rect.y.saturating_sub(SHADOW_PAD_TOP),
-        w: rect.w.saturating_add(SHADOW_PAD_LEFT).saturating_add(SHADOW_PAD_RIGHT),
-        h: rect.h.saturating_add(SHADOW_PAD_TOP).saturating_add(SHADOW_PAD_BOTTOM),
-    }
+    rect
 }
 
 fn resize_edge_at(rect: Rect, thickness: u32, x: i32, y: i32) -> Option<ResizeEdge> {
@@ -1011,10 +993,10 @@ pub fn chrome_button_rects(rect: Rect, chrome: SurfaceChrome) -> Option<[(Chrome
 
     let frame = chrome.frame_thickness.min(rect.w / 2).min(rect.h / 2);
     let titlebar_height = chrome.titlebar_height.min(rect.h);
-    let button_height = 20u32.min(titlebar_height);
-    let button_width = 20u32;
-    let spacing = 6u32;
-    let right_inset = frame.saturating_add(8);
+    let button_height = 24u32.min(titlebar_height);
+    let button_width = 28u32;
+    let spacing = 4u32;
+    let right_inset = frame.saturating_add(6);
     if button_height < 8 || button_width < 12 {
         return None;
     }

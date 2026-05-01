@@ -67,8 +67,9 @@ Feature: blossom xdg-shell lifecycle
   @wayland-visible
   Scenario: first valid commit is visible above the compositor background
     Then the Wayland hello client should be visible
+    And the compositor should render themed window bodies
     And active window chrome button glyphs should be centered inside their buttons
-    And active window chrome should be stroked as a rounded rectangle
+    And active window chrome should be rendered with flat thick borders
 
   @wayland-visible @wayland-fs
   Scenario: displayed Wayland windows are visible through the session filesystem
@@ -98,7 +99,6 @@ Feature: blossom xdg-shell lifecycle
     Then the Wayland hello client should be visible
     When I drag the Wayland hello title bar
     Then the compositor should move the toplevel window
-    And the compositor should damage the moved toplevel shadow
 
   @pointer-debug
   Scenario: dragging the frame resizes a toplevel window

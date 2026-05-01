@@ -303,48 +303,14 @@ fn render_clock(
             buffer.ptr as *mut u32,
             (buffer.width * buffer.height) as usize,
         );
-        paint_background(pixels, buffer.width, buffer.height);
-
-        let panel_x = 18i32;
-        let panel_y = 56i32;
-        let panel_w = buffer.width.saturating_sub(36);
-        let panel_h = buffer.height.saturating_sub(panel_y as u32).saturating_sub(18);
-        fill_vertical_gradient(
-            pixels,
-            buffer.width,
-            buffer.height,
-            panel_x,
-            panel_y,
-            panel_w,
-            panel_h,
-            0xFFFFF6DF,
-            0xFFF3DFC1,
-        );
-        stroke_rect(
-            pixels,
-            buffer.width,
-            buffer.height,
-            panel_x,
-            panel_y,
-            panel_w,
-            panel_h,
-            0xFFD6B46A,
-        );
-        fill_rect(
-            pixels,
-            buffer.width,
-            buffer.height,
-            panel_x + 3,
-            panel_y + 1,
-            panel_w.saturating_sub(6),
-            1,
-            0x4DFFFFFF,
-        );
+        pixels.fill(0);
 
         let px_size = (buffer.width as f32 / 8.8).clamp(42.0, 50.0);
         let estimated_w = (time_text.len() as f32 * px_size * 0.55) as i32;
-        let text_x = ((buffer.width as i32 - estimated_w) / 2).max(18);
-        let text_y = panel_y + ((panel_h as f32 * 0.58) as i32);
+        let text_x = ((buffer.width as i32 - estimated_w) / 2).max(12);
+        let body_top = 36i32;
+        let body_h = buffer.height.saturating_sub(body_top as u32).saturating_sub(10);
+        let text_y = body_top + ((body_h as f32 * 0.58) as i32);
 
         draw_dseg7_text(
             text_renderer,
@@ -384,13 +350,13 @@ fn render_clock(
             0xFF7A431B,
         );
 
-        let dot_y = panel_y + 13;
-        fill_rect(pixels, buffer.width, buffer.height, panel_x + 15, dot_y, 4, 4, 0xFFCB4B16);
+        let dot_y = body_top + 9;
+        fill_rect(pixels, buffer.width, buffer.height, 22, dot_y, 4, 4, 0xFFCB4B16);
         fill_rect(
             pixels,
             buffer.width,
             buffer.height,
-            panel_x + panel_w as i32 - 19,
+            buffer.width as i32 - 26,
             dot_y,
             4,
             4,
@@ -401,8 +367,8 @@ fn render_clock(
             pixels,
             buffer.width,
             buffer.height,
-            28,
-            36,
+            18,
+            body_top + 26,
             20.0,
             "ALARM",
             0xFF586E75,
@@ -412,50 +378,13 @@ fn render_clock(
             pixels,
             buffer.width,
             buffer.height,
-            panel_x + 10,
-            panel_y + panel_h as i32 - 14,
+            16,
+            buffer.height as i32 - 18,
             20.0,
             date_text,
             0xD1586E75,
         );
     }
-}
-
-fn paint_background(pixels: &mut [u32], width: u32, height: u32) {
-    for y in 0..height {
-        let color = lerp_argb(0xFFFFF9EC, 0xFFFDF1D2, y.saturating_mul(255) / height.max(1));
-        let row = y as usize * width as usize;
-        for x in 0..width as usize {
-            pixels[row + x] = color;
-        }
-    }
-}
-
-fn fill_vertical_gradient(
-    pixels: &mut [u32],
-    width: u32,
-    height: u32,
-    x: i32,
-    y: i32,
-    rect_w: u32,
-    rect_h: u32,
-    top: u32,
-    bottom: u32,
-) {
-    let denom = rect_h.saturating_sub(1).max(1);
-    for row in 0..rect_h {
-        let color = lerp_argb(top, bottom, row.saturating_mul(255) / denom);
-        fill_rect(pixels, width, height, x, y.saturating_add(row as i32), rect_w, 1, color);
-    }
-}
-
-fn lerp_argb(a: u32, b: u32, t: u32) -> u32 {
-    let inv = 255u32.saturating_sub(t.min(255));
-    let aa = ((a >> 24) & 0xFF) * inv + ((b >> 24) & 0xFF) * t;
-    let ar = ((a >> 16) & 0xFF) * inv + ((b >> 16) & 0xFF) * t;
-    let ag = ((a >> 8) & 0xFF) * inv + ((b >> 8) & 0xFF) * t;
-    let ab = (a & 0xFF) * inv + (b & 0xFF) * t;
-    ((aa / 255) << 24) | ((ar / 255) << 16) | ((ag / 255) << 8) | (ab / 255)
 }
 
 fn fill_rect(
@@ -478,25 +407,6 @@ fn fill_rect(
             pixels[row + px as usize] = color;
         }
     }
-}
-
-fn stroke_rect(
-    pixels: &mut [u32],
-    width: u32,
-    height: u32,
-    x: i32,
-    y: i32,
-    rect_w: u32,
-    rect_h: u32,
-    color: u32,
-) {
-    if rect_w == 0 || rect_h == 0 {
-        return;
-    }
-    fill_rect(pixels, width, height, x, y, rect_w, 1, color);
-    fill_rect(pixels, width, height, x, y + rect_h as i32 - 1, rect_w, 1, color);
-    fill_rect(pixels, width, height, x, y, 1, rect_h, color);
-    fill_rect(pixels, width, height, x + rect_w as i32 - 1, y, 1, rect_h, color);
 }
 
 fn draw_dseg7_text(

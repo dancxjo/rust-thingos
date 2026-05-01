@@ -16,7 +16,6 @@ const PREPARE_CURSOR_SYMBOL: &[u8] = b"pistil_prepare_cursor";
 const DRAW_SVG_ICON_SYMBOL: &[u8] = b"pistil_draw_svg_icon";
 const DRAW_TEXT_SYMBOL: &[u8] = b"pistil_draw_text";
 const DRAW_SYMBOL_TEXT_SYMBOL: &[u8] = b"pistil_draw_symbol_text";
-const DRAW_NINE_SLICE_SHADOW_SYMBOL: &[u8] = b"pistil_draw_nine_slice_shadow";
 const DEFAULT_CURSOR_PATH: &str = "/share/cursors/future/default.svg";
 const MOVE_CURSOR_PATH: &str = "/share/cursors/future/fleur.svg";
 const RESIZE_N_CURSOR_PATH: &str = "/share/cursors/future/top_side.svg";
@@ -65,14 +64,13 @@ type PrepareCursorFn = extern "C" fn(
 type DrawTextFn = extern "C" fn(*const u8, *mut u32, u32, u32, u32, i32, i32, f32, u32) -> i32;
 type DrawSvgIconFn =
     extern "C" fn(*const u8, *mut u32, u32, u32, u32, i32, i32, u32, u32, u32) -> i32;
-type DrawNineSliceShadowFn = extern "C" fn(*mut u32, u32, u32, u32, i32, i32, u32, u32, u32) -> i32;
 
 pub struct CompositorVisuals {
     background: Option<ServerBuffer>,
     cursor: Option<CursorBuffer>,
     cursor_variants: Vec<(CursorKind, CursorBuffer)>,
     pointer_overlay: Option<PointerOverlayBuffer>,
-    shadow_overlay: Option<ChromeOverlayBuffer>,
+    body_overlay: Option<ChromeOverlayBuffer>,
     chrome_overlay: Option<ChromeOverlayBuffer>,
     pistil: Option<PistilLib>,
     theme: UiTheme,
@@ -85,7 +83,6 @@ struct PistilLib {
     draw_svg_icon: Option<DrawSvgIconFn>,
     draw_text: Option<DrawTextFn>,
     draw_symbol_text: Option<DrawTextFn>,
-    draw_nine_slice_shadow: Option<DrawNineSliceShadowFn>,
 }
 
 struct ServerBuffer {
@@ -143,7 +140,7 @@ impl CompositorVisuals {
             cursor: None,
             cursor_variants: Vec::new(),
             pointer_overlay: None,
-            shadow_overlay: None,
+            body_overlay: None,
             chrome_overlay: None,
             pistil,
             theme: default_theme(),
@@ -359,34 +356,26 @@ impl CompositorVisuals {
             return (None, None);
         }
         self.ensure_overlay_buffers(display);
-        let shadow = self.shadow_overlay.as_mut();
-        let chrome = self.chrome_overlay.as_mut();
-        if shadow.is_none() && chrome.is_none() {
-            return (None, None);
-        }
 
         let draw_svg_icon = self.pistil.as_ref().and_then(|lib| lib.draw_svg_icon);
         let draw_text = self.pistil.as_ref().and_then(|lib| lib.draw_text);
         let draw_symbol_text = self.pistil.as_ref().and_then(|lib| lib.draw_symbol_text);
-        let draw_nine_slice_shadow =
-            self.pistil.as_ref().and_then(|lib| lib.draw_nine_slice_shadow);
 
-        if let Some(overlay) = shadow {
-            draw_shadow_overlay(
-                overlay.texture.as_slice_mut(),
-                overlay.width,
-                overlay.height,
+        if let Some(body) = self.body_overlay.as_mut() {
+            draw_window_body_overlay(
+                body.texture.as_slice_mut(),
+                body.width,
+                body.height,
                 composition,
                 self.theme,
-                draw_nine_slice_shadow,
             );
         }
 
-        if let Some(overlay) = chrome {
+        if let Some(chrome) = self.chrome_overlay.as_mut() {
             draw_chrome_overlay(
-                overlay.texture.as_slice_mut(),
-                overlay.width,
-                overlay.height,
+                chrome.texture.as_slice_mut(),
+                chrome.width,
+                chrome.height,
                 composition,
                 draw_svg_icon,
                 draw_text,
@@ -396,7 +385,7 @@ impl CompositorVisuals {
         }
 
         (
-            self.shadow_overlay.as_ref().map(|o| OverlayPlane {
+            self.body_overlay.as_ref().map(|o| OverlayPlane {
                 buffer_id: o.buffer_id,
                 x: 0,
                 y: 0,
@@ -484,68 +473,22 @@ impl CompositorVisuals {
 
     fn ensure_overlay_buffers(&mut self, display: &DisplayBackend) {
         let (width, height) = display.output_size();
-        if self.chrome_overlay.as_ref().map_or(false, |o| o.width == width && o.height == height)
-            && self
-                .shadow_overlay
-                .as_ref()
-                .map_or(false, |o| o.width == width && o.height == height)
-        {
-            return;
-        }
-
-        // Allocate chrome overlay
-        if !self.chrome_overlay.as_ref().map_or(false, |o| o.width == width && o.height == height) {
-            if let Some(texture) = Texture::new("bloom.compositor.chrome_overlay", width, height, 4)
+        if !self.body_overlay.as_ref().map_or(false, |o| o.width == width && o.height == height) {
+            if let Some(buffer) =
+                make_overlay_buffer(display, "bloom.compositor.window_body", width, height)
             {
-                if let Some(buffer_id) = display.import_buffer(
-                    texture.fd,
-                    width,
-                    height,
-                    texture.stride,
-                    PixelFormat::Bgra8888,
-                    0,
-                    0,
-                ) {
-                    if let Some(old) = self.chrome_overlay.take() {
-                        display.release_buffer(old.buffer_id);
-                    }
-                    self.chrome_overlay =
-                        Some(ChromeOverlayBuffer { texture, buffer_id, width, height });
-                    stem::info!(
-                        "bloom: chrome overlay ready buffer={} size={}x{}",
-                        buffer_id,
-                        width,
-                        height
-                    );
-                }
+                release_overlay_buffer(display, self.body_overlay.take());
+                self.body_overlay = Some(buffer);
             }
         }
 
-        // Allocate shadow overlay
-        if !self.shadow_overlay.as_ref().map_or(false, |o| o.width == width && o.height == height) {
-            if let Some(texture) = Texture::new("bloom.compositor.shadow_overlay", width, height, 4)
+        if !self.chrome_overlay.as_ref().map_or(false, |o| o.width == width && o.height == height) {
+            if let Some(buffer) =
+                make_overlay_buffer(display, "bloom.compositor.window_chrome", width, height)
             {
-                if let Some(buffer_id) = display.import_buffer(
-                    texture.fd,
-                    width,
-                    height,
-                    texture.stride,
-                    PixelFormat::Bgra8888,
-                    0,
-                    0,
-                ) {
-                    if let Some(old) = self.shadow_overlay.take() {
-                        display.release_buffer(old.buffer_id);
-                    }
-                    self.shadow_overlay =
-                        Some(ChromeOverlayBuffer { texture, buffer_id, width, height });
-                    stem::info!(
-                        "bloom: shadow overlay ready buffer={} size={}x{}",
-                        buffer_id,
-                        width,
-                        height
-                    );
-                }
+                release_overlay_buffer(display, self.chrome_overlay.take());
+                self.chrome_overlay = Some(buffer);
+                stem::info!("bloom: flat window overlays ready size={}x{}", width, height);
             }
         }
     }
@@ -660,18 +603,12 @@ fn load_pistil() -> Option<PistilLib> {
     } else {
         Some(unsafe { core::mem::transmute(symbol_text_sym) })
     };
-    let shadow_sym = dlsym_bytes(handle, DRAW_NINE_SLICE_SHADOW_SYMBOL);
-    let draw_nine_slice_shadow: Option<DrawNineSliceShadowFn> =
-        if shadow_sym.is_null() { None } else { Some(unsafe { core::mem::transmute(shadow_sym) }) };
     stem::info!("bloom: pistil background renderer loaded from {}", PISTIL_PATH);
     if draw_text.is_some() {
         stem::info!("bloom: pistil font text renderer loaded with default {}", DEFAULT_FONT_PATH);
     }
     if draw_symbol_text.is_some() {
         stem::info!("bloom: pistil symbol renderer loaded with {}", SYMBOL_FONT_PATH);
-    }
-    if draw_nine_slice_shadow.is_some() {
-        stem::info!("bloom: pistil nine-slice shadow renderer loaded");
     }
     Some(PistilLib {
         _handle: handle,
@@ -680,7 +617,6 @@ fn load_pistil() -> Option<PistilLib> {
         draw_svg_icon,
         draw_text,
         draw_symbol_text,
-        draw_nine_slice_shadow,
     })
 }
 
@@ -793,6 +729,31 @@ fn copy_cursor_sample(cursor: &CursorBuffer, dst: &mut [u32; CURSOR_PIXELS]) -> 
     Some(())
 }
 
+fn make_overlay_buffer(
+    display: &DisplayBackend,
+    name: &'static str,
+    width: u32,
+    height: u32,
+) -> Option<ChromeOverlayBuffer> {
+    let texture = Texture::new(name, width, height, 4)?;
+    let buffer_id = display.import_buffer(
+        texture.fd,
+        width,
+        height,
+        texture.stride,
+        PixelFormat::Bgra8888,
+        0,
+        0,
+    )?;
+    Some(ChromeOverlayBuffer { texture, buffer_id, width, height })
+}
+
+fn release_overlay_buffer(display: &DisplayBackend, buffer: Option<ChromeOverlayBuffer>) {
+    if let Some(buffer) = buffer {
+        display.release_buffer(buffer.buffer_id);
+    }
+}
+
 fn cursor_path(kind: CursorKind) -> Option<&'static str> {
     match kind {
         CursorKind::Default => Some(DEFAULT_CURSOR_PATH),
@@ -836,29 +797,14 @@ fn draw_chrome_overlay(
         let y = rect.y as i32;
         let w = rect.w;
         let h = rect.h;
-        let state = if entry.active { theme.active } else { theme.inactive };
         let text_color = if entry.active { theme.chrome_text } else { theme.chrome_text_inactive };
         let icon_color =
             if entry.active { theme.control_icon } else { theme.control_icon_inactive };
         let titlebar_height = chrome.titlebar_height.min(theme.titlebar_height).min(h);
-        let cr = theme.corner_radius;
+        let border_color = if entry.active { theme.active.border } else { theme.inactive.border };
 
-        // Note: Shadows are now drawn into a separate shadow_overlay plane.
         if titlebar_height > 0 {
-            fill_top_rounded_vertical_gradient(
-                dst,
-                stride,
-                height,
-                x,
-                y,
-                w,
-                titlebar_height,
-                state.title_top,
-                state.title_mid,
-                state.title_bottom,
-                cr,
-            );
-            fill_rect(dst, stride, x + cr as i32, y + 1, w.saturating_sub(cr * 2), 1, 0x73FFFFFF);
+            fill_rect(dst, stride, x, y, w, titlebar_height, theme.active.title_top);
             draw_chrome_buttons(
                 dst,
                 stride,
@@ -872,9 +818,10 @@ fn draw_chrome_overlay(
                 pistil_draw_symbol_text.or(pistil_draw_text),
                 icon_color,
                 theme.close_icon,
+                theme,
             );
             if let Some(title) = entry.title.as_deref() {
-                let text_x = x.saturating_add(frame as i32).saturating_add(10);
+                let text_x = x.saturating_add(frame as i32).saturating_add(8);
                 let text_y = y.saturating_add((titlebar_height as i32 + 16) / 2);
                 let buttons_w = chrome_button_rects(rect, chrome)
                     .map(|rects| {
@@ -900,29 +847,13 @@ fn draw_chrome_overlay(
                     text_color,
                 );
             }
-        } else {
-            stroke_rounded_rect(dst, stride, height, x, y, w, h, cr, state.border, 1);
         }
-        draw_frame_outline(dst, stride, height, rect, frame, theme, entry.active);
+        draw_flat_window_border(dst, stride, height, rect, frame, border_color);
         if titlebar_height > 0 && titlebar_height < h.saturating_sub(frame) {
             let sep_y = y.saturating_add(titlebar_height as i32);
             let rule =
                 if entry.active { theme.title_rule_active } else { theme.title_rule_inactive };
-            fill_rect(dst, stride, x + 1, sep_y, w.saturating_sub(2), 1, rule);
-        }
-        if entry.active && w > 2 && h > 2 {
-            stroke_rounded_rect(
-                dst,
-                stride,
-                height,
-                x + 1,
-                y + 1,
-                w.saturating_sub(2),
-                h.saturating_sub(2),
-                cr.saturating_sub(1),
-                theme.focus_border,
-                1,
-            );
+            fill_rect(dst, stride, x, sep_y, w, frame.min(2), rule);
         }
     }
 
@@ -934,162 +865,46 @@ fn draw_chrome_overlay(
     }
 }
 
-fn draw_shadow_overlay(
+fn draw_window_body_overlay(
     dst: &mut [u32],
     stride: u32,
     height: u32,
     composition: &[CompositionEntry],
     theme: UiTheme,
-    pistil_nine_slice: Option<DrawNineSliceShadowFn>,
 ) {
     dst.fill(0);
-    // Draw shadows bottom-to-top to match z-order.
     for entry in composition {
-        if entry.is_fullscreen || entry.chrome.is_empty() {
+        if entry.is_fullscreen {
             continue;
         }
-        let rect = entry.dest_rect;
-        if let Some(draw_fn) = pistil_nine_slice {
-            // Fast path: nine-slice blit via pistil
-            draw_fn(
-                dst.as_mut_ptr(),
-                stride,
-                height,
-                stride,
-                rect.x as i32,
-                rect.y as i32,
-                rect.w,
-                rect.h,
-                if entry.active { 1 } else { 0 },
-            );
-        } else {
-            // Fallback: manual layered shadow
-            draw_window_shadow(
-                dst,
-                stride,
-                height,
-                rect.x as i32,
-                rect.y as i32,
-                rect.w,
-                rect.h,
-                entry.active,
-                theme.corner_radius,
-            );
+        let chrome = entry.chrome;
+        if chrome.is_empty() {
+            continue;
         }
-    }
-}
 
-fn draw_window_shadow(
-    dst: &mut [u32],
-    stride: u32,
-    height: u32,
-    x: i32,
-    y: i32,
-    w: u32,
-    h: u32,
-    active: bool,
-    corner_radius: u32,
-) {
-    if w == 0 || h == 0 {
-        return;
-    }
+        let rect = entry.dest_rect;
+        let frame = chrome.frame_thickness.min(rect.w / 2).min(rect.h / 2);
+        let titlebar_height = chrome.titlebar_height.min(theme.titlebar_height).min(rect.h);
+        if frame == 0 || titlebar_height >= rect.h {
+            continue;
+        }
 
-    // Soft layered shadow falling down-right, simulating an upper-left light.
-    // Uses warm brown (rgb 80,55,20) instead of black for a natural look.
-    // No symmetric expand — each layer only adds size to the right and bottom
-    // so the left edge stays almost shadow-free.
-    //
-    // The shadow is a faint soft stain under the window, mostly below and to
-    // the right.  It should not look like a second rectangle.
+        let body_x = rect.x as i32 + frame as i32;
+        let body_y = rect.y as i32 + titlebar_height as i32;
+        let body_w = rect.w.saturating_sub(frame.saturating_mul(2));
+        let body_h = rect.h.saturating_sub(titlebar_height).saturating_sub(frame);
+        if body_w == 0 || body_h == 0 {
+            continue;
+        }
 
-    struct ShadowLayer {
-        offset_x: i32,
-        offset_y: i32,
-        pad_right: u32,
-        pad_bottom: u32,
-        radius_add: u32,
-        color: u32, // ARGB
+        fill_rect(dst, stride, body_x, body_y, body_w, body_h, theme.body_top);
     }
 
-    // Warm brown base: R=80 G=55 B=20 → 0x__503714
-    let layers: &[ShadowLayer] = if active {
-        &[
-            // Layer 1 (outermost): faintest, furthest offset
-            ShadowLayer {
-                offset_x: 7,
-                offset_y: 8,
-                pad_right: 6,
-                pad_bottom: 8,
-                radius_add: 6,
-                color: 0x0D503714, // alpha ~5%
-            },
-            // Layer 2 (middle): moderate
-            ShadowLayer {
-                offset_x: 4,
-                offset_y: 5,
-                pad_right: 3,
-                pad_bottom: 4,
-                radius_add: 3,
-                color: 0x1A503714, // alpha ~10%
-            },
-            // Layer 3 (contact): closest, darkest of the three
-            ShadowLayer {
-                offset_x: 2,
-                offset_y: 2,
-                pad_right: 1,
-                pad_bottom: 2,
-                radius_add: 0,
-                color: 0x2E503714, // alpha ~18%
-            },
-        ]
-    } else {
-        &[
-            // Inactive: gentler
-            ShadowLayer {
-                offset_x: 5,
-                offset_y: 6,
-                pad_right: 4,
-                pad_bottom: 6,
-                radius_add: 4,
-                color: 0x0A503714, // alpha ~4%
-            },
-            ShadowLayer {
-                offset_x: 3,
-                offset_y: 4,
-                pad_right: 2,
-                pad_bottom: 3,
-                radius_add: 2,
-                color: 0x14503714, // alpha ~8%
-            },
-            ShadowLayer {
-                offset_x: 1,
-                offset_y: 1,
-                pad_right: 1,
-                pad_bottom: 1,
-                radius_add: 0,
-                color: 0x20503714, // alpha ~12%
-            },
-        ]
-    };
-
-    for layer in layers {
-        let sx = x.saturating_add(layer.offset_x);
-        let sy = y.saturating_add(layer.offset_y);
-        let sw = w.saturating_add(layer.pad_right);
-        let sh = h.saturating_add(layer.pad_bottom);
-        let shadow_radius = corner_radius.saturating_add(layer.radius_add);
-        fill_rounded_vertical_gradient_blend(
-            dst,
-            stride,
-            height,
-            sx,
-            sy,
-            sw,
-            sh,
-            shadow_radius,
-            layer.color,
-            layer.color,
-        );
+    let len = (stride.saturating_mul(height)) as usize;
+    if dst.len() > len {
+        for px in &mut dst[len..] {
+            *px = 0;
+        }
     }
 }
 
@@ -1103,41 +918,27 @@ fn title_prefix(title: &str, max_chars: usize) -> &str {
     }
 }
 
-fn draw_frame_outline(
+fn draw_flat_window_border(
     dst: &mut [u32],
     stride: u32,
     height: u32,
     rect: abi::display_protocol::Rect,
-    _frame: u32,
-    theme: UiTheme,
-    active: bool,
+    frame: u32,
+    color: u32,
 ) {
     let x = rect.x as i32;
     let y = rect.y as i32;
     let w = rect.w;
     let h = rect.h;
-    if w == 0 || h == 0 {
+    if w == 0 || h == 0 || frame == 0 {
         return;
     }
 
-    let border = if active { theme.active.border } else { theme.inactive.border };
-    let cr = theme.corner_radius;
-    stroke_rounded_rect(dst, stride, height, x, y, w, h, cr, border, theme.visual_border);
-
-    if w > 2 && h > 2 {
-        stroke_rounded_rect(
-            dst,
-            stride,
-            height,
-            x + 1,
-            y + 1,
-            w.saturating_sub(2),
-            h.saturating_sub(2),
-            cr.saturating_sub(1),
-            theme.inner_highlight,
-            1,
-        );
-    }
+    let frame = frame.min(w / 2).min(h / 2);
+    fill_rect(dst, stride, x, y, w, frame, color);
+    fill_rect(dst, stride, x, y + h.saturating_sub(frame) as i32, w, frame, color);
+    fill_rect(dst, stride, x, y, frame, h, color);
+    fill_rect(dst, stride, x + w.saturating_sub(frame) as i32, y, frame, h, color);
 }
 
 fn draw_chrome_buttons(
@@ -1153,6 +954,7 @@ fn draw_chrome_buttons(
     pistil_draw_symbol_text: Option<DrawTextFn>,
     icon_color: u32,
     close_icon: u32,
+    theme: UiTheme,
 ) {
     let Some(buttons) = chrome_button_rects(surface_rect, chrome) else {
         return;
@@ -1172,6 +974,7 @@ fn draw_chrome_buttons(
             pistil_draw_symbol_text,
             icon_color,
             close_icon,
+            theme,
         );
     }
 }
@@ -1189,12 +992,13 @@ fn draw_chrome_button(
     _pistil_draw_symbol_text: Option<DrawTextFn>,
     icon_color: u32,
     close_icon: u32,
+    theme: UiTheme,
 ) {
     if rect.w < 8 || rect.h < 8 {
         return;
     }
 
-    draw_chrome_button_well(dst, stride, height, rect);
+    draw_chrome_button_well(dst, stride, height, rect, theme);
 
     let color = if matches!(button, ChromeButton::Close) { close_icon } else { icon_color };
     if draw_chrome_button_lucide(
@@ -1228,6 +1032,7 @@ fn draw_chrome_button_well(
     stride: u32,
     height: u32,
     rect: abi::display_protocol::Rect,
+    theme: UiTheme,
 ) {
     let x = rect.x as i32 + 1;
     let y = rect.y as i32;
@@ -1237,8 +1042,7 @@ fn draw_chrome_button_well(
         return;
     }
 
-    fill_rounded_vertical_gradient(dst, stride, height, x, y, w, h, 4, 0x2EFFFFFF, 0x2EFFFFFF);
-    stroke_rounded_rect(dst, stride, height, x, y, w, h, 4, 0x383B2A0A, 1);
+    fill_rect(dst, stride, x, y, w, h, theme.button_top);
 }
 
 fn draw_chrome_button_lucide(
@@ -1259,7 +1063,7 @@ fn draw_chrome_button_lucide(
         return false;
     };
 
-    let icon_size = rect.w.min(rect.h).saturating_sub(11).clamp(9, 9);
+    let icon_size = rect.w.min(rect.h).saturating_sub(10).clamp(12, 14);
     let dst_x = rect.x as i32 + ((rect.w.saturating_sub(icon_size)) / 2) as i32;
     let dst_y = rect.y as i32 + ((rect.h.saturating_sub(icon_size)) / 2) as i32;
     call_draw_svg_icon(
@@ -1680,281 +1484,6 @@ fn fill_rect_i32(
 fn fill_rect(dst: &mut [u32], stride: u32, x: i32, y: i32, w: u32, h: u32, color: u32) {
     let height = if stride == 0 { 0 } else { (dst.len() as u32) / stride };
     fill_rect_i32(dst, stride, height, x, y, w as i32, h as i32, color);
-}
-
-fn fill_top_rounded_vertical_gradient(
-    dst: &mut [u32],
-    stride: u32,
-    height: u32,
-    x: i32,
-    y: i32,
-    w: u32,
-    h: u32,
-    top: u32,
-    mid: u32,
-    bottom: u32,
-    radius: u32,
-) {
-    if w == 0 || h == 0 {
-        return;
-    }
-    let radius = radius.min(w / 2).min(h);
-    let denom = h.saturating_sub(1).max(1);
-    for row in 0..h {
-        let color = if row.saturating_mul(100) <= denom.saturating_mul(45) {
-            lerp_argb(top, mid, row.saturating_mul(255) / denom)
-        } else {
-            let lower_rows = denom.saturating_sub(row).saturating_mul(255) / denom;
-            lerp_argb(bottom, mid, lower_rows)
-        };
-        let inset = if row < radius { rounded_corner_inset(radius, row) } else { 0 };
-        if inset.saturating_mul(2) < w {
-            fill_rect_i32(
-                dst,
-                stride,
-                height,
-                x.saturating_add(inset as i32),
-                y.saturating_add(row as i32),
-                w.saturating_sub(inset.saturating_mul(2)) as i32,
-                1,
-                color,
-            );
-        }
-    }
-}
-
-fn fill_rounded_vertical_gradient(
-    dst: &mut [u32],
-    stride: u32,
-    height: u32,
-    x: i32,
-    y: i32,
-    w: u32,
-    h: u32,
-    radius: u32,
-    top: u32,
-    bottom: u32,
-) {
-    if w == 0 || h == 0 {
-        return;
-    }
-    let radius = radius.min(w / 2).min(h / 2);
-    let denom = h.saturating_sub(1).max(1);
-    for row in 0..h {
-        let color = lerp_argb(top, bottom, row.saturating_mul(255) / denom);
-        let inset = rounded_rect_row_inset(radius, row, h);
-        if inset.saturating_mul(2) < w {
-            fill_rect_i32(
-                dst,
-                stride,
-                height,
-                x.saturating_add(inset as i32),
-                y.saturating_add(row as i32),
-                w.saturating_sub(inset.saturating_mul(2)) as i32,
-                1,
-                color,
-            );
-        }
-    }
-}
-
-fn fill_rounded_vertical_gradient_blend(
-    dst: &mut [u32],
-    stride: u32,
-    height: u32,
-    x: i32,
-    y: i32,
-    w: u32,
-    h: u32,
-    radius: u32,
-    top: u32,
-    bottom: u32,
-) {
-    if w == 0 || h == 0 {
-        return;
-    }
-    let radius = radius.min(w / 2).min(h / 2);
-    let denom = h.saturating_sub(1).max(1);
-    for row in 0..h {
-        let color = lerp_argb(top, bottom, row.saturating_mul(255) / denom);
-        let inset = rounded_rect_row_inset(radius, row, h);
-        if inset.saturating_mul(2) < w {
-            blend_rect_i32(
-                dst,
-                stride,
-                height,
-                x.saturating_add(inset as i32),
-                y.saturating_add(row as i32),
-                w.saturating_sub(inset.saturating_mul(2)) as i32,
-                1,
-                color,
-            );
-        }
-    }
-}
-
-fn blend_rect_i32(
-    dst: &mut [u32],
-    stride: u32,
-    height: u32,
-    x: i32,
-    y: i32,
-    w: i32,
-    h: i32,
-    color: u32,
-) {
-    if stride == 0 || w <= 0 || h <= 0 || color >> 24 == 0 {
-        return;
-    }
-    let x0 = x.max(0) as u32;
-    let y0 = y.max(0) as u32;
-    let x1 = x.saturating_add(w).max(0) as u32;
-    let y1 = y.saturating_add(h).max(0) as u32;
-    let x1 = x1.min(stride);
-    let y1 = y1.min(height);
-    for yy in y0..y1 {
-        let row = (yy * stride) as usize;
-        for xx in x0..x1 {
-            let idx = row + xx as usize;
-            dst[idx] = blend_argb(dst[idx], color);
-        }
-    }
-}
-
-fn stroke_rounded_rect(
-    dst: &mut [u32],
-    stride: u32,
-    height: u32,
-    x: i32,
-    y: i32,
-    w: u32,
-    h: u32,
-    radius: u32,
-    color: u32,
-    thickness: u32,
-) {
-    if w == 0 || h == 0 || thickness == 0 {
-        return;
-    }
-    let radius = radius.min(w / 2).min(h / 2);
-    let thickness = thickness.min(w / 2).min(h / 2).max(1);
-    for row in 0..h {
-        let outer_inset = rounded_rect_row_inset(radius, row, h);
-        if outer_inset.saturating_mul(2) >= w {
-            continue;
-        }
-        let outer_w = w.saturating_sub(outer_inset.saturating_mul(2));
-        let yy = y.saturating_add(row as i32);
-
-        let inner_row_valid = row >= thickness && row < h.saturating_sub(thickness);
-        let inner_inset = if inner_row_valid {
-            let inner_h = h.saturating_sub(thickness.saturating_mul(2));
-            let inner_radius = radius.saturating_sub(thickness);
-            rounded_rect_row_inset(inner_radius, row.saturating_sub(thickness), inner_h)
-                .saturating_add(thickness)
-        } else {
-            w
-        };
-
-        if !inner_row_valid || inner_inset <= outer_inset {
-            fill_rect_i32(
-                dst,
-                stride,
-                height,
-                x.saturating_add(outer_inset as i32),
-                yy,
-                outer_w as i32,
-                1,
-                color,
-            );
-        } else {
-            let left_w = inner_inset.saturating_sub(outer_inset);
-            let right_x = x.saturating_add(w.saturating_sub(inner_inset) as i32);
-            fill_rect_i32(
-                dst,
-                stride,
-                height,
-                x.saturating_add(outer_inset as i32),
-                yy,
-                left_w as i32,
-                1,
-                color,
-            );
-            fill_rect_i32(dst, stride, height, right_x, yy, left_w as i32, 1, color);
-        }
-    }
-}
-
-fn rounded_rect_row_inset(radius: u32, row: u32, height: u32) -> u32 {
-    if radius == 0 || height == 0 {
-        return 0;
-    }
-    if row < radius {
-        rounded_corner_inset(radius, row)
-    } else if row >= height.saturating_sub(radius) {
-        rounded_corner_inset(radius, height.saturating_sub(1).saturating_sub(row))
-    } else {
-        0
-    }
-}
-
-fn rounded_corner_inset(radius: u32, row: u32) -> u32 {
-    if radius == 0 || row >= radius {
-        return 0;
-    }
-    let r = radius as u64;
-    let dy = radius.saturating_sub(1).saturating_sub(row) as u64;
-    let dx_sq = r.saturating_mul(r).saturating_sub(dy.saturating_mul(dy));
-    radius.saturating_sub(isqrt(dx_sq) as u32)
-}
-
-fn isqrt(n: u64) -> u64 {
-    if n == 0 {
-        return 0;
-    }
-    let mut x = n;
-    let mut y = (x + 1) / 2;
-    while y < x {
-        x = y;
-        y = (x + n / x) / 2;
-    }
-    x
-}
-
-fn fill_vertical_gradient(
-    dst: &mut [u32],
-    stride: u32,
-    height: u32,
-    x: i32,
-    y: i32,
-    w: u32,
-    h: u32,
-    top: u32,
-    mid: u32,
-    bottom: u32,
-) {
-    if h == 0 {
-        return;
-    }
-    let denom = h.saturating_sub(1).max(1);
-    for row in 0..h {
-        let color = if row.saturating_mul(100) <= denom.saturating_mul(45) {
-            lerp_argb(top, mid, row.saturating_mul(255) / denom.max(1))
-        } else {
-            let lower_rows = denom.saturating_sub(row).saturating_mul(255) / denom.max(1);
-            lerp_argb(bottom, mid, lower_rows)
-        };
-        fill_rect_i32(dst, stride, height, x, y.saturating_add(row as i32), w as i32, 1, color);
-    }
-}
-
-fn lerp_argb(a: u32, b: u32, t: u32) -> u32 {
-    let inv = 255u32.saturating_sub(t.min(255));
-    let aa = ((a >> 24) & 0xFF) * inv + ((b >> 24) & 0xFF) * t;
-    let ar = ((a >> 16) & 0xFF) * inv + ((b >> 16) & 0xFF) * t;
-    let ag = ((a >> 8) & 0xFF) * inv + ((b >> 8) & 0xFF) * t;
-    let ab = (a & 0xFF) * inv + (b & 0xFF) * t;
-    ((aa / 255) << 24) | ((ar / 255) << 16) | ((ag / 255) << 8) | (ab / 255)
 }
 
 fn draw_text(

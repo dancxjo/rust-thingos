@@ -467,10 +467,49 @@ fn render_popup(buffer: &mut BufferState, label: &str, text_renderer: Option<&Te
     for y in 0..height as usize {
         for x in 0..width as usize {
             let border = x < 2 || y < 2 || x + 2 >= width as usize || y + 2 >= height as usize;
-            pixels[y * width as usize + x] = if border { 0xFFB58900 } else { 0xEEFEF6E3 };
+            let accent = x >= 8
+                && y >= 8
+                && x < 34usize.min(width as usize)
+                && y < 34usize.min(height as usize);
+            let stripe = ((x + y) / 10) % 2 == 0;
+            pixels[y * width as usize + x] = if border {
+                0xFFB58900
+            } else if accent {
+                if stripe { 0xFFFFD166 } else { 0xFF06D6A0 }
+            } else if stripe {
+                0xFFFDF4D6
+            } else {
+                0xFFEFF9F4
+            };
         }
     }
+    fill_rect(pixels, width, height, 42, 16, width.saturating_sub(56), 8, 0xFF3F3A2F);
+    fill_rect(pixels, width, height, 42, 30, width.saturating_sub(72), 6, 0xFF6C584C);
+    fill_rect(pixels, width, height, 14, height.saturating_sub(18), 30, 6, 0xFF118AB2);
+    fill_rect(pixels, width, height, 50, height.saturating_sub(18), 46, 6, 0xFFEF476F);
     draw_text(text_renderer, pixels, width, height, 14, 34, 18.0, label, 0xFF3F3A2F);
+}
+
+fn fill_rect(
+    pixels: &mut [u32],
+    width: u32,
+    height: u32,
+    x: u32,
+    y: u32,
+    w: u32,
+    h: u32,
+    color: u32,
+) {
+    let x0 = x.min(width);
+    let y0 = y.min(height);
+    let x1 = x0.saturating_add(w).min(width);
+    let y1 = y0.saturating_add(h).min(height);
+    for py in y0..y1 {
+        let row = py as usize * width as usize;
+        for px in x0..x1 {
+            pixels[row + px as usize] = color;
+        }
+    }
 }
 
 fn paint_vertical_gradient(pixels: &mut [u32], width: u32, height: u32, top: u32, bottom: u32) {

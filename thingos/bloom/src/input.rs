@@ -813,24 +813,8 @@ impl InputState {
                     return true;
                 };
                 if moved.changed {
-                    let old_damage =
-                        mark_surface_visual_damage(scene, damage, grab.surface_id, moved.old_rect);
-                    let new_damage =
-                        mark_surface_visual_damage(scene, damage, grab.surface_id, moved.new_rect);
-                    if old_damage != moved.old_rect || new_damage != moved.new_rect {
-                        stem::info!(
-                            "bloom: window drag damaged shadow surface={} old={}x{}+{},{} new={}x{}+{},{}",
-                            grab.surface_id,
-                            old_damage.w,
-                            old_damage.h,
-                            old_damage.x,
-                            old_damage.y,
-                            new_damage.w,
-                            new_damage.h,
-                            new_damage.x,
-                            new_damage.y
-                        );
-                    }
+                    mark_surface_visual_damage(scene, damage, grab.surface_id, moved.old_rect);
+                    mark_surface_visual_damage(scene, damage, grab.surface_id, moved.new_rect);
                     stem::info!(
                         "bloom: window drag moved surface={} to {},{}",
                         grab.surface_id,

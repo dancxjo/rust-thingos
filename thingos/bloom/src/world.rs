@@ -326,7 +326,7 @@ impl BloomWorld {
             None
         };
         let cursor_kind = self.input.visible_cursor_kind();
-        let (shadow_overlay, chrome_overlay) =
+        let (body_overlay, chrome_overlay) =
             self.visuals.chrome_overlay_plane(&self.display, &composition);
         let cursor = self.visuals.cursor_plane(&self.display, cursor_kind, pointer_x, pointer_y);
 
@@ -343,7 +343,7 @@ impl BloomWorld {
             &composition,
             &pending_damage,
             self.visuals.fallback_buffer_id(),
-            shadow_overlay,
+            body_overlay,
             chrome_overlay,
             pointer_overlay,
             cursor,

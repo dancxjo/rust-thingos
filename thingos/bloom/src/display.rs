@@ -34,6 +34,34 @@ const fn empty_plane_commit() -> PlaneCommit {
     }
 }
 
+fn push_overlay_commit(
+    planes: &mut [PlaneCommit; MAX_COMMIT_PLANES],
+    plane_count: &mut usize,
+    overlay: OverlayPlane,
+    z_order: i32,
+) {
+    if *plane_count >= MAX_COMMIT_PLANES {
+        stem::warn!("bloom: dropping display plane beyond fixed commit capacity");
+        return;
+    }
+
+    planes[*plane_count] = PlaneCommit {
+        plane_id: PlaneId(*plane_count as u32),
+        buffer_id: abi::display::BufferId(overlay.buffer_id),
+        dest_rect: Rect {
+            x: overlay.x.max(0) as u32,
+            y: overlay.y.max(0) as u32,
+            w: overlay.width,
+            h: overlay.height,
+        },
+        src_rect: Rect { x: 0, y: 0, w: overlay.width, h: overlay.height },
+        z_order,
+        alpha: 255,
+        _reserved: [0; 7],
+    };
+    *plane_count += 1;
+}
+
 #[derive(Clone, Copy, Debug)]
 pub struct OutputInfo {
     pub output_id: u32,
@@ -150,7 +178,7 @@ impl DisplayBackend {
         composition_list: &[CompositionEntry],
         damage: &[Rect],
         fallback_buffer: Option<u32>,
-        shadow_overlay: Option<OverlayPlane>,
+        body_overlay: Option<OverlayPlane>,
         chrome_overlay: Option<OverlayPlane>,
         pointer_overlay: Option<OverlayPlane>,
         cursor: Option<CursorPlane>,
@@ -175,8 +203,10 @@ impl DisplayBackend {
             plane_count += 1;
         }
 
-        // 1.1 Shadow overlay (below all windows, above background)
-        if let Some(overlay) = shadow_overlay {
+        // 1.1 Theme-owned window body. A single reused overlay keeps the
+        // compositor cheap while still letting transparent clients show the
+        // themed body underneath.
+        if let Some(overlay) = body_overlay {
             if plane_count < MAX_COMMIT_PLANES {
                 planes[plane_count] = PlaneCommit {
                     plane_id: PlaneId(plane_count as u32),
@@ -188,7 +218,7 @@ impl DisplayBackend {
                         h: overlay.height,
                     },
                     src_rect: Rect { x: 0, y: 0, w: overlay.width, h: overlay.height },
-                    z_order: BACKGROUND_Z_ORDER + 1,
+                    z_order: BACKGROUND_Z_ORDER.saturating_add(1),
                     alpha: 255,
                     _reserved: [0; 7],
                 };
@@ -196,12 +226,9 @@ impl DisplayBackend {
             }
         }
 
-        // 2. Surface planes
+        // 2. Surface planes. The flat compositor chrome is drawn once into a
+        // reused full-screen overlay and committed above the clients.
         for entry in composition_list {
-            if plane_count >= MAX_COMMIT_PLANES {
-                stem::warn!("bloom: dropping display plane beyond fixed commit capacity");
-                break;
-            }
             let mut plane = PlaneCommit {
                 plane_id: PlaneId(plane_count as u32),
                 buffer_id: abi::display::BufferId(entry.buffer_id),
@@ -214,30 +241,16 @@ impl DisplayBackend {
             if !entry.is_fullscreen && !entry.chrome.is_empty() {
                 plane = plane.with_rounded_clip(corner_radius);
             }
+            if plane_count >= MAX_COMMIT_PLANES {
+                stem::warn!("bloom: dropping display plane beyond fixed commit capacity");
+                break;
+            }
             planes[plane_count] = plane;
             plane_count += 1;
         }
 
-        // 3. Compositor chrome. This is above client content so borders remain
-        // visible while clients repaint or resize.
         if let Some(overlay) = chrome_overlay {
-            if plane_count < MAX_COMMIT_PLANES {
-                planes[plane_count] = PlaneCommit {
-                    plane_id: PlaneId(plane_count as u32),
-                    buffer_id: abi::display::BufferId(overlay.buffer_id),
-                    dest_rect: Rect {
-                        x: overlay.x.max(0) as u32,
-                        y: overlay.y.max(0) as u32,
-                        w: overlay.width,
-                        h: overlay.height,
-                    },
-                    src_rect: Rect { x: 0, y: 0, w: overlay.width, h: overlay.height },
-                    z_order: i32::MAX - 2,
-                    alpha: 255,
-                    _reserved: [0; 7],
-                };
-                plane_count += 1;
-            }
+            push_overlay_commit(&mut planes, &mut plane_count, overlay, i32::MAX - 2);
         }
 
         // 4. Diagnostic overlay. This is intentionally above the wallpaper and

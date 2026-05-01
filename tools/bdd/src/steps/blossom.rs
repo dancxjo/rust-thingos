@@ -620,6 +620,18 @@ async fn wayland_hello_client_visible(world: &mut ThingOsWorld) -> Result<(), St
     )))
 }
 
+#[then("the compositor should render themed window bodies")]
+async fn compositor_should_render_themed_window_bodies(
+    world: &mut ThingOsWorld,
+) -> Result<(), StepError> {
+    if world.wait_for_serial("bloom: flat window overlays ready", 30.0).await {
+        eprintln!("│  │  │      ✅ Bloom rendered the theme-owned window body overlay");
+        Ok(())
+    } else {
+        Err(StepError("Expected Bloom to allocate the theme-owned window body overlay".to_string()))
+    }
+}
+
 #[then("active window chrome button glyphs should be centered inside their buttons")]
 async fn active_window_chrome_button_glyphs_are_centered_inside_their_buttons(
     world: &mut ThingOsWorld,
@@ -707,8 +719,8 @@ async fn active_window_chrome_button_glyphs_are_centered_inside_their_buttons(
     )))
 }
 
-#[then("active window chrome should be stroked as a rounded rectangle")]
-async fn active_window_chrome_should_be_stroked_as_a_rounded_rectangle(
+#[then("active window chrome should be rendered with flat thick borders")]
+async fn active_window_chrome_should_be_rendered_with_flat_thick_borders(
     world: &mut ThingOsWorld,
 ) -> Result<(), StepError> {
     let _ = world.wait_for_serial("First frame rendered", 60.0).await;
@@ -756,49 +768,32 @@ async fn active_window_chrome_should_be_stroked_as_a_rounded_rectangle(
             continue;
         }
 
-        let Some(mid_left) = first_chrome_pixel_on_row(&img, best_row, 0, max_x) else {
-            last = (best_row, best_count, 0, 0);
-            tokio::time::sleep(std::time::Duration::from_millis(500)).await;
-            continue;
-        };
-        let mid_right =
-            last_chrome_pixel_on_row(&img, best_row, mid_left, max_x).unwrap_or(mid_left);
-        let min_top_width = (mid_right.saturating_sub(mid_left) / 3).max(40);
-
-        let mut top_y = None;
-        for y in 0..=best_row {
+        let mut thick_rows = 0u32;
+        for y in 0..max_y {
             let mut count = 0u32;
-            for x in mid_left..=mid_right {
+            for x in 0..max_x {
                 if is_window_chrome_pixel(img.get_pixel(x, y).0) {
                     count += 1;
                 }
             }
-            if count >= min_top_width {
-                top_y = Some(y);
-                break;
+            if count >= 200 {
+                thick_rows += 1;
             }
         }
-
-        if let Some(top_y) = top_y {
-            if let Some(top_left) = first_chrome_pixel_on_row(&img, top_y, mid_left, mid_right + 1)
-            {
-                let top_inset = top_left.saturating_sub(mid_left);
-                last = (best_row, best_count, top_y, top_inset);
-                if (5..=20).contains(&top_inset) {
-                    eprintln!(
-                        "│  │  │      Active chrome has rounded stroke geometry (row={}, top_y={}, inset={})",
-                        best_row, top_y, top_inset
-                    );
-                    return Ok(());
-                }
-            }
+        last = (best_row, best_count, thick_rows, 0);
+        if best_count >= 300 && thick_rows >= 6 {
+            eprintln!(
+                "│  │  │      Active chrome has flat thick border geometry (row={}, row_pixels={}, thick_rows={})",
+                best_row, best_count, thick_rows
+            );
+            return Ok(());
         }
 
         tokio::time::sleep(std::time::Duration::from_millis(500)).await;
     }
 
     Err(StepError(format!(
-        "Active chrome did not have a rounded stroke inset (best_row={}, row_pixels={}, top_y={}, top_inset={})",
+        "Active chrome did not have flat thick border geometry (best_row={}, row_pixels={}, thick_rows={}, unused={})",
         last.0, last.1, last.2, last.3
     )))
 }
