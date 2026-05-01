@@ -3,6 +3,7 @@ use core::sync::atomic::{AtomicU32, Ordering};
 use abi::KindId;
 use abi::hid::{
     BristleEventHeader, EventType, Key, KeyEventPayload, PointerButtonPayload, PointerMovePayload,
+    ScrollPayload,
 };
 use stem::syscall::message::msg_send;
 use stem::syscall::port_send_all;
@@ -493,6 +494,22 @@ impl InputState {
                     self.pointer_x,
                     self.pointer_y,
                 );
+            }
+            Ok(EventType::Scroll) if payload.len() >= ScrollPayload::SIZE => {
+                let mut p = [0u8; ScrollPayload::SIZE];
+                p.copy_from_slice(&payload[..ScrollPayload::SIZE]);
+                let scroll = ScrollPayload::from_bytes(&p);
+                if let Some(surface_id) = scene.pointer_focus {
+                    if scene.surface_client(surface_id).is_some() {
+                        send_wayland_pointer_scroll(
+                            wayland_evt_write,
+                            surface_id,
+                            scroll.dx,
+                            scroll.dy,
+                            header.timestamp_ns,
+                        );
+                    }
+                }
             }
             Ok(EventType::KeyDown) if payload.len() >= KeyEventPayload::SIZE => {
                 let mut p = [0u8; KeyEventPayload::SIZE];
@@ -1233,6 +1250,20 @@ fn send_wayland_pointer_button(
         return;
     };
     let msg = ipc::encode_pointer_button(surface_id, button, pressed, timestamp_ns);
+    let _ = port_send_all(evt_write, &msg);
+}
+
+fn send_wayland_pointer_scroll(
+    wayland_evt_write: Option<u32>,
+    surface_id: u32,
+    dx: i16,
+    dy: i16,
+    timestamp_ns: u64,
+) {
+    let Some(evt_write) = wayland_evt_write else {
+        return;
+    };
+    let msg = ipc::encode_pointer_scroll(surface_id, dx, dy, timestamp_ns);
     let _ = port_send_all(evt_write, &msg);
 }
 

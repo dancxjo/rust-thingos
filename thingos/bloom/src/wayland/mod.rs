@@ -699,6 +699,16 @@ impl WaylandServer {
                 let serial = self.alloc_serial();
                 self.send_pointer_button(surface, button, pressed, time, serial);
             }
+            ipc::WEVT_POINTER_SCROLL => {
+                if data.len() < 16 {
+                    return;
+                }
+                let surface = u32::from_ne_bytes(data[4..8].try_into().unwrap_or([0; 4]));
+                let dx = i16::from_ne_bytes(data[8..10].try_into().unwrap_or([0; 2]));
+                let dy = i16::from_ne_bytes(data[10..12].try_into().unwrap_or([0; 2]));
+                let time = u32::from_ne_bytes(data[12..16].try_into().unwrap_or([0; 4]));
+                self.send_pointer_axis(surface, dx, dy, time);
+            }
             ipc::WEVT_KEYBOARD_ENTER => {
                 if data.len() < 8 {
                     return;
@@ -789,6 +799,8 @@ impl WaylandServer {
             payload.extend_from_slice(&wl_fixed(x).to_ne_bytes());
             payload.extend_from_slice(&wl_fixed(y).to_ne_bytes());
             client.send(pointer, 0, &payload);
+            // wl_pointer.frame — opcode 5 (wl_pointer v5+)
+            client.send(pointer, 5, &[]);
             break;
         }
     }
@@ -805,6 +817,8 @@ impl WaylandServer {
             payload.extend_from_slice(&serial.to_ne_bytes());
             payload.extend_from_slice(&wl_surface.to_ne_bytes());
             client.send(pointer, 1, &payload);
+            // wl_pointer.frame — opcode 5 (wl_pointer v5+)
+            client.send(pointer, 5, &[]);
             break;
         }
     }
@@ -822,6 +836,8 @@ impl WaylandServer {
             payload.extend_from_slice(&wl_fixed(x).to_ne_bytes());
             payload.extend_from_slice(&wl_fixed(y).to_ne_bytes());
             client.send(pointer, 2, &payload);
+            // wl_pointer.frame — opcode 5 (wl_pointer v5+)
+            client.send(pointer, 5, &[]);
             break;
         }
     }
@@ -847,6 +863,59 @@ impl WaylandServer {
             payload.extend_from_slice(&evdev_button(button).to_ne_bytes());
             payload.extend_from_slice(&(if pressed { 1u32 } else { 0u32 }).to_ne_bytes());
             client.send(pointer, 3, &payload);
+            // wl_pointer.frame — opcode 5 (wl_pointer v5+)
+            client.send(pointer, 5, &[]);
+            break;
+        }
+    }
+
+    /// Send `wl_pointer.axis_source`, one or two `wl_pointer.axis` events, and
+    /// a terminating `wl_pointer.frame` for the focused surface.
+    ///
+    /// Wayland protocol opcodes used (wl_pointer v5):
+    /// - opcode 4: axis (time: uint, axis: uint, value: fixed)
+    ///   - axis 0 = vertical_scroll, axis 1 = horizontal_scroll
+    /// - opcode 5: frame (no parameters)
+    /// - opcode 6: axis_source (axis_source: uint)
+    ///   - axis_source 0 = wheel
+    fn send_pointer_axis(&mut self, surface: u32, dx: i16, dy: i16, time: u32) {
+        if dx == 0 && dy == 0 {
+            return;
+        }
+        // Pixels of surface-local scroll per one device detent (wheel click).
+        // Bristle scroll events use ±1 per detent. A value of 15px/detent is a
+        // common default in Wayland compositors (e.g. weston) and feels natural
+        // for typical mouse wheels at standard display DPI.
+        const SCROLL_PIXELS_PER_DETENT: i32 = 15;
+        for client in self.clients.values() {
+            let Some(pointer) = client.pointer_object() else {
+                continue;
+            };
+            if client.wl_surface_for_bloom_surface(surface).is_none() {
+                continue;
+            }
+            // wl_pointer.axis_source(wheel=0) — opcode 6
+            client.send(pointer, 6, &0u32.to_ne_bytes());
+            // wl_pointer.axis for vertical scroll (axis 0) — opcode 4
+            if dy != 0 {
+                let mut payload = Vec::new();
+                payload.extend_from_slice(&time.to_ne_bytes());
+                payload.extend_from_slice(&0u32.to_ne_bytes()); // axis 0 = vertical
+                let value = wl_fixed((dy as i32).saturating_mul(SCROLL_PIXELS_PER_DETENT));
+                payload.extend_from_slice(&value.to_ne_bytes());
+                client.send(pointer, 4, &payload);
+            }
+            // wl_pointer.axis for horizontal scroll (axis 1) — opcode 4
+            if dx != 0 {
+                let mut payload = Vec::new();
+                payload.extend_from_slice(&time.to_ne_bytes());
+                payload.extend_from_slice(&1u32.to_ne_bytes()); // axis 1 = horizontal
+                let value = wl_fixed((dx as i32).saturating_mul(SCROLL_PIXELS_PER_DETENT));
+                payload.extend_from_slice(&value.to_ne_bytes());
+                client.send(pointer, 4, &payload);
+            }
+            // wl_pointer.frame — opcode 5 (wl_pointer v5+)
+            client.send(pointer, 5, &[]);
             break;
         }
     }
