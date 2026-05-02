@@ -110,6 +110,7 @@ const PORT_CMD: usize = 0x18;
 const PORT_TFD: usize = 0x20;
 const PORT_SIG: usize = 0x24;
 const PORT_SSTS: usize = 0x28;
+const PORT_SCTL: usize = 0x2C;
 const PORT_SERR: usize = 0x30;
 const PORT_SACT: usize = 0x34;
 const PORT_CI: usize = 0x38;
@@ -124,6 +125,8 @@ const PORT_CMD_ST: u32 = 1 << 0;
 const PORT_CMD_FRE: u32 = 1 << 4;
 const PORT_CMD_FR: u32 = 1 << 14;
 const PORT_CMD_CR: u32 = 1 << 15;
+const ATA_SR_DRQ: u32 = 1 << 3;
+const ATA_SR_BSY: u32 = 1 << 7;
 const FIS_TYPE_REG_H2D: u8 = 0x27;
 const ATA_CMD_PACKET: u8 = 0xA0;
 
@@ -206,6 +209,36 @@ fn find_free_cmd_slot(pb: u64) -> Option<u32> {
     (0..32).find(|slot| occupied & (1u32 << slot) == 0)
 }
 
+fn wait_port_task_file_ready(pb: u64, iterations: u32) -> bool {
+    for i in 0..iterations {
+        if mmio_read32(pb, PORT_TFD) & (ATA_SR_BSY | ATA_SR_DRQ) == 0 {
+            return true;
+        }
+        if i % 1024 == 0 {
+            core::hint::spin_loop();
+        }
+    }
+    false
+}
+
+fn reset_port_link(pb: u64) -> bool {
+    let sctl = mmio_read32(pb, PORT_SCTL);
+    mmio_write32(pb, PORT_SCTL, (sctl & !0x0F) | 0x01);
+    stem::time::sleep_ms(2);
+    mmio_write32(pb, PORT_SCTL, sctl & !0x0F);
+
+    for _ in 0..100 {
+        let ssts = mmio_read32(pb, PORT_SSTS);
+        if (ssts & 0x0F) == 0x03 && (ssts & 0x0F00) == 0x0100 {
+            mmio_write32(pb, PORT_SERR, 0xFFFFFFFF);
+            mmio_write32(pb, PORT_IS, 0xFFFFFFFF);
+            return true;
+        }
+        stem::time::sleep_ms(1);
+    }
+    false
+}
+
 struct AhciDevice {
     mmio_base: u64,
     port: u32,
@@ -257,7 +290,15 @@ impl AhciDevice {
             reserved: 0,
             dbc: (ds - 1) as u32,
         };
-        let slot = find_free_cmd_slot(pb).ok_or(BlockError::NotReady)?;
+        let Some(slot) = find_free_cmd_slot(pb) else {
+            error!(
+                "AHCI: no free command slot port={} ci={:#x} sact={:#x}",
+                self.port,
+                mmio_read32(pb, PORT_CI),
+                mmio_read32(pb, PORT_SACT)
+            );
+            return Err(BlockError::NotReady);
+        };
         let slot_bit = 1u32 << slot;
 
         unsafe {
@@ -266,18 +307,17 @@ impl AhciDevice {
             tbl.cfis[0] = FIS_TYPE_REG_H2D;
             tbl.cfis[1] = 0x80;
             tbl.cfis[2] = ATA_CMD_PACKET;
-            tbl.cfis[3] = 1;
             tbl.cfis[5] = (ds as u32 & 0xFF) as u8;
             tbl.cfis[6] = ((ds as u32 >> 8) & 0xFF) as u8;
 
             tbl.acmd.fill(0);
             let lba32 = lba as u32;
-            tbl.acmd[0] = 0x28; // READ(10)
+            tbl.acmd[0] = 0xA8; // READ(12)
             tbl.acmd[2] = (lba32 >> 24) as u8;
             tbl.acmd[3] = (lba32 >> 16) as u8;
             tbl.acmd[4] = (lba32 >> 8) as u8;
             tbl.acmd[5] = lba32 as u8;
-            tbl.acmd[8] = 1; // 1 sector
+            tbl.acmd[9] = 1; // 1 sector
             tbl.prdt[0] = prdt;
 
             let hdr = &mut *((self.dma_virt as usize
@@ -292,26 +332,39 @@ impl AhciDevice {
             hdr.ctbau = ((self.dma_phys as usize + OFFSET_CMD_TABLE) >> 32) as u32;
         }
 
-        let mut timeout = 200000;
-        while (mmio_read32(pb, PORT_TFD) & 0x80) != 0 && timeout > 0 {
-            timeout -= 1;
-            if timeout % 1000 == 0 {
-                yield_now();
-            }
-        }
-        if timeout == 0 {
+        if !wait_port_task_file_ready(pb, 50000) {
             let is = mmio_read32(pb, PORT_IS);
             let tfd = mmio_read32(pb, PORT_TFD);
             error!(
-                "AHCI: port {} not ready for ATAPI packet is={:#x} tfd={:#x}",
-                self.port, is, tfd
+                "AHCI: port {} not ready for ATAPI packet slot={} is={:#x} tfd={:#x} ci={:#x} sact={:#x}",
+                self.port,
+                slot,
+                is,
+                tfd,
+                mmio_read32(pb, PORT_CI),
+                mmio_read32(pb, PORT_SACT)
             );
             return Err(BlockError::NotReady);
         }
 
-        trace!("AHCI: sending command for LBA {}", lba);
+        info!(
+            "AHCI: issuing ATAPI READ port={} slot={} lba={} tfd={:#x} ci={:#x} sact={:#x}",
+            self.port,
+            slot,
+            lba,
+            mmio_read32(pb, PORT_TFD),
+            mmio_read32(pb, PORT_CI),
+            mmio_read32(pb, PORT_SACT)
+        );
         mmio_write32(pb, PORT_CI, slot_bit);
-        let mut loop_timeout = 200000;
+        info!(
+            "AHCI: ATAPI READ submitted port={} slot={} ci={:#x} is={:#x}",
+            self.port,
+            slot,
+            mmio_read32(pb, PORT_CI),
+            mmio_read32(pb, PORT_IS)
+        );
+        let mut loop_timeout = 4096;
         loop {
             let ci = mmio_read32(pb, PORT_CI);
             if ci & slot_bit == 0 {
@@ -322,15 +375,35 @@ impl AhciDevice {
                 return Err(BlockError::IoError);
             }
             loop_timeout -= 1;
-            if loop_timeout % 1000 == 0 {
-                yield_now();
+            if loop_timeout % 256 == 0 {
+                core::hint::spin_loop();
             }
             if loop_timeout == 0 {
                 let is = mmio_read32(pb, PORT_IS);
                 let tfd = mmio_read32(pb, PORT_TFD);
-                error!("AHCI: command timeout on port {} is={:#x} tfd={:#x}", self.port, is, tfd);
+                error!(
+                    "AHCI: command timeout port={} slot={} is={:#x} tfd={:#x} ci={:#x} sact={:#x} serr={:#x}",
+                    self.port,
+                    slot,
+                    is,
+                    tfd,
+                    mmio_read32(pb, PORT_CI),
+                    mmio_read32(pb, PORT_SACT),
+                    mmio_read32(pb, PORT_SERR)
+                );
                 return Err(BlockError::NotReady);
             }
+        }
+        if mmio_read32(pb, PORT_IS) & (1 << 30) != 0 {
+            error!(
+                "AHCI: command completed with task-file error port={} slot={} is={:#x} tfd={:#x} serr={:#x}",
+                self.port,
+                slot,
+                mmio_read32(pb, PORT_IS),
+                mmio_read32(pb, PORT_TFD),
+                mmio_read32(pb, PORT_SERR)
+            );
+            return Err(BlockError::IoError);
         }
         trace!("AHCI: command completed for LBA {}", lba);
 
