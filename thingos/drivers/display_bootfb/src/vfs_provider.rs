@@ -46,7 +46,7 @@ pub fn dispatch_vfs_rpc(driver: &mut BootFbDriver, req: &ProviderRequest) -> Pro
         VfsRpcOp::Lookup => lookup(&req.payload),
         VfsRpcOp::Stat => stat(&req.payload),
         VfsRpcOp::Close => ProviderResponse::ok_empty(),
-        VfsRpcOp::DeviceCall => device_call(driver, &req.payload),
+        VfsRpcOp::DeviceCall => device_call(driver, req),
         VfsRpcOp::SubscribeReady | VfsRpcOp::UnsubscribeReady => ProviderResponse::ok_empty(),
         VfsRpcOp::Rename => ProviderResponse::err(Errno::ENOSYS),
         VfsRpcOp::AttrGet
@@ -58,6 +58,20 @@ pub fn dispatch_vfs_rpc(driver: &mut BootFbDriver, req: &ProviderRequest) -> Pro
             ProviderResponse::err(Errno::ENOSYS)
         }
         VfsRpcOp::ReadIntoFd => ProviderResponse::err(Errno::ENOSYS),
+    }
+}
+
+/// Map a raw display op code to a human-readable name for log messages.
+fn display_op_name(op: u32) -> &'static str {
+    match op {
+        DISPLAY_OP_GET_INFO => "GET_INFO",
+        DISPLAY_OP_IMPORT_BUFFER => "IMPORT_BUFFER",
+        DISPLAY_OP_RELEASE_BUFFER => "RELEASE_BUFFER",
+        DISPLAY_OP_COMMIT => "COMMIT",
+        DISPLAY_OP_SET_CURSOR => "SET_CURSOR",
+        DISPLAY_OP_MOVE_CURSOR => "MOVE_CURSOR",
+        DISPLAY_OP_ACCEL2D => "ACCEL2D",
+        _ => "UNKNOWN",
     }
 }
 
@@ -99,7 +113,8 @@ fn stat(payload: &[u8]) -> ProviderResponse {
     ProviderResponse::ok_stat(mode, size, handle)
 }
 
-fn device_call(driver: &mut BootFbDriver, payload: &[u8]) -> ProviderResponse {
+fn device_call(driver: &mut BootFbDriver, req: &ProviderRequest) -> ProviderResponse {
+    let payload = &req.payload;
     if payload.len() < 8 + core::mem::size_of::<DeviceCall>() {
         return ProviderResponse::err(Errno::EINVAL);
     }
@@ -121,7 +136,23 @@ fn device_call(driver: &mut BootFbDriver, payload: &[u8]) -> ProviderResponse {
         return ProviderResponse::err(Errno::ENOSYS);
     }
 
-    match call.op {
+    // Entry instrumentation: record correlation ID, timestamp, and provider thread.
+    driver.rpc_seq = driver.rpc_seq.saturating_add(1);
+    let corr = driver.rpc_seq;
+    let enter_ns = stem::time::monotonic_ns();
+    driver.rpc_enter_ns = enter_ns;
+    let provider_tid = stem::syscall::get_tid().unwrap_or(0);
+    let op_name = display_op_name(call.op);
+    stem::trace!(
+        "display_bootfb: rpc.enter corr={} op={} req_id={} resp_port={} provider_tid={}",
+        corr,
+        op_name,
+        req.req_id,
+        req.resp_port,
+        provider_tid,
+    );
+
+    let response = match call.op {
         DISPLAY_OP_GET_INFO => {
             stem::debug!("display.phase=device_call_enter op=GET_INFO");
             let info = driver.get_info();
@@ -283,7 +314,55 @@ fn device_call(driver: &mut BootFbDriver, payload: &[u8]) -> ProviderResponse {
             }
         }
         _ => ProviderResponse::err(Errno::ENOSYS),
+    };
+
+    // Exit instrumentation: log duration and fire per-RPC watchdog.
+    let exit_ns = stem::time::monotonic_ns();
+    let duration_ms = exit_ns.saturating_sub(enter_ns) / 1_000_000;
+    stem::trace!(
+        "display_bootfb: rpc.exit corr={} op={} req_id={} status={} duration_ms={}",
+        corr,
+        op_name,
+        req.req_id,
+        response.status,
+        duration_ms,
+    );
+    // Per-RPC watchdog: warn on high-latency or stalled operations.
+    if duration_ms >= 1000 {
+        stem::warn!(
+            "display_bootfb: rpc.stall corr={} op={} duration_ms={} status={} provider_tid={} req_id={} resp_port={}",
+            corr,
+            op_name,
+            duration_ms,
+            response.status,
+            provider_tid,
+            req.req_id,
+            req.resp_port,
+        );
+    } else if duration_ms >= 200 {
+        stem::warn!(
+            "display_bootfb: rpc.slow corr={} op={} duration_ms={} status={} provider_tid={} req_id={} resp_port={}",
+            corr,
+            op_name,
+            duration_ms,
+            response.status,
+            provider_tid,
+            req.req_id,
+            req.resp_port,
+        );
+    } else if duration_ms >= 50 {
+        stem::info!(
+            "display_bootfb: rpc.latency corr={} op={} duration_ms={} status={} provider_tid={} req_id={} resp_port={}",
+            corr,
+            op_name,
+            duration_ms,
+            response.status,
+            provider_tid,
+            req.req_id,
+            req.resp_port,
+        );
     }
+    response
 }
 
 fn handle_attr_get(payload: &[u8]) -> ProviderResponse {

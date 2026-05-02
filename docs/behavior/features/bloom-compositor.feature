@@ -157,3 +157,12 @@ Feature: Bloom compositor desktop behavior
     And the serial output should contain "bloom.phase=first_commit_begin" within 60s
     And the serial output should contain "bloom.phase=first_commit_done" within 60s
     And the serial output should contain "bloom.phase=desktop_ready" within 60s
+
+  Scenario: Display RPC watchdog does not fire on a healthy desktop
+    Given the machine is booted
+    Then the serial output should contain "First frame rendered" within 180s
+    And the serial output should not contain "rpc.stall"
+    And the serial output should not contain "rpc.slow"
+    And the serial output should not contain "VFS_RPC: display device_call.stall"
+    And the serial output should not contain "VFS_RPC: display device_call.slow"
+    And the serial output should not contain "VFS_RPC: TIMEOUT"

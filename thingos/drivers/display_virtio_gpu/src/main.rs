@@ -305,6 +305,8 @@ struct DisplayRpcDiag {
     last_exit_ns: u64,
     last_req_id: u16,
     last_resp_port: u32,
+    /// TID of the provider thread at the time of the last RPC entry.
+    last_provider_tid: u64,
 }
 
 impl DisplayRpcDiag {
@@ -319,6 +321,7 @@ impl DisplayRpcDiag {
             last_exit_ns: 0,
             last_req_id: 0,
             last_resp_port: 0,
+            last_provider_tid: 0,
         }
     }
 }
@@ -653,15 +656,20 @@ fn maybe_log_display_watchdog(
     };
     let last_rpc_ms =
         driver.rpc_diag.last_exit_ns.saturating_sub(driver.rpc_diag.last_enter_ns) / 1_000_000;
+    // Classify the current RPC state for freeze diagnosis:
+    //   open_rpc_ms > 0  → provider has entered but not exited (stuck inside provider)
+    //   open_rpc_ms == 0 → all RPCs have completed (no stall in provider path)
     info!(
-        "display_virtio_gpu: watchdog rpc_enter={}({}) rpc_exit={}({}) status={} req_id={} resp_port={} open_rpc_ms={} last_rpc_ms={} frame={} present_seq={} pool free={} acquired={} in_flight={} imports={} commits={} failed_imports={} failed_commits={} damage_rects={} damage_area={} vfs_pending_bytes={}",
+        "display_virtio_gpu: watchdog rpc_enter={}({}) rpc_exit={}({}) status={} corr={} req_id={} resp_port={} provider_tid={} open_rpc_ms={} last_rpc_ms={} frame={} present_seq={} pool free={} acquired={} in_flight={} imports={} commits={} failed_imports={} failed_commits={} damage_rects={} damage_area={} vfs_pending_bytes={}",
         driver.rpc_diag.last_entered_seq,
         display_op_name(driver.rpc_diag.last_entered_op),
         driver.rpc_diag.last_exited_seq,
         display_op_name(driver.rpc_diag.last_exited_op),
         driver.rpc_diag.last_exit_status,
+        driver.rpc_diag.last_entered_seq,
         driver.rpc_diag.last_req_id,
         driver.rpc_diag.last_resp_port,
+        driver.rpc_diag.last_provider_tid,
         open_rpc_ms,
         last_rpc_ms,
         current_frame,
@@ -1088,20 +1096,22 @@ fn vfs_device_call(
     driver.display_rpc_seq = driver.display_rpc_seq.saturating_add(1);
     let seq = driver.display_rpc_seq;
     let (summary0, summary1, summary2) = display_rpc_payload_summary(call.op, call_payload);
-    let tid = stem::syscall::get_tid().unwrap_or(0);
+    let provider_tid = stem::syscall::get_tid().unwrap_or(0);
+    let enter_ns = stem::time::monotonic_ns();
     driver.rpc_diag.last_entered_seq = seq;
     driver.rpc_diag.last_entered_op = call.op;
-    driver.rpc_diag.last_enter_ns = stem::time::monotonic_ns();
+    driver.rpc_diag.last_enter_ns = enter_ns;
     driver.rpc_diag.last_req_id = req.req_id;
     driver.rpc_diag.last_resp_port = req.resp_port;
+    driver.rpc_diag.last_provider_tid = provider_tid;
     trace!(
-        "display_virtio_gpu: rpc enter seq={} op={} req_id={} resp_port={} pid={} tid={} arg0={} arg1={} arg2={}",
+        "display_virtio_gpu: rpc.enter corr={} op={} req_id={} resp_port={} pid={} provider_tid={} arg0={} arg1={} arg2={}",
         seq,
         display_op_name(call.op),
         req.req_id,
         req.resp_port,
         stem::syscall::getpid(),
-        tid,
+        provider_tid,
         summary0,
         summary1,
         summary2,
@@ -1127,22 +1137,70 @@ fn vfs_device_call(
         }
         _ => {}
     }
+    let exit_ns = stem::time::monotonic_ns();
+    let duration_ms = exit_ns.saturating_sub(enter_ns) / 1_000_000;
     driver.rpc_diag.last_exited_seq = seq;
     driver.rpc_diag.last_exited_op = call.op;
     driver.rpc_diag.last_exit_status = response.status;
-    driver.rpc_diag.last_exit_ns = stem::time::monotonic_ns();
+    driver.rpc_diag.last_exit_ns = exit_ns;
     trace!(
-        "display_virtio_gpu: rpc exit seq={} op={} status={} ret={} present_seq={} imports={} commits={} failed_imports={} failed_commits={}",
+        "display_virtio_gpu: rpc.exit corr={} op={} status={} ret={} duration_ms={} present_seq={} imports={} commits={} failed_imports={} failed_commits={}",
         seq,
         display_op_name(call.op),
         response.status,
         ret,
+        duration_ms,
         driver.present_seq,
         driver.total_imports,
         driver.total_commits,
         driver.failed_imports,
         driver.failed_commits,
     );
+    // Per-RPC watchdog: warn on high-latency or stalled operations.
+    // Thresholds are conservative to surface infrastructure stalls (not heavy rendering).
+    if duration_ms >= 1000 {
+        let (pool_free, pool_acquired, pool_in_flight) = frame_pool_counts(driver);
+        warn!(
+            "display_virtio_gpu: rpc.stall corr={} op={} duration_ms={} status={} provider_tid={} req_id={} resp_port={} present_seq={} pool_free={} pool_acquired={} pool_in_flight={} imports={} commits={} failed_imports={} failed_commits={}",
+            seq,
+            display_op_name(call.op),
+            duration_ms,
+            response.status,
+            provider_tid,
+            req.req_id,
+            req.resp_port,
+            driver.present_seq,
+            pool_free,
+            pool_acquired,
+            pool_in_flight,
+            driver.total_imports,
+            driver.total_commits,
+            driver.failed_imports,
+            driver.failed_commits,
+        );
+    } else if duration_ms >= 200 {
+        warn!(
+            "display_virtio_gpu: rpc.slow corr={} op={} duration_ms={} status={} provider_tid={} req_id={} resp_port={}",
+            seq,
+            display_op_name(call.op),
+            duration_ms,
+            response.status,
+            provider_tid,
+            req.req_id,
+            req.resp_port,
+        );
+    } else if duration_ms >= 50 {
+        info!(
+            "display_virtio_gpu: rpc.latency corr={} op={} duration_ms={} status={} provider_tid={} req_id={} resp_port={}",
+            seq,
+            display_op_name(call.op),
+            duration_ms,
+            response.status,
+            provider_tid,
+            req.req_id,
+            req.resp_port,
+        );
+    }
     response
 }
 
