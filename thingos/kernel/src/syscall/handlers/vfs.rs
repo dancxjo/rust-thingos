@@ -93,6 +93,7 @@ pub fn sys_fs_open(path_ptr: usize, path_len: usize, flags: usize) -> SysResult<
     let abs_path = resolve_path(path)?;
 
     // Resolve path through the mount table, creating the file if O_CREAT is set.
+    let mut created = false;
     let node = if want_creat {
         // Try lookup first; fall back to create if the file doesn't exist.
         match vfs::path::resolve(&abs_path) {
@@ -107,12 +108,31 @@ pub fn sys_fs_open(path_ptr: usize, path_len: usize, flags: usize) -> SysResult<
                 }
                 existing
             }
-            Err(Errno::ENOENT) => vfs::mount::create(&abs_path)?,
+            Err(Errno::ENOENT) => {
+                let created_node = vfs::mount::create(&abs_path)?;
+                created = true;
+                created_node
+            }
             Err(e) => return Err(e),
         }
     } else {
         vfs::path::resolve(&abs_path)?
     };
+
+    if created {
+        let (parent_path, name) = split_parent(&abs_path);
+        let parent_node = vfs::mount::lookup(parent_path).ok();
+        let parent_mount_id = vfs::mount::mount_id_for_path(parent_path);
+        if let Some(parent) = parent_node {
+            crate::vfs::watch::emit_event(
+                &*parent,
+                abi::vfs_watch::mask::CREATE,
+                Some(name),
+                0,
+                parent_mount_id,
+            );
+        }
+    }
 
     enforce_open_access(&node, open_flags)?;
 
@@ -835,6 +855,7 @@ pub fn sys_fs_mount_ex(
     };
 
     vfs::mount::mount(&abs_path, driver, flags);
+    emit_proc_mounts_modified();
 
     crate::kdebug!(
         "vfs: mounted userland provider at {} (flags: {:#x}) port={:p}",
@@ -881,6 +902,7 @@ pub fn sys_fs_bind(
     }
 
     vfs::mount::mount(&dst_path, driver, flags);
+    emit_proc_mounts_modified();
 
     crate::kdebug!("vfs: bound {} to {} (flags: {:#x})", src_path, dst_path, flags);
     Ok(0)
@@ -901,6 +923,7 @@ pub fn sys_fs_umount(path_ptr: usize, path_len: usize) -> SysResult<usize> {
     let path = core::str::from_utf8(&path_buf).map_err(|_| Errno::EINVAL)?;
     let abs_path = resolve_path(path)?;
     vfs::mount::umount(&abs_path)?;
+    emit_proc_mounts_modified();
     crate::kdebug!("vfs: unmounted userland provider at {}", abs_path);
     Ok(0)
 }
@@ -1471,6 +1494,14 @@ fn split_parent(path: &str) -> (&str, &str) {
         Some(idx) => (&trimmed[..idx], &trimmed[idx + 1..]),
         None => ("/", trimmed),
     }
+}
+
+fn emit_proc_mounts_modified() {
+    let Ok(node) = vfs::mount::lookup("/proc/mounts") else {
+        return;
+    };
+    let mount_id = vfs::mount::mount_id_for_path("/proc/mounts");
+    crate::vfs::watch::emit_event(&*node, abi::vfs_watch::mask::MODIFY, None, 0, mount_id);
 }
 
 fn require_namespace_mount_privilege() -> SysResult<()> {

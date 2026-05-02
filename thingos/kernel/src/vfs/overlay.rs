@@ -5,6 +5,7 @@ use abi::errors::SysResult;
 
 use super::{VfsDriver, VfsNode};
 use crate::vfs::ramfs::RamFs;
+use crate::vfs::union::UnionDirNode;
 
 /// A generic copy-on-read overlay filesystem driver.
 /// It wraps an underlying driver, checking an ephemeral `RamFs` layer first.
@@ -41,22 +42,34 @@ impl OverlayFs {
 
 impl VfsDriver for OverlayFs {
     fn lookup(&self, path: &str) -> SysResult<Arc<dyn VfsNode>> {
-        // 1. Try upper.
-        if let Ok(upper_node) = self.upper.lookup(path) {
-            return Ok(upper_node);
-        }
+        let upper_node = self.upper.lookup(path).ok();
+        let lower_node = match self.lower.lookup(path) {
+            Ok(node) => node,
+            Err(abi::errors::Errno::ENOENT) => {
+                if let Some(upper_node) = upper_node {
+                    return Ok(upper_node);
+                }
+                return Err(abi::errors::Errno::ENOENT);
+            }
+            Err(err) => return Err(err),
+        };
 
-        // 2. Not in upper, try lower.
-        let lower_node = self.lower.lookup(path)?;
-
-        // If it's a directory, we pass through to lower for now.
-        // A full union directory would require an OverlayDirNode to merge `readdir`.
         let stat = lower_node.stat()?;
         if stat.is_dir() {
+            if let Some(upper_node) = upper_node {
+                if upper_node.stat()?.is_dir() {
+                    return Ok(Arc::new(UnionDirNode::new(alloc::vec![upper_node, lower_node])));
+                }
+                return Ok(upper_node);
+            }
             return Ok(lower_node);
         }
 
-        // 3. Create the file in upper.
+        if let Some(upper_node) = upper_node {
+            return Ok(upper_node);
+        }
+
+        // Create the file in upper.
         // Ensure parent directories exist in the upper layer.
         let parts: Vec<&str> = path.split('/').filter(|s| !s.is_empty()).collect();
         if parts.len() > 1 {
@@ -160,5 +173,24 @@ mod tests {
 
         // Should NOT exist in lower
         assert!(lower.lookup("/new.txt").is_err());
+    }
+
+    #[test]
+    fn test_overlay_merges_upper_and_lower_directories() {
+        let lower = Arc::new(RamFs::new());
+        lower.mkdir("/bin").unwrap();
+        lower.mkdir("/etc").unwrap();
+
+        let overlay = OverlayFs::new(lower.clone());
+        overlay.mkdir("/run").unwrap();
+
+        let root = overlay.lookup("/").expect("root lookup");
+        let mut buf = [0u8; 128];
+        let n = root.readdir(0, &mut buf).expect("root readdir");
+        let text = core::str::from_utf8(&buf[..n]).unwrap();
+
+        assert!(text.contains("bin"));
+        assert!(text.contains("etc"));
+        assert!(text.contains("run"));
     }
 }

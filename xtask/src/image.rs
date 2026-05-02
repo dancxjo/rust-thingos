@@ -296,6 +296,7 @@ pub fn default_programs() -> Vec<ProgramConfig> {
         ProgramConfig { name: "cat", is_init: true, boot_module: true, features: vec![] },
         ProgramConfig { name: "head", is_init: true, boot_module: true, features: vec![] },
         ProgramConfig { name: "tail", is_init: true, boot_module: true, features: vec![] },
+        ProgramConfig { name: "less", is_init: true, boot_module: true, features: vec![] },
         ProgramConfig { name: "top", is_init: true, boot_module: true, features: vec![] },
         ProgramConfig { name: "wc", is_init: true, boot_module: true, features: vec![] },
         ProgramConfig { name: "yes", is_init: true, boot_module: true, features: vec![] },
@@ -1252,6 +1253,7 @@ fn is_bin_program(name: &str) -> bool {
             | "cat"
             | "head"
             | "tail"
+            | "less"
             | "wc"
             | "yes"
             | "cp"
@@ -1520,9 +1522,9 @@ mod tests {
 
     #[test]
     fn executable_staging_keeps_bin_to_core_commands() {
-        for name in
-            ["sh", "ls", "cat", "cp", "mkdir", "mount", "printf", "stat", "tree", "loglevel"]
-        {
+        for name in [
+            "sh", "ls", "cat", "cp", "less", "mkdir", "mount", "printf", "stat", "tree", "loglevel",
+        ] {
             assert_eq!(executable_subdir(name), "bin", "{name} should stay in /bin");
         }
         for name in ["sprout", "grep", "find"] {
@@ -1559,6 +1561,7 @@ mod tests {
         assert!(normal_entry.contains("module_path: boot():/services/netd"));
         assert!(normal_entry.contains("module_path: boot():/bin/echo"));
         assert!(normal_entry.contains("module_path: boot():/bin/cat"));
+        assert!(normal_entry.contains("module_path: boot():/bin/less"));
         assert!(normal_entry.contains("module_path: boot():/bin/cp"));
         assert!(normal_entry.contains("module_path: boot():/bin/ls"));
         assert!(normal_entry.contains("module_path: boot():/bin/mkdir"));

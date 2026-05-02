@@ -26,6 +26,9 @@ impl Supervisor {
     pub fn run_forever(&mut self) -> ! {
         info!("SPROUT: minimal supervisor online");
 
+        let shell_pid = spawn_shell();
+        stem::sleep_ms(SHELL_HEADSTART_MS);
+
         // Bristle must come up before Cambium can launch input drivers that
         // publish through `/run/bristle/*`.
         if spawn_bristle().is_some() {
@@ -36,9 +39,6 @@ impl Supervisor {
 
         self.activate_boot_roots();
         info!("SPROUT: Continuing supervisor startup");
-
-        let shell_pid = spawn_shell();
-        stem::sleep_ms(SHELL_HEADSTART_MS);
 
         match shell_pid {
             Some(pid) => {
@@ -83,7 +83,7 @@ impl Supervisor {
             &argv,
             &env,
             null,
-            inherit,
+            null,
             inherit,
             0,
             &[],

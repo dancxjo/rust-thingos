@@ -149,6 +149,12 @@ pub struct UnionDirNode {
     layers: Vec<Arc<dyn VfsNode>>,
 }
 
+impl UnionDirNode {
+    pub fn new(layers: Vec<Arc<dyn VfsNode>>) -> Self {
+        Self { layers }
+    }
+}
+
 fn append_readdir_entry(
     name: &str,
     offset: u64,

@@ -134,6 +134,7 @@ members = [
   "thingos/utils/killall",
   "thingos/utils/ld_so",
   "thingos/utils/leaf",
+  "thingos/utils/less",
   "thingos/utils/libdl",
   "thingos/utils/ln",
   "thingos/utils/loglevel",

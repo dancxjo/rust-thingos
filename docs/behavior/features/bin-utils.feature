@@ -31,3 +31,10 @@ Feature: Shell text pipelines
     Then the command output should contain "/bin"
     And the command output should contain "tree"
     And the command output should contain "|--"
+
+  Scenario: Less passes pipeline input through without hanging
+    Given the machine is booted
+    When I wait for the shell prompt
+    And I type "printf 'alpha\nbeta\n' | less" on the serial console
+    Then the command output should contain "alpha"
+    And the command output should contain "beta"

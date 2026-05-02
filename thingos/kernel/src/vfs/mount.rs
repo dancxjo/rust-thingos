@@ -161,9 +161,16 @@ pub fn lookup_for_namespace(
     };
 
     for (rel, stack) in matches {
+        let mut dir_layers = Vec::new();
         for driver in stack {
             match driver.lookup(&rel) {
-                Ok(node) => return Ok(node),
+                Ok(node) => {
+                    if node.stat()?.is_dir() {
+                        dir_layers.push(node);
+                        continue;
+                    }
+                    return Ok(node);
+                }
                 Err(Errno::ENOENT) => {
                     // Specialized fallback for fb0 if the driver doesn't have it.
                     // This is a legacy hack for early-boot framebuffer access.
@@ -176,6 +183,12 @@ pub fn lookup_for_namespace(
                 }
                 Err(err) => return Err(err),
             }
+        }
+        if !dir_layers.is_empty() {
+            if dir_layers.len() == 1 {
+                return Ok(dir_layers.pop().unwrap());
+            }
+            return Ok(Arc::new(crate::vfs::union::UnionDirNode::new(dir_layers)));
         }
     }
 

@@ -223,29 +223,15 @@ fn run_daemon_mode() -> ! {
         }
     };
 
-    let devices_watch_token =
-        match vfs_watch_path("/sys/devices", watch_mask::ALL_EVENTS, watch_flags::NONBLOCK) {
-            Ok(fd) => match svc.add_vfs_watch(fd) {
-                Ok(token) => Some((token, fd)),
-                Err(err) => {
-                    warn!(
-                        "CAMBIUM: failed to register /sys/devices watch with ServiceLoop: {:?}",
-                        err
-                    );
-                    let _ = vfs_close(fd);
-                    None
-                }
-            },
-            Err(err) => {
-                warn!("CAMBIUM: failed to watch /sys/devices: {:?}", err);
-                None
-            }
-        };
+    let devices_watch_token = add_watch_path(&mut svc, "/sys/devices", "device topology");
+    let drivers_watch_token = add_watch_path(&mut svc, "/drivers", "driver catalog");
+    let mounts_watch_token = add_watch_path(&mut svc, "/proc/mounts", "mount table");
 
     let timeout = Some(Duration::from_millis(RECONCILE_TIMEOUT_MS));
 
     loop {
         let mut reconcile_due = false;
+        let mut catalog_rescan_due = false;
         let mut messages_drained = false;
 
         match svc.next_event(timeout) {
@@ -269,6 +255,26 @@ fn run_daemon_mode() -> ! {
                         if event.is_readable() {
                             drain_watch_fd(dev_fd);
                         }
+                        reconcile_due = true;
+                    }
+                }
+                if let Some((catalog_token, catalog_fd)) = drivers_watch_token {
+                    if token == catalog_token {
+                        stem::info!("CAMBIUM: /drivers changed; rescanning driver catalog");
+                        if event.is_readable() {
+                            drain_watch_fd(catalog_fd);
+                        }
+                        catalog_rescan_due = true;
+                        reconcile_due = true;
+                    }
+                }
+                if let Some((mounts_token, mounts_fd)) = mounts_watch_token {
+                    if token == mounts_token {
+                        stem::info!("CAMBIUM: mount table changed; rescanning driver catalog");
+                        if event.is_readable() {
+                            drain_watch_fd(mounts_fd);
+                        }
+                        catalog_rescan_due = true;
                         reconcile_due = true;
                     }
                 }
@@ -301,6 +307,10 @@ fn run_daemon_mode() -> ! {
             register_observers_for_running(&mut drivers, &mut observed_pids);
         }
 
+        if catalog_rescan_due {
+            catalog.scan();
+        }
+
         if reconcile_due {
             match scan_devices() {
                 Ok(devices) => {
@@ -309,6 +319,35 @@ fn run_daemon_mode() -> ! {
                 }
                 Err(err) => warn!("CAMBIUM: scan of /sys/devices failed: {:?}", err),
             }
+        }
+    }
+}
+
+fn add_watch_path(
+    svc: &mut ServiceLoop,
+    path: &str,
+    purpose: &str,
+) -> Option<(stem::wait_set::WaitToken, u32)> {
+    let flags = if path == "/proc/mounts" {
+        watch_flags::NONBLOCK
+    } else {
+        watch_flags::NONBLOCK | watch_flags::ONLYDIR
+    };
+    match vfs_watch_path(path, watch_mask::ALL_EVENTS, flags) {
+        Ok(fd) => match svc.add_vfs_watch(fd) {
+            Ok(token) => {
+                stem::info!("CAMBIUM: watching {} for {} updates", path, purpose);
+                Some((token, fd))
+            }
+            Err(err) => {
+                warn!("CAMBIUM: failed to register {} watch with ServiceLoop: {:?}", path, err);
+                let _ = vfs_close(fd);
+                None
+            }
+        },
+        Err(err) => {
+            warn!("CAMBIUM: failed to watch {}: {:?}", path, err);
+            None
         }
     }
 }

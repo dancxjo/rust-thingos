@@ -21,6 +21,13 @@ Feature: DRIVER_READY inbox message readiness handshake
 
   @smoke
   @timeout-60s
+  Scenario: Cambium watches driver and mount paths for catalog updates
+    Then the serial output should contain "CAMBIUM: watching /drivers for driver catalog updates" within 60s
+    And the serial output should contain "CAMBIUM: watching /proc/mounts for mount table updates" within 60s
+    And the serial output should contain "SPROUT: /etc/roots activation complete" within 60s
+
+  @smoke
+  @timeout-60s
   Scenario: Cambium sends DRIVER_READY after spawning a driver
     When cambium spawns a hardware driver
     Then the serial output should contain "CAMBIUM: sent DRIVER_READY to Sprout"

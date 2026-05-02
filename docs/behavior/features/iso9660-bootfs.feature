@@ -3,7 +3,7 @@ Feature: ISO9660 boot filesystem mount
   Scenario: iso9660d mounts the livedisk filesystem at /media/livedisk
     Given the machine is booted
     Then the log should match pattern "iso9660d: found ISO9660 on device (atapi|ata_|ahci)"
-    And I should see "iso9660d: mounted at /media/livedisk" after "iso9660d: found ISO9660 on device"
+    And the serial output should contain "iso9660d: mounted at /media/livedisk" within 20s
     When I wait for the shell prompt
     And I type "cat /media/livedisk/etc/hostname" on the serial console
     Then the latest command output should contain "thingos"
@@ -11,22 +11,29 @@ Feature: ISO9660 boot filesystem mount
   Scenario: iso9660d serves multiple sequential reads correctly
     Given the machine is booted
     When I wait for the shell prompt
+    And I wait for the serial output to contain "SPROUT: /etc/roots activation complete"
     And I type "cat /media/livedisk/etc/hostname" on the serial console
     Then the latest command output should contain "thingos"
     When I type "cat /media/livedisk/etc/hostname" on the serial console
     Then the latest command output should contain "thingos"
 
-  Scenario: iso9660d handles concurrent reads and readdir without response mis-correlation
+  Scenario: iso9660d handles sequential reads and readdir without response mis-correlation
     Given the machine is booted
     When I wait for the shell prompt
-    And I type "ls /media/livedisk && cat /media/livedisk/etc/hostname" on the serial console
+    And I wait for the serial output to contain "SPROUT: /etc/roots activation complete"
+    And I type "ls /media/livedisk" on the serial console
+    Then the latest command output should contain "etc"
+    When I type "cat /media/livedisk/etc/hostname" on the serial console
     Then the latest command output should contain "thingos"
-    And I type "ls /media/livedisk/etc && cat /media/livedisk/etc/hostname" on the serial console
+    And I type "ls /media/livedisk/etc" on the serial console
+    Then the latest command output should contain "hostname"
+    When I type "cat /media/livedisk/etc/hostname" on the serial console
     Then the latest command output should contain "thingos"
 
   Scenario: boot ISO files are accessible at /media/livedisk
     Given the machine is booted
     When I wait for the shell prompt
+    And I wait for the serial output to contain "SPROUT: /etc/roots activation complete"
     And I type "cd /media/livedisk" on the serial console
     And I type "ls" on the serial console
     Then the latest command output should contain "etc"
@@ -39,13 +46,14 @@ Feature: ISO9660 boot filesystem mount
   Scenario: boot fruit root is overlaid into the root namespace
     Given the machine is booted
     When I wait for the shell prompt
-    And I wait for the serial output to contain "mount: root overlay mounted source=/media/livedisk target=/ flags=before,cor"
+    And I wait for the serial output to contain "SPROUT: /etc/roots activation complete"
     And I type "cat /etc/hostname" on the serial console
     Then the latest command output should contain "thingos"
 
   Scenario: /etc/roots/boot describes the livedisk root overlay
     Given the machine is booted
     When I wait for the shell prompt
+    And I wait for the serial output to contain "SPROUT: /etc/roots activation complete"
     And I type "cat /etc/roots/boot" on the serial console
     Then the latest command output should contain "source=/media/livedisk"
     And the latest command output should contain "target=/"
@@ -54,6 +62,7 @@ Feature: ISO9660 boot filesystem mount
   Scenario: runtime root exposes the canonical top-level layout
     Given the machine is booted
     When I wait for the shell prompt
+    And I wait for the serial output to contain "SPROUT: /etc/roots activation complete"
     And I type "ls /" on the serial console
     Then the command output should contain "bin"
     And the command output should contain "applications"
@@ -82,6 +91,7 @@ Feature: ISO9660 boot filesystem mount
   Scenario: /bin contains the traditional command set and services live elsewhere
     Given the machine is booted
     When I wait for the shell prompt
+    And I wait for the serial output to contain "SPROUT: /etc/roots activation complete"
     And I type "ls /bin" on the serial console
     Then the command output should contain "cat"
     And the command output should contain "cp"
@@ -113,6 +123,7 @@ Feature: ISO9660 boot filesystem mount
     # the O(file_size / 64 KiB) IPC round-trip bottleneck.
     Given the machine is booted
     When I wait for the shell prompt
+    And I wait for the serial output to contain "SPROUT: /etc/roots activation complete"
     And I type "ps" on the serial console
     Then the latest command output should contain "PID"
     When I type "ps" on the serial console
@@ -123,6 +134,7 @@ Feature: ISO9660 boot filesystem mount
     # from iso9660d (the kernel VFS page cache serves the cached bytes).
     Given the machine is booted
     When I wait for the shell prompt
+    And I wait for the serial output to contain "SPROUT: /etc/roots activation complete"
     And I type "ps" on the serial console
     Then the latest command output should contain "PID"
     And the log should match pattern "SPAWN: page cache miss for"

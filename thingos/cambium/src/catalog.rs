@@ -10,9 +10,8 @@
 //! 2. Reads descriptor metadata and optional legacy hints.
 //! 3. Caches a [`DriverEntry`] record keyed by binary path.
 //!
-//! In daemon mode the catalog is built at startup and reused for periodic
-//! reconciles; avoiding periodic full rescans prevents repeated stalls on
-//! immutable `/drivers` setups.
+//! In daemon mode the catalog is built at startup and refreshed when Cambium's
+//! kernel-backed `/drivers` or `/proc/mounts` watches report namespace changes.
 
 #![allow(dead_code)]
 
