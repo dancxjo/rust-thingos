@@ -8,13 +8,18 @@ use alloc::vec;
 use alloc::vec::Vec;
 
 use stem::abi::device::{DeviceCall, DeviceKind};
-use stem::abi::syscall::vfs_flags;
+use stem::abi::syscall::{PollHandle, poll_flags, vfs_flags};
 use stem::abi::termios;
-use stem::syscall::{argv_get, exit, vfs, vfs_close, vfs_open, vfs_read, vfs_write};
+use stem::syscall::{argv_get, exit, vfs, vfs_close, vfs_open, vfs_poll, vfs_read, vfs_write};
 
 const DEFAULT_ROWS: usize = 24;
 const DEFAULT_COLS: usize = 80;
 const READ_BUF_SIZE: usize = 4096;
+
+struct PagerInput {
+    fd: u32,
+    eof: bool,
+}
 
 struct TtyModeGuard {
     fd: u32,
@@ -155,6 +160,24 @@ fn read_fd(fd: u32) -> Result<Vec<u8>, ()> {
     Ok(data)
 }
 
+fn read_fd_until_page_or_eof(fd: u32, rows: usize) -> Result<(Vec<u8>, bool), ()> {
+    let mut data = Vec::new();
+    let mut buf = vec![0u8; READ_BUF_SIZE];
+    let page_lines = visible_line_count(rows);
+    loop {
+        match vfs_read(fd, &mut buf) {
+            Ok(0) => return Ok((data, true)),
+            Ok(n) => {
+                data.extend_from_slice(&buf[..n]);
+                if line_starts(&data).len() > page_lines {
+                    return Ok((data, false));
+                }
+            }
+            Err(_) => return Err(()),
+        }
+    }
+}
+
 fn read_path(path: &str) -> Result<Vec<u8>, ()> {
     if path == "-" {
         return read_fd(0);
@@ -237,6 +260,40 @@ fn terminal_size(tty_fd: u32) -> (usize, usize) {
 
 fn visible_line_count(rows: usize) -> usize {
     rows.saturating_sub(1).max(1)
+}
+
+fn input_readable(fd: u32) -> bool {
+    let mut fds = [PollHandle { handle: fd as i32, events: poll_flags::POLLIN, revents: 0 }];
+    if vfs_poll(&mut fds, 0).unwrap_or(0) == 0 {
+        return false;
+    }
+    fds[0].revents & (poll_flags::POLLIN | poll_flags::POLLHUP | poll_flags::POLLERR) != 0
+}
+
+fn drain_available_input(input: &mut PagerInput, data: &mut Vec<u8>) -> bool {
+    if input.eof {
+        return false;
+    }
+
+    let mut changed = false;
+    let mut buf = vec![0u8; READ_BUF_SIZE];
+    while input_readable(input.fd) {
+        match vfs_read(input.fd, &mut buf) {
+            Ok(0) => {
+                input.eof = true;
+                break;
+            }
+            Ok(n) => {
+                data.extend_from_slice(&buf[..n]);
+                changed = true;
+            }
+            Err(_) => {
+                input.eof = true;
+                break;
+            }
+        }
+    }
+    changed
 }
 
 fn write_display_line(data: &[u8], width: usize) {
@@ -336,24 +393,30 @@ fn read_command(tty_fd: u32) -> Option<u8> {
     }
 }
 
-fn page(data: &[u8], starts: &[usize], quit_if_one_screen: bool, tty_fd: u32) {
+fn page(mut data: Vec<u8>, quit_if_one_screen: bool, tty_fd: u32, mut input: Option<PagerInput>) {
     let (rows, cols) = terminal_size(tty_fd);
+    let mut starts = line_starts(&data);
     let page_lines = visible_line_count(rows);
     if quit_if_one_screen && starts.len() <= page_lines {
-        let _ = write_all(1, data);
+        let _ = write_all(1, &data);
         return;
     }
 
     let tty_guard = TtyModeGuard::raw(tty_fd);
     if !tty_guard.is_active() {
-        let _ = write_all(1, data);
+        let _ = write_all(1, &data);
         return;
     }
     let _tty_guard = tty_guard;
 
     let mut top_line = 0usize;
     loop {
-        render(data, starts, top_line, rows, cols);
+        if let Some(input) = input.as_mut() {
+            if drain_available_input(input, &mut data) {
+                starts = line_starts(&data);
+            }
+        }
+        render(&data, &starts, top_line, rows, cols);
         match read_command(tty_fd) {
             Some(b'q') | Some(0x03) | Some(0x04) => break,
             Some(b' ') | Some(b'f') => {
@@ -389,13 +452,12 @@ fn main(_arg: usize) -> ! {
         Err(_) => exit(1),
     };
 
-    let data = match collect_input(&parsed.files) {
-        Ok(data) => data,
-        Err(_) => exit(1),
-    };
-
     let stdout_is_tty = vfs::vfs_isatty(1).unwrap_or(false);
     if !stdout_is_tty {
+        let data = match collect_input(&parsed.files) {
+            Ok(data) => data,
+            Err(_) => exit(1),
+        };
         let _ = write_all(1, &data);
         exit(0);
     }
@@ -407,14 +469,30 @@ fn main(_arg: usize) -> ! {
         match vfs_open("/dev/console", vfs_flags::O_RDWR) {
             Ok(fd) => fd,
             Err(_) => {
+                let data = match collect_input(&parsed.files) {
+                    Ok(data) => data,
+                    Err(_) => exit(1),
+                };
                 let _ = write_all(1, &data);
                 exit(0);
             }
         }
     };
 
-    let starts = line_starts(&data);
-    page(&data, &starts, parsed.quit_if_one_screen, control_fd);
+    let (rows, _) = terminal_size(control_fd);
+    let (data, input) = if parsed.files.is_empty() && !stdin_is_tty {
+        match read_fd_until_page_or_eof(0, rows) {
+            Ok((data, eof)) => (data, Some(PagerInput { fd: 0, eof })),
+            Err(_) => exit(1),
+        }
+    } else {
+        match collect_input(&parsed.files) {
+            Ok(data) => (data, None),
+            Err(_) => exit(1),
+        }
+    };
+
+    page(data, parsed.quit_if_one_screen, control_fd, input);
     if control_fd != 0 {
         let _ = vfs_close(control_fd);
     }

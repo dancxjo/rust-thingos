@@ -17,12 +17,12 @@ use abi::display::{
 use abi::display_driver_protocol as drvproto;
 use abi::driver_frame::FrameReader;
 use abi::driver_interface::{
-    BusKind, DRIVER_DESCRIPTOR_ABI_VERSION, DeviceInfo, DriverClass, DriverDescriptor,
-    DriverEntryCtx, ProbeResult, Status,
+    BusKind, DRIVER_DESCRIPTOR_ABI_VERSION, DRIVER_INTERFACE_ABI_VERSION, DeviceInfo, DriverClass,
+    DriverDescriptor, DriverEntryCtx, DriverInterfaceV1, ProbeResult, Status,
 };
 use abi::errors::Errno;
 use abi::pixel::PixelFormat;
-use abi::vfs_rpc::VfsRpcOp;
+use abi::vfs_rpc::{VFS_RPC_MAX_REQ, VfsRpcOp};
 use accel2d_cpu::PixelBuf;
 use ipc_helpers::provider::{ProviderLoop, ProviderRequest, ProviderResponse};
 use stem::abi::module_manifest::{MANIFEST_MAGIC, ManifestHeader, ModuleKind};
@@ -74,6 +74,18 @@ pub static THINGOS_DRIVER: DriverDescriptor = DriverDescriptor {
     start: thingos_driver_start_safe,
     #[cfg(not(target_arch = "x86_64"))]
     start: thingos_driver_start_rust,
+};
+
+#[unsafe(no_mangle)]
+#[used]
+pub static THING_DRIVER_V1: DriverInterfaceV1 = DriverInterfaceV1 {
+    abi_version: DRIVER_INTERFACE_ABI_VERSION,
+    flags: 0,
+    vendor_id: 0x1af4,
+    device_id: 0,
+    class_code: 0x030000,
+    class_mask: 0xffff00,
+    entry_symbol: [0u8; 32],
 };
 
 unsafe extern "C" fn thingos_driver_probe(dev: *const DeviceInfo, out: *mut ProbeResult) -> Status {
@@ -3153,6 +3165,8 @@ fn main(boot_arg: usize) -> ! {
     let mut drv_resp_write = 0;
     let mut reserved_supervisor_port = 0;
     let mut bind_instance_id = 0;
+    let mut cambium_device_path: Option<alloc::string::String> = None;
+    let mut cambium_direct_mount = false;
 
     let boot_size = 4096;
     let req = abi::vm::VmMapReq {
@@ -3167,24 +3181,50 @@ fn main(boot_arg: usize) -> ! {
     match stem::syscall::vm_map(&req) {
         Ok(resp) => {
             stem::debug!("display_virtio_gpu: vm_map success at 0x{:x}", resp.addr);
-            let slice = unsafe { core::slice::from_raw_parts(resp.addr as *const u32, 1024) };
-            // slice[3..5]: bind_instance_id (u64)
+            let entry_ctx = unsafe { &*(resp.addr as *const DriverEntryCtx) };
+            if entry_ctx.version == 1 {
+                let path = entry_ctx.device_path_str();
+                if !path.is_empty() {
+                    cambium_device_path = Some(path.to_string());
+                }
+                cambium_direct_mount = true;
+                match port_create(VFS_RPC_MAX_REQ * 8) {
+                    Ok((dummy_write, dummy_read)) => {
+                        drv_req_read = dummy_read;
+                        drv_resp_write = dummy_write;
+                    }
+                    Err(e) => {
+                        stem::error!(
+                            "display_virtio_gpu: failed to create direct-mode protocol ports: {:?}",
+                            e
+                        );
+                        stem::syscall::exit(1);
+                    }
+                }
+                stem::info!(
+                    "display_virtio_gpu: recovered Cambium DriverEntryCtx device_path='{}'",
+                    cambium_device_path.as_deref().unwrap_or("")
+                );
+            } else {
+                let slice = unsafe { core::slice::from_raw_parts(resp.addr as *const u32, 1024) };
+                // slice[3..5]: bind_instance_id (u64)
 
-            drv_req_read = slice[0];
-            drv_resp_write = slice[1];
-            reserved_supervisor_port = slice[2];
+                drv_req_read = slice[0];
+                drv_resp_write = slice[1];
+                reserved_supervisor_port = slice[2];
 
-            let id_low = slice[3] as u64;
-            let id_high = slice[4] as u64;
-            bind_instance_id = id_low | (id_high << 32);
+                let id_low = slice[3] as u64;
+                let id_high = slice[4] as u64;
+                bind_instance_id = id_low | (id_high << 32);
 
-            stem::debug!(
-                "display_virtio_gpu: Recovered handles: req_read={}, resp_write={}, svc={}, id={}",
-                drv_req_read,
-                drv_resp_write,
-                reserved_supervisor_port,
-                bind_instance_id
-            );
+                stem::debug!(
+                    "display_virtio_gpu: Recovered handles: req_read={}, resp_write={}, svc={}, id={}",
+                    drv_req_read,
+                    drv_resp_write,
+                    reserved_supervisor_port,
+                    bind_instance_id
+                );
+            }
         }
         Err(e) => {
             stem::error!(
@@ -3195,7 +3235,8 @@ fn main(boot_arg: usize) -> ! {
         }
     }
 
-    if drv_req_read == 0 || drv_resp_write == 0 || bind_instance_id == 0 {
+    if drv_req_read == 0 || drv_resp_write == 0 || (!cambium_direct_mount && bind_instance_id == 0)
+    {
         stem::error!(
             "DISP: ERROR: Invalid/Missing bootstrap components (req={}, resp={}, svc={}, id={})",
             drv_req_read,
@@ -3214,7 +3255,7 @@ fn main(boot_arg: usize) -> ! {
     );
 
     // Find and initialize GPU
-    let gpu_path = match find_gpu() {
+    let gpu_path = match cambium_device_path.clone().or_else(find_gpu) {
         Some(path) => path,
         None => {
             error!("display_virtio_gpu: GPU device not found");
@@ -3347,43 +3388,12 @@ fn main(boot_arg: usize) -> ! {
     // SOVEREIGN REGISTRATION: Handshake with sprout supervisor
     // =========================================================================
     use abi::supervisor_protocol::{self, classes};
-    use abi::vfs_rpc::VFS_RPC_MAX_REQ;
 
     // Create VFS provider port
     let (vfs_write, vfs_read) =
         port_create(VFS_RPC_MAX_REQ * 8).expect("Failed to create VFS port");
     let vfs_write_fd = stem::syscall::vfs::vfs_handle_from_port(vfs_write)
         .expect("display_virtio_gpu: vfs_handle_from_port(vfs_write)");
-
-    let sprout_pid = stem::syscall::getppid();
-    let sprout_inbox_fd =
-        msg_inbox_open(sprout_pid).expect("display_virtio_gpu: failed to open sprout inbox");
-
-    // Send MSG_BIND_READY to supervisor instead of legacy MSG_REGISTER
-    let ready = supervisor_protocol::BindReadyPayload {
-        bind_instance_id,
-        class_mask: classes::DISPLAY_CARD | classes::FRAMEBUFFER,
-        _reserved: 0,
-    };
-    let mut ready_bytes = [0u8; supervisor_protocol::BIND_READY_PAYLOAD_SIZE];
-    if let Some(len) = supervisor_protocol::encode_bind_ready_le(&ready, &mut ready_bytes) {
-        // Wrap in common driver header
-        let mut buf = [0u8; 256];
-        if let Some(total_len) = drvproto::encode_message(
-            &mut buf,
-            supervisor_protocol::MSG_BIND_READY,
-            &ready_bytes[..len],
-        ) {
-            // Bundle the VFS provider handle and BIND_READY notification atomically.
-            let _ = msg_sendmsg(
-                sprout_inbox_fd,
-                KindId(drvproto::KIND_ID_DISPLAY_DRIVER_CONTROL),
-                &buf[..total_len],
-                &[vfs_write_fd],
-            );
-            debug!("display_virtio_gpu: Sent MSG_BIND_READY (ID: {})", bind_instance_id);
-        }
-    }
 
     let mut buf = [0u8; 512];
     let mut frames = FrameReader::<4096>::new();
@@ -3395,49 +3405,97 @@ fn main(boot_arg: usize) -> ! {
     let mut texture_registry: alloc::collections::BTreeMap<u64, TextureEntry> =
         alloc::collections::BTreeMap::new();
 
-    // Wait for MSG_BIND_ASSIGNED or MSG_BIND_FAILED
-    let mut loop_count = 0;
-    debug!("display_virtio_gpu: Waiting for BIND_ASSIGNED...");
-    let assigned_bind_id = loop {
-        loop_count += 1;
-        if loop_count % 100 == 0 {
-            debug!("display_virtio_gpu: Still waiting for BIND_ASSIGNED (loop={})...", loop_count);
-        }
-        let msg = msg_recv_blocking(512);
-        if msg.kind.0 != drvproto::KIND_ID_DISPLAY_DRIVER_CONTROL {
-            continue;
-        }
-        if let Some((header, payload)) = drvproto::parse_message(&msg.payload) {
-            if header.msg_type == supervisor_protocol::MSG_BIND_ASSIGNED {
-                if let Some(assigned) = supervisor_protocol::decode_bind_assigned_le(payload) {
-                    let path_len = assigned.primary_path.iter().position(|&b| b == 0).unwrap_or(64);
-                    let assigned_path =
-                        alloc::string::String::from_utf8_lossy(&assigned.primary_path[..path_len])
-                            .to_string();
-                    info!(
-                        "display_virtio_gpu: Sovereign registration COMPLETE. Assigned: {}",
-                        assigned_path
-                    );
-                    break assigned.bind_instance_id;
-                }
-            } else if header.msg_type == supervisor_protocol::MSG_BIND_FAILED {
-                if let Some(failed) = supervisor_protocol::decode_bind_failed_le(payload) {
-                    let reason_len = failed.reason.iter().position(|&b| b == 0).unwrap_or(64);
-                    let reason = core::str::from_utf8(&failed.reason[..reason_len]).unwrap_or("?");
-                    warn!(
-                        "display_virtio_gpu: Registration REJECTED by supervisor (code={}, reason={}). Halting.",
-                        failed.error_code, reason
-                    );
-                    loop {
-                        stem::yield_now();
-                    }
+    if cambium_direct_mount {
+        match stem::syscall::vfs::vfs_mount(vfs_write, "/dev/display/card0") {
+            Ok(()) => {
+                info!("display_virtio_gpu: mounted VFS provider at /dev/display/card0 via cambium")
+            }
+            Err(e) => {
+                error!("display_virtio_gpu: vfs_mount(/dev/display/card0) failed: {:?}", e);
+                loop {
+                    stem::yield_now();
                 }
             }
         }
-    };
+    } else {
+        let sprout_pid = stem::syscall::getppid();
+        let sprout_inbox_fd =
+            msg_inbox_open(sprout_pid).expect("display_virtio_gpu: failed to open sprout inbox");
 
-    // Notify supervisor that this service is now fully operational.
-    {
+        // Send MSG_BIND_READY to supervisor instead of legacy MSG_REGISTER
+        let ready = supervisor_protocol::BindReadyPayload {
+            bind_instance_id,
+            class_mask: classes::DISPLAY_CARD | classes::FRAMEBUFFER,
+            _reserved: 0,
+        };
+        let mut ready_bytes = [0u8; supervisor_protocol::BIND_READY_PAYLOAD_SIZE];
+        if let Some(len) = supervisor_protocol::encode_bind_ready_le(&ready, &mut ready_bytes) {
+            // Wrap in common driver header
+            let mut ready_buf = [0u8; 256];
+            if let Some(total_len) = drvproto::encode_message(
+                &mut ready_buf,
+                supervisor_protocol::MSG_BIND_READY,
+                &ready_bytes[..len],
+            ) {
+                // Bundle the VFS provider handle and BIND_READY notification atomically.
+                let _ = msg_sendmsg(
+                    sprout_inbox_fd,
+                    KindId(drvproto::KIND_ID_DISPLAY_DRIVER_CONTROL),
+                    &ready_buf[..total_len],
+                    &[vfs_write_fd],
+                );
+                debug!("display_virtio_gpu: Sent MSG_BIND_READY (ID: {})", bind_instance_id);
+            }
+        }
+
+        // Wait for MSG_BIND_ASSIGNED or MSG_BIND_FAILED
+        let mut loop_count = 0;
+        debug!("display_virtio_gpu: Waiting for BIND_ASSIGNED...");
+        let assigned_bind_id = loop {
+            loop_count += 1;
+            if loop_count % 100 == 0 {
+                debug!(
+                    "display_virtio_gpu: Still waiting for BIND_ASSIGNED (loop={})...",
+                    loop_count
+                );
+            }
+            let msg = msg_recv_blocking(512);
+            if msg.kind.0 != drvproto::KIND_ID_DISPLAY_DRIVER_CONTROL {
+                continue;
+            }
+            if let Some((header, payload)) = drvproto::parse_message(&msg.payload) {
+                if header.msg_type == supervisor_protocol::MSG_BIND_ASSIGNED {
+                    if let Some(assigned) = supervisor_protocol::decode_bind_assigned_le(payload) {
+                        let path_len =
+                            assigned.primary_path.iter().position(|&b| b == 0).unwrap_or(64);
+                        let assigned_path = alloc::string::String::from_utf8_lossy(
+                            &assigned.primary_path[..path_len],
+                        )
+                        .to_string();
+                        info!(
+                            "display_virtio_gpu: Sovereign registration COMPLETE. Assigned: {}",
+                            assigned_path
+                        );
+                        break assigned.bind_instance_id;
+                    }
+                } else if header.msg_type == supervisor_protocol::MSG_BIND_FAILED {
+                    if let Some(failed) = supervisor_protocol::decode_bind_failed_le(payload) {
+                        let reason_len = failed.reason.iter().position(|&b| b == 0).unwrap_or(64);
+                        let reason =
+                            core::str::from_utf8(&failed.reason[..reason_len]).unwrap_or("?");
+                        warn!(
+                            "display_virtio_gpu: Registration REJECTED by supervisor (code={}, reason={}). Halting.",
+                            failed.error_code, reason
+                        );
+                        loop {
+                            stem::yield_now();
+                        }
+                    }
+                }
+            }
+        };
+
+        // Notify supervisor that this service is now fully operational.
         let svc_ready = supervisor_protocol::ServiceReadyPayload {
             bind_instance_id: assigned_bind_id,
             _reserved: 0,

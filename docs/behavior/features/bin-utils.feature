@@ -40,3 +40,11 @@ Feature: Shell text pipelines
     And the command output should contain "beta"
     When I send "q" to the serial console
     Then the shell prompt should return
+
+  Scenario: Less can page the kernel log through a pipeline
+    Given the machine is booted
+    When I wait for the shell prompt
+    And I start "dmesg | less" on the serial console
+    Then the latest serial output should contain "less: line"
+    When I send "q" to the serial console
+    Then the shell prompt should return

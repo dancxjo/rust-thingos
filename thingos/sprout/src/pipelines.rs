@@ -3,9 +3,13 @@ extern crate alloc;
 use alloc::collections::BTreeMap;
 use alloc::string::{String, ToString};
 
+use abi::errors::Errno;
 use abi::syscall::vfs_flags::{O_RDONLY, O_RDWR};
 use stem::syscall::vfs::{vfs_close, vfs_open, vfs_read};
 use stem::{info, warn};
+
+const BLOOM_SPAWN_ATTEMPTS: usize = 3;
+const BLOOM_SPAWN_RETRY_MS: u64 = 250;
 
 fn file_exists(path: &str) -> bool {
     match vfs_open(path, O_RDONLY) {
@@ -122,4 +126,38 @@ pub fn spawn_bristle() -> Option<u64> {
             None
         }
     }
+}
+
+pub fn spawn_bloom() -> Option<u64> {
+    let path = "/services/bloom";
+    let argv: [&[u8]; 1] = [path.as_bytes()];
+    let env = BTreeMap::new();
+    let inherit = abi::types::stdio_mode::INHERIT;
+    let null = abi::types::stdio_mode::NULL;
+
+    for attempt in 1..=BLOOM_SPAWN_ATTEMPTS {
+        match stem::syscall::spawn_process_ex(path, &argv, &env, null, inherit, inherit, 0, &[]) {
+            Ok(resp) => {
+                let pid = resp.child_tid;
+                info!("SPROUT: spawned bloom (PID={})", pid);
+                let _ = stem::thread::set_priority(pid, 2);
+                return Some(pid);
+            }
+            Err(err @ (Errno::ETIMEDOUT | Errno::EIO | Errno::EPIPE))
+                if attempt < BLOOM_SPAWN_ATTEMPTS =>
+            {
+                warn!(
+                    "SPROUT: failed to spawn bloom on attempt {}/{}: {:?}",
+                    attempt, BLOOM_SPAWN_ATTEMPTS, err
+                );
+                stem::sleep_ms(BLOOM_SPAWN_RETRY_MS);
+            }
+            Err(err) => {
+                warn!("SPROUT: failed to spawn bloom: {:?}", err);
+                return None;
+            }
+        }
+    }
+
+    None
 }

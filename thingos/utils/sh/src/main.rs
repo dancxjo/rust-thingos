@@ -550,6 +550,14 @@ impl Drop for TtyModeGuard {
     }
 }
 
+fn env_var_equals(key: &[u8], expected: &[u8]) -> bool {
+    let mut buf = [0u8; 32];
+    match syscall::env_get(key, &mut buf) {
+        Ok(n) if n == expected.len() && n <= buf.len() => &buf[..n] == expected,
+        _ => false,
+    }
+}
+
 fn is_word_byte(byte: u8) -> bool {
     byte.is_ascii_alphanumeric() || byte == b'_'
 }
@@ -691,7 +699,9 @@ fn redraw_line_at_cursor(bytes: &[u8], cursor: usize, last_status: Option<i32>) 
 
 fn read_line(last_status: Option<i32>, history: &mut Vec<String>) -> ReadLineResult {
     let tty_guard = TtyModeGuard::raw(TTY_FD);
-    if !tty_guard.is_active() {
+    let interactive_pipe =
+        !tty_guard.is_active() && env_var_equals(b"THINGOS_INTERACTIVE_PIPE", b"1");
+    if !tty_guard.is_active() && !interactive_pipe {
         let mut buf = [0u8; 512];
         let mut bytes = Vec::new();
         loop {
@@ -1072,9 +1082,13 @@ fn resolve_executable_path(program: &str, path_prefixes: &[&str]) -> Result<Stri
             candidate.push('/');
         }
         candidate.push_str(program);
-        if let Ok(probe_fd) = vfs::vfs_open(&candidate, abi::syscall::vfs_flags::O_RDONLY) {
-            let _ = syscall::vfs_close(probe_fd);
-            return Ok(candidate);
+        match vfs::vfs_open(&candidate, abi::syscall::vfs_flags::O_RDONLY) {
+            Ok(probe_fd) => {
+                let _ = syscall::vfs_close(probe_fd);
+                return Ok(candidate);
+            }
+            Err(Errno::ENOENT) | Err(Errno::ENOTDIR) => {}
+            Err(err) => return Err(err),
         }
     }
 

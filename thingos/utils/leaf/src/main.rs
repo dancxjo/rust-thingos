@@ -312,7 +312,6 @@ mod thingos_app {
         stdin_write: u32,
         stdout_read: u32,
         stderr_read: u32,
-        input_line: Vec<u8>,
     }
 
     #[derive(Default)]
@@ -466,10 +465,13 @@ mod thingos_app {
 
     fn spawn_shell() -> ShellPipes {
         let argv: [&[u8]; 1] = [SHELL_PATH.as_bytes()];
+        let mut env = BTreeMap::new();
+        env.insert(b"TERM".to_vec(), b"thingos-leaf".to_vec());
+        env.insert(b"THINGOS_INTERACTIVE_PIPE".to_vec(), b"1".to_vec());
         match spawn_process_ex(
             SHELL_PATH,
             &argv,
-            &BTreeMap::new(),
+            &env,
             stdio_mode::PIPE,
             stdio_mode::PIPE,
             stdio_mode::PIPE,
@@ -478,12 +480,11 @@ mod thingos_app {
         ) {
             Ok(resp) => {
                 stem::info!("leaf: spawned shell pid={}", resp.child_pid);
-                stem::info!("leaf: pipe-backed shell input uses local echo");
+                stem::info!("leaf: pipe-backed shell input uses shell line editing");
                 ShellPipes {
                     stdin_write: resp.stdin_pipe as u32,
                     stdout_read: resp.stdout_pipe as u32,
                     stderr_read: resp.stderr_pipe as u32,
-                    input_line: Vec::new(),
                 }
             }
             Err(e) => {
@@ -643,54 +644,12 @@ mod thingos_app {
 
     fn handle_shell_input(
         shell: &mut ShellPipes,
-        model: &mut TermModel,
-        font: &Font,
+        _model: &mut TermModel,
+        _font: &Font,
         bytes: &[u8],
     ) -> bool {
-        if bytes.first().copied() == Some(0x1b) {
-            return false;
-        }
-
-        let mut changed = false;
-        for &byte in bytes {
-            match byte {
-                b'\r' | b'\n' => {
-                    model.putc('\n', font);
-                    shell.input_line.push(b'\n');
-                    let _ = vfs_write(shell.stdin_write, &shell.input_line);
-                    shell.input_line.clear();
-                    changed = true;
-                }
-                0x08 | 0x7f => {
-                    if shell.input_line.pop().is_some() {
-                        model.putc('\x08', font);
-                        model.putc(' ', font);
-                        model.putc('\x08', font);
-                        changed = true;
-                    }
-                }
-                b'\t' => {
-                    shell.input_line.push(byte);
-                    model.putc('\t', font);
-                    changed = true;
-                }
-                0x03 => {
-                    shell.input_line.clear();
-                    model.write_str("^C\n", font);
-                    let _ = vfs_write(shell.stdin_write, &[byte]);
-                    changed = true;
-                }
-                b if b >= 0x20 => {
-                    shell.input_line.push(b);
-                    model.write_bytes_lossy(&[b], font);
-                    changed = true;
-                }
-                b => {
-                    let _ = vfs_write(shell.stdin_write, &[b]);
-                }
-            }
-        }
-        changed
+        let _ = vfs_write(shell.stdin_write, bytes);
+        false
     }
 
     fn key_to_bytes(key: u32, keyboard: &KeyboardState) -> Option<&'static [u8]> {

@@ -22,3 +22,12 @@ Feature: Serial Shell Boot
     And I type "./echo relative-path-ok" on the serial console
     Then the command output should strictly be "relative-path-ok"
     And the command output should not contain "spawn failed"
+
+  @completion
+  Scenario: Tab completes a command name before execution
+    Given the machine is booted
+    When I wait for the shell prompt
+    And I type "cd /bin" on the serial console
+    And I use serial Tab completion from "ec" to run "echo tab-completion-ok"
+    Then the latest serial output should contain "tab-completion-ok"
+    And the latest serial output should not contain "spawn failed"

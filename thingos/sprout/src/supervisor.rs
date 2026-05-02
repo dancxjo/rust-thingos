@@ -10,7 +10,7 @@ use stem::service_loop::{ServiceEvent, ServiceLoop};
 use stem::syscall::message::{KindId, msg_send};
 use stem::{info, warn};
 
-use crate::pipelines::{spawn_bristle, spawn_shell};
+use crate::pipelines::{spawn_bloom, spawn_bristle, spawn_shell};
 
 const SHELL_HEADSTART_MS: u64 = 50;
 const INBOX_MAX_PAYLOAD: usize = 256;
@@ -39,6 +39,10 @@ impl Supervisor {
 
         self.activate_boot_roots();
         info!("SPROUT: Continuing supervisor startup");
+
+        // Now that the root filesystem is populated (display drivers, fonts, etc),
+        // we can launch the bloom compositor.
+        let _bloom_pid = spawn_bloom();
 
         match shell_pid {
             Some(pid) => {

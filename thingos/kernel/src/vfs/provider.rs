@@ -43,7 +43,7 @@ use alloc::collections::BTreeMap;
 use alloc::sync::{Arc, Weak};
 use alloc::vec;
 use alloc::vec::Vec;
-use core::sync::atomic::{AtomicU16, Ordering};
+use core::sync::atomic::{AtomicBool, Ordering};
 
 use abi::device::DeviceKind;
 use abi::display::ioctl::{
@@ -52,7 +52,7 @@ use abi::display::ioctl::{
 };
 use abi::display::types::BufferHandle;
 use abi::errors::{Errno, SysResult};
-use abi::vfs_rpc::{VFS_RPC_MAX_DATA, VfsRpcOp, VfsRpcReqHeader};
+use abi::vfs_rpc::{VFS_RPC_MAX_DATA, VfsRpcOp};
 use spin::Mutex;
 
 use super::{OpenFlags, VfsDriver, VfsNode, VfsStat};
@@ -85,11 +85,18 @@ fn rpc_timeout_wake_tick() -> u64 {
 struct RpcState {
     tainted: bool,
     tainted_until_ns: u64,
+    /// Next candidate request id. Request ids are allocated while holding this
+    /// state lock so a late response cannot collide with a live or retained op.
+    next_req_id: u16,
     /// Per-request wait queues, keyed by `req_id`.
     waiters: BTreeMap<u16, Arc<WaitQueue>>,
     /// Responses received for other waiters and not yet collected.
     responses: BTreeMap<u16, Vec<u8>>,
-    /// In-flight operation types for length calculation.
+    /// In-flight or recently timed-out operation types for length calculation.
+    ///
+    /// Timed-out requests keep their opcode until the late response arrives.
+    /// Without this, a successful late response for a variable-length op cannot
+    /// be framed and can consume subsequent responses from the shared stream.
     ops: BTreeMap<u16, VfsRpcOp>,
     /// Byte-stream framing buffer for fragmented/coalesced responses.
     pending: Vec<u8>,
@@ -106,7 +113,7 @@ struct ProviderRpc {
     /// request header.
     resp_write_handle: u32,
 
-    next_req_id: AtomicU16,
+    close_supported: AtomicBool,
     state: Mutex<RpcState>,
     /// Serialises access to the shared response port and ensures consistent framing.
     dispatch_lock: Mutex<()>,
@@ -122,10 +129,11 @@ impl ProviderRpc {
             req: crate::ipc::Sender::new(req_port),
             resp: crate::ipc::Receiver::new(resp_port),
             resp_write_handle,
-            next_req_id: AtomicU16::new(1),
+            close_supported: AtomicBool::new(true),
             state: Mutex::new(RpcState {
                 tainted: false,
                 tainted_until_ns: 0,
+                next_req_id: 1,
                 waiters: BTreeMap::new(),
                 responses: BTreeMap::new(),
                 ops: BTreeMap::new(),
@@ -183,7 +191,12 @@ impl ProviderRpc {
                         break;
                     }
                 } else {
-                    state.pending.len() - 3
+                    crate::kwarn!(
+                        "VFS RPC: dropping unframeable OK response for unknown req_id={}",
+                        resp_req_id
+                    );
+                    state.pending.clear();
+                    break;
                 }
             } else {
                 0
@@ -195,12 +208,16 @@ impl ProviderRpc {
             }
 
             let msg_payload = state.pending[3..frame_len].to_vec();
-            let mut entry = vec![status];
-            entry.extend_from_slice(&msg_payload);
-            state.responses.insert(resp_req_id, entry);
-
-            if let Some(wq) = state.waiters.get(&resp_req_id) {
+            if let Some(wq) = state.waiters.get(&resp_req_id).cloned() {
+                let mut entry = vec![status];
+                entry.extend_from_slice(&msg_payload);
+                state.responses.insert(resp_req_id, entry);
                 wq.wake_one();
+            } else {
+                // This is a late reply for a request that timed out or was
+                // interrupted. Now that its frame has been safely consumed, the
+                // retained opcode can be discarded.
+                state.ops.remove(&resp_req_id);
             }
             state.pending.drain(..frame_len);
         }
@@ -214,7 +231,38 @@ impl ProviderRpc {
     pub fn rpc(&self, op: VfsRpcOp, payload: &[u8]) -> SysResult<Vec<u8>> {
         let tid = unsafe { crate::sched::current_tid_current() };
         crate::kdebug!("VFS_RPC: request op={:?} len={} tid={}", op, payload.len(), tid);
-        let req_id = self.next_req_id.fetch_add(1, Ordering::SeqCst);
+        let (req_id, wq) = {
+            let mut state = self.state.lock();
+            let mut req_id = state.next_req_id;
+            let mut found = false;
+            for _ in 0..u16::MAX {
+                if req_id == 0 {
+                    req_id = 1;
+                }
+                if !state.ops.contains_key(&req_id)
+                    && !state.waiters.contains_key(&req_id)
+                    && !state.responses.contains_key(&req_id)
+                {
+                    found = true;
+                    break;
+                }
+                req_id = req_id.wrapping_add(1);
+            }
+            if !found {
+                return Err(Errno::EAGAIN);
+            }
+
+            state.next_req_id = req_id.wrapping_add(1);
+            if state.next_req_id == 0 {
+                state.next_req_id = 1;
+            }
+
+            let wq = Arc::new(WaitQueue::new());
+            wq.push_back(tid);
+            state.waiters.insert(req_id, wq.clone());
+            state.ops.insert(req_id, op);
+            (req_id, wq)
+        };
 
         // Record VFS RPC entry in the progress ring for freeze diagnostics.
         // A RAII guard records the matching exit on all return paths.
@@ -237,16 +285,11 @@ impl ProviderRpc {
         // crate::kinfo!("VFS_RPC: sending request op={:?} id={} to port={:p}", op, req_id, Arc::as_ptr(self.req.port()));
         if !self.req.send_all(&msg) {
             crate::ipc::diag::VFS_RPC_ERRORS.fetch_add(1, Ordering::Relaxed);
+            let mut state = self.state.lock();
+            state.waiters.remove(&req_id);
+            state.ops.remove(&req_id);
             return Err(Errno::EIO);
         }
-
-        {
-            let mut state = self.state.lock();
-            let wq = Arc::new(WaitQueue::new());
-            wq.push_back(tid);
-            state.waiters.insert(req_id, wq.clone());
-            state.ops.insert(req_id, op);
-        };
 
         let deadline_ns = crate::time::monotonic_now_ns().saturating_add(VFS_RPC_TIMEOUT_NS);
         let mut timeout_armed = false;
@@ -294,14 +337,11 @@ impl ProviderRpc {
                 crate::kwarn!("VFS RPC: TIMEOUT tid={} req_id={} op={:?}", tid, req_id, op);
                 let mut state = self.state.lock();
                 state.waiters.remove(&req_id);
-                state.ops.remove(&req_id);
                 return Err(Errno::ETIMEDOUT);
             }
 
             self.resp.add_waiter(tid);
-            if let Some(wq) = self.state.lock().waiters.get(&req_id) {
-                wq.push_back(tid);
-            }
+            wq.push_back(tid);
             self.try_collect_responses();
             if !self.has_buffered_response(req_id) {
                 crate::sched::register_timeout_wake_current(tid, rpc_timeout_wake_tick());
@@ -319,7 +359,6 @@ impl ProviderRpc {
             if crate::sched::take_pending_interrupt_current() {
                 let mut state = self.state.lock();
                 state.waiters.remove(&req_id);
-                state.ops.remove(&req_id);
                 return Err(Errno::EINTR);
             }
         }
@@ -578,9 +617,14 @@ impl VfsNode for ProviderNode {
     fn close(&self) {
         // Best-effort close: notify the provider but ignore errors so a
         // stalled provider cannot wedge the calling task.
+        if !self.rpc.close_supported.load(Ordering::Relaxed) {
+            return;
+        }
         let mut payload = [0u8; 8];
         payload[..8].copy_from_slice(&self.handle.to_le_bytes());
-        let _ = self.rpc.rpc(VfsRpcOp::Close, &payload);
+        if matches!(self.rpc.rpc(VfsRpcOp::Close, &payload), Err(Errno::ENOSYS)) {
+            self.rpc.close_supported.store(false, Ordering::Relaxed);
+        }
     }
 
     /// Use the memfd bulk-transfer path when possible, falling back to the
@@ -992,6 +1036,8 @@ mod tests {
     use alloc::sync::Arc;
     use alloc::vec;
 
+    use abi::vfs_rpc::VfsRpcReqHeader;
+
     use super::*;
 
     fn make_port(cap: usize) -> Arc<crate::ipc::Port> {
@@ -1014,6 +1060,25 @@ mod tests {
         resp.push(0);
         resp.extend_from_slice(&(data.len() as u32).to_le_bytes());
         resp.extend_from_slice(&data);
+        resp
+    }
+
+    fn ok_read_frame(req_id: u16, data: &[u8]) -> vec::Vec<u8> {
+        let mut resp = vec::Vec::with_capacity(7 + data.len());
+        resp.extend_from_slice(&req_id.to_le_bytes());
+        resp.push(0);
+        resp.extend_from_slice(&(data.len() as u32).to_le_bytes());
+        resp.extend_from_slice(data);
+        resp
+    }
+
+    fn ok_stat_frame(req_id: u16, mode: u32, size: u64, ino: u64) -> vec::Vec<u8> {
+        let mut resp = vec::Vec::with_capacity(23);
+        resp.extend_from_slice(&req_id.to_le_bytes());
+        resp.push(0);
+        resp.extend_from_slice(&mode.to_le_bytes());
+        resp.extend_from_slice(&size.to_le_bytes());
+        resp.extend_from_slice(&ino.to_le_bytes());
         resp
     }
 
@@ -1308,6 +1373,50 @@ mod tests {
         let stat = parse_response_stat(&raw).unwrap();
         assert_eq!(stat.mode, 0o040755);
         assert_eq!(stat.ino, 1);
+    }
+
+    #[test]
+    fn late_variable_length_response_does_not_consume_next_response() {
+        let req_port = make_port(4096);
+        let resp_port = make_port(4096);
+        let ch = ProviderRpc::new(req_port, resp_port.clone(), 0);
+
+        {
+            let mut state = ch.state.lock();
+            // Request 7 has already timed out: keep its opcode so the late
+            // variable-length Read response can still be framed and dropped.
+            state.ops.insert(7, VfsRpcOp::Read);
+
+            // Request 8 is still waiting and its response is coalesced behind
+            // the late response for request 7 in the same response-port read.
+            state.ops.insert(8, VfsRpcOp::Stat);
+            state.waiters.insert(8, Arc::new(WaitQueue::new()));
+        }
+
+        let mut coalesced = ok_read_frame(7, b"late");
+        coalesced.extend_from_slice(&ok_stat_frame(8, 0o100644, 123, 99));
+        resp_port.send(&coalesced);
+
+        ch.try_collect_responses();
+
+        let mut state = ch.state.lock();
+        assert!(
+            !state.responses.contains_key(&7),
+            "late response for timed-out request must be dropped"
+        );
+        assert!(
+            !state.ops.contains_key(&7),
+            "opcode retained for a timed-out request must be released after its late reply"
+        );
+
+        let resp = state.responses.remove(&8).expect("waiting response should remain framed");
+        drop(state);
+
+        assert_eq!(resp[0], 0);
+        let stat = parse_response_stat(&resp[1..]).unwrap();
+        assert_eq!(stat.mode, 0o100644);
+        assert_eq!(stat.size, 123);
+        assert_eq!(stat.ino, 99);
     }
 
     #[test]

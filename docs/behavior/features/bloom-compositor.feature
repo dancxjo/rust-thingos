@@ -55,7 +55,10 @@ Feature: Bloom compositor desktop behavior
 
   Scenario: The virtio GPU backend exposes accelerated presentation capabilities
     Given the machine is booted
-    Then the serial output should contain "display_virtio_gpu: GPU initialized successfully" within 60s
+    Then the serial output should contain "display_virtio_gpu: recovered Cambium DriverEntryCtx" within 60s
+    And the serial output should contain "display_virtio_gpu: mounted VFS provider at /dev/display/card0 via cambium" within 60s
+    And the serial output should not contain "bloom: failed to connect to /dev/display/card0 after retries"
+    And the serial output should contain "display_virtio_gpu: GPU initialized successfully" within 60s
     And the serial output should contain "display_virtio_gpu: host scanout" within 60s
     And the serial output should contain "bloom: output0" within 60s
     And the serial output should contain "bloom: display driver does not support VBLANK" within 60s

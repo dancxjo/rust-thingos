@@ -468,6 +468,39 @@ async fn when_type_on_serial(world: &mut ThingOsWorld, text: String) -> Result<(
     Ok(())
 }
 
+#[when(regex = r#"^I use serial Tab completion from "(.+)" to run "(.+)"$"#)]
+async fn when_use_serial_tab_completion(
+    world: &mut ThingOsWorld,
+    prefix: String,
+    completed_command: String,
+) -> Result<(), StepError> {
+    let suffix = completed_command
+        .strip_prefix("echo ")
+        .map(str::to_string)
+        .unwrap_or_else(|| completed_command.clone());
+    eprintln!("│  │  │      ⌨️ Typing on serial: {}<TAB>{}", prefix, suffix);
+
+    world.ensure_serial_console_interactive(60.0).await.map_err(|e| StepError(e.to_string()))?;
+
+    world.serial_checkpoint = world.get_serial_log().await.len();
+    world.last_typed_command = Some(completed_command);
+
+    let mut data = prefix.into_bytes();
+    data.push(b'\t');
+    data.extend_from_slice(suffix.as_bytes());
+    data.push(b'\n');
+
+    for b in data {
+        world
+            .serial_write(&[b])
+            .await
+            .map_err(|e| StepError(format!("Failed to write to serial: {}", e)))?;
+        tokio::time::sleep(std::time::Duration::from_millis(15)).await;
+    }
+
+    then_shell_prompt_should_return(world).await
+}
+
 #[when(regex = r#"^I start "(.+)" on the serial console$"#)]
 async fn when_start_on_serial(world: &mut ThingOsWorld, text: String) -> Result<(), StepError> {
     eprintln!("│  │  │      Starting on serial without waiting for prompt: {}", text);
