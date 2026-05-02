@@ -311,41 +311,34 @@ impl InputState {
         defer_cursor_motion: bool,
     ) -> bool {
         let mut immediate_repaint = false;
-        if bytes.len() < BristleEventHeader::SIZE {
+        if bytes.len() < abi::hid::WaylandIpcHeader::SIZE {
             return false;
         }
-        let mut hdr_bytes = [0u8; BristleEventHeader::SIZE];
-        hdr_bytes.copy_from_slice(&bytes[..BristleEventHeader::SIZE]);
-        let Ok(header) = BristleEventHeader::from_bytes(&hdr_bytes) else {
-            return false;
-        };
-        let event_type = header.event_type;
-        let timestamp_ns = header.timestamp_ns;
+        let mut hdr_bytes = [0u8; abi::hid::WaylandIpcHeader::SIZE];
+        hdr_bytes.copy_from_slice(&bytes[..abi::hid::WaylandIpcHeader::SIZE]);
+        let header = abi::hid::WaylandIpcHeader::from_bytes(&hdr_bytes);
+        
+        let event_type = header.opcode();
+        let timestamp_ns = stem::monotonic_ns();
         let event_no = BLOOM_HANDLE_EVENT_COUNT.fetch_add(1, Ordering::Relaxed) + 1;
         let _trace = BloomInputTrace::new(event_no, event_type);
-        let payload = &bytes[BristleEventHeader::SIZE..];
+        let payload = &bytes[abi::hid::WaylandIpcHeader::SIZE..];
 
         match EventType::from_raw(event_type) {
-            Ok(EventType::PointerMove) if payload.len() >= PointerMovePayload::SIZE => {
-                let mut p = [0u8; PointerMovePayload::SIZE];
-                p.copy_from_slice(&payload[..PointerMovePayload::SIZE]);
-                let move_ev = PointerMovePayload::from_bytes(&p);
-                let dx = move_ev.dx;
-                let dy = move_ev.dy;
+            Ok(EventType::PointerMove) if payload.len() >= abi::hid::WaylandPointerMotion::SIZE => {
+                let mut p = [0u8; abi::hid::WaylandPointerMotion::SIZE];
+                p.copy_from_slice(&payload[..abi::hid::WaylandPointerMotion::SIZE]);
+                let move_ev = abi::hid::WaylandPointerMotion::from_bytes(&p);
+                let dx = (move_ev.x - self.pointer_x) as i16;
+                let dy = (move_ev.y - self.pointer_y) as i16;
                 if defer_cursor_motion {
                     self.defer_cursor_motion(dx, dy, timestamp_ns);
                     return false;
                 }
                 let old_x = self.pointer_x;
                 let old_y = self.pointer_y;
-                self.pointer_x = self
-                    .pointer_x
-                    .saturating_add(dx as i32)
-                    .clamp(0, self.output_w.saturating_sub(1));
-                self.pointer_y = self
-                    .pointer_y
-                    .saturating_add(dy as i32)
-                    .clamp(0, self.output_h.saturating_sub(1));
+                self.pointer_x = move_ev.x;
+                self.pointer_y = move_ev.y;
                 if self.pointer_x == old_x && self.pointer_y == old_y {
                     return false;
                 }
@@ -379,10 +372,10 @@ impl InputState {
                 // Focus update and client PointerMotionEvent delivery are
                 // deferred — do NOT call update_pointer_focus here.
             }
-            Ok(EventType::PointerButtonDown) if payload.len() >= PointerButtonPayload::SIZE => {
-                let mut p = [0u8; PointerButtonPayload::SIZE];
-                p.copy_from_slice(&payload[..PointerButtonPayload::SIZE]);
-                let btn = PointerButtonPayload::from_bytes(&p);
+            Ok(EventType::PointerButtonDown) if payload.len() >= abi::hid::WaylandPointerButton::SIZE => {
+                let mut p = [0u8; abi::hid::WaylandPointerButton::SIZE];
+                p.copy_from_slice(&payload[..abi::hid::WaylandPointerButton::SIZE]);
+                let btn = abi::hid::WaylandPointerButton::from_bytes(&p);
                 stem::info!(
                     "bloom: PointerButtonDown at {},{} button={}",
                     self.pointer_x,
@@ -503,10 +496,10 @@ impl InputState {
                     self.pointer_y,
                 );
             }
-            Ok(EventType::PointerButtonUp) if payload.len() >= PointerButtonPayload::SIZE => {
-                let mut p = [0u8; PointerButtonPayload::SIZE];
-                p.copy_from_slice(&payload[..PointerButtonPayload::SIZE]);
-                let btn = PointerButtonPayload::from_bytes(&p);
+            Ok(EventType::PointerButtonUp) if payload.len() >= abi::hid::WaylandPointerButton::SIZE => {
+                let mut p = [0u8; abi::hid::WaylandPointerButton::SIZE];
+                p.copy_from_slice(&payload[..abi::hid::WaylandPointerButton::SIZE]);
+                let btn = abi::hid::WaylandPointerButton::from_bytes(&p);
                 if btn.button == 0 {
                     self.primary_button_down = false;
                 }
@@ -599,9 +592,8 @@ impl InputState {
                     }
                     return true;
                 }
-                if key.key() == Key::Tab && key.mods().has_alt() {
-                    if !key.is_repeat() {
-                        let forward = !key.mods().has_shift();
+                match blossom::input::handle_hotkey(key.key(), key.mods(), key.is_repeat()) {
+                    blossom::input::WmAction::CycleFocus { forward } => {
                         let (old_focus, new_focus) = scene.cycle_focus(forward);
                         stem::info!(
                             "bloom: focus cycled from {:?} to {:?} (forward={})",
@@ -616,30 +608,22 @@ impl InputState {
                             new_focus,
                             wayland_evt_write,
                         );
+                        return true;
                     }
-                    return true;
-                }
-
-                if key.key() == Key::F11 {
-                    if !key.is_repeat() {
+                    blossom::input::WmAction::ToggleFullscreen => {
                         stem::info!("BLOOM_FULLSCREEN_TOGGLE_TRIGGERED");
                         if let Some(surface_id) = scene.keyboard_focus {
                             self.toggle_fullscreen(scene, damage, wayland_evt_write, surface_id);
                         }
+                        return true;
                     }
-                    return true;
-                }
-
-                // Alt+F4 or Meta+W: Close
-                if (key.mods().has_alt() && key.key() == Key::F4)
-                    || (key.mods().has_meta() && key.key() == Key::W)
-                {
-                    if !key.is_repeat() {
+                    blossom::input::WmAction::CloseSurface => {
                         if let Some(surface_id) = scene.keyboard_focus {
                             self.close_surface(scene, damage, wayland_evt_write, surface_id);
                         }
+                        return true;
                     }
-                    return true;
+                    blossom::input::WmAction::None => {}
                 }
                 if let Some(surface_id) = scene.keyboard_focus {
                     if let Some(client_id) = scene.surface_client(surface_id) {

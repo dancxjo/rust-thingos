@@ -221,18 +221,15 @@ impl InputService {
             self.accum_len += to_copy;
             cursor += to_copy;
 
-            while self.accum_len >= BristleEventHeader::SIZE {
-                let mut header_bytes = [0u8; BristleEventHeader::SIZE];
-                header_bytes.copy_from_slice(&self.event_accum[..BristleEventHeader::SIZE]);
-                let Ok(header) = BristleEventHeader::from_bytes(&header_bytes) else {
-                    self.resync_accumulator();
-                    continue;
-                };
+            while self.accum_len >= abi::hid::WaylandIpcHeader::SIZE {
+                let mut header_bytes = [0u8; abi::hid::WaylandIpcHeader::SIZE];
+                header_bytes.copy_from_slice(&self.event_accum[..abi::hid::WaylandIpcHeader::SIZE]);
+                let header = abi::hid::WaylandIpcHeader::from_bytes(&header_bytes);
 
-                let event_type = header.event_type;
-                let payload_len = header.payload_len;
-                let total_len = BristleEventHeader::SIZE + payload_len as usize;
-                if total_len > self.event_accum.len() {
+                let event_type = header.opcode();
+                let total_len = header.total_len() as usize;
+                
+                if total_len > self.event_accum.len() || total_len < abi::hid::WaylandIpcHeader::SIZE {
                     self.resync_accumulator();
                     continue;
                 }
@@ -244,19 +241,19 @@ impl InputService {
                 self.rate_window_events = self.rate_window_events.wrapping_add(1);
                 if should_log_input(event_no) {
                     stem::trace!(
-                        "bloom: input event entry event={} type={} payload_len={} accum_depth={}",
+                        "bloom: input event entry event={} type={:x} payload_len={} accum_depth={}",
                         event_no,
-                        event_type_name(event_type),
-                        payload_len,
+                        event_type,
+                        total_len - abi::hid::WaylandIpcHeader::SIZE,
                         self.accum_len
                     );
                 }
                 handled |= world.handle_bristle_event(&self.event_accum[..total_len]);
                 if should_log_input(event_no) {
                     stem::trace!(
-                        "bloom: input event exit event={} type={} handled={} accum_depth={}",
+                        "bloom: input event exit event={} type={:x} handled={} accum_depth={}",
                         event_no,
-                        event_type_name(event_type),
+                        event_type,
                         handled,
                         self.accum_len
                     );

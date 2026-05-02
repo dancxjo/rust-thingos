@@ -291,11 +291,20 @@ impl BloomWorld {
     }
 
     pub fn check_resource_retries(&mut self) -> bool {
-        self.visuals.check_retries(&mut self.damage)
+        let mut status = self.visuals.retry_deferred_resources(&self.display, None, true);
+        if status.improved {
+            self.damage.mark_full(self.primary.width, self.primary.height);
+        }
+        if status.improved && !self.visuals.cursor_is_fallback() {
+            status.improved |= self.replay_deferred_cursor_motion();
+        }
+        status.improved
     }
 
     fn send_resolution_to_bristle(w: u32, h: u32) {
-        if let Ok(fd) = stem::syscall::vfs::vfs_open("/run/bristle/control", abi::syscall::vfs_flags::O_RDONLY) {
+        if let Ok(fd) =
+            stem::syscall::vfs::vfs_open("/run/bristle/control", abi::syscall::vfs_flags::O_RDONLY)
+        {
             let mut buf = [0u8; 16];
             if let Ok(n) = stem::syscall::vfs::vfs_read(fd, &mut buf) {
                 let _ = stem::syscall::vfs::vfs_close(fd);

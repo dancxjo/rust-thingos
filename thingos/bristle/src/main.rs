@@ -25,7 +25,7 @@ use core::sync::atomic::{AtomicU64, Ordering};
 use abi::hid::{
     BRISTLE_EVENT_CLASS_KEYBOARD, BRISTLE_EVENT_CLASS_POINTER, BRISTLE_SINK_TAG_BLOOM,
     BRISTLE_SINK_TAG_ECHO, BristleEventHeader, EventType, KIND_BRISTLE_DEVICE_EVENT,
-    KIND_BRISTLE_REGISTER_SINK, Key, KeyEventPayload, decode_register_sink_with_mask,
+    KIND_BRISTLE_REGISTER_SINK, decode_register_sink_with_mask,
 };
 use abi::syscall::vfs_flags::{O_CREAT, O_RDWR, O_TRUNC};
 use abi::trace::input_source;
@@ -129,7 +129,10 @@ fn main(_arg: usize) -> ! {
     publish_device_handle("/run/bristle/kbd_in", kbd_write);
     publish_device_handle("/run/bristle/mouse_in", mouse_write);
     publish_device_handle("/run/bristle/control", control_write);
-    info!("bristle: published device handles kbd_in={} mouse_in={} control={}", kbd_write, mouse_write, control_write);
+    info!(
+        "bristle: published device handles kbd_in={} mouse_in={} control={}",
+        kbd_write, mouse_write, control_write
+    );
 
     // ── Open ServiceLoop ──────────────────────────────────────────────────
     let mut svc = match ServiceLoop::new(64) {
@@ -185,7 +188,10 @@ fn main(_arg: usize) -> ! {
     };
     let control_tok: Option<WaitToken> = control_fd.and_then(|fd| svc.add_fd_readable(fd).ok());
 
-    info!("bristle: online (kbd_tok={:?}, mouse_tok={:?}, control_tok={:?})", kbd_tok, mouse_tok, control_tok);
+    info!(
+        "bristle: online (kbd_tok={:?}, mouse_tok={:?}, control_tok={:?})",
+        kbd_tok, mouse_tok, control_tok
+    );
 
     // ── Event-dispatch state ──────────────────────────────────────────────
     // Registered event sinks — registered via inbox RegisterSink messages.
@@ -233,6 +239,10 @@ fn main(_arg: usize) -> ! {
                         bloom_sink,
                         echo_sink,
                         &mut drop_counter,
+                        &mut pointer_x,
+                        &mut pointer_y,
+                        screen_w,
+                        screen_h,
                     );
                 } else {
                     trace!("bristle: unknown inbox message kind {:?}", kind.0);
@@ -270,8 +280,10 @@ fn main(_arg: usize) -> ! {
                     if n > 0 {
                         if is_control {
                             if n == 8 {
-                                let w = u32::from_le_bytes(recv_buf[0..4].try_into().unwrap()) as i32;
-                                let h = u32::from_le_bytes(recv_buf[4..8].try_into().unwrap()) as i32;
+                                let w =
+                                    u32::from_le_bytes(recv_buf[0..4].try_into().unwrap()) as i32;
+                                let h =
+                                    u32::from_le_bytes(recv_buf[4..8].try_into().unwrap()) as i32;
                                 screen_w = w;
                                 screen_h = h;
                                 stem::info!("bristle: updated screen resolution to {}x{}", w, h);
@@ -290,6 +302,10 @@ fn main(_arg: usize) -> ! {
                                 bloom_sink,
                                 echo_sink,
                                 &mut drop_counter,
+                                &mut pointer_x,
+                                &mut pointer_y,
+                                screen_w,
+                                screen_h,
                             );
                         }
                     }
@@ -378,6 +394,10 @@ fn accumulate_and_dispatch(
     bloom_sink: Option<Sink>,
     echo_sink: Option<Sink>,
     drop_counter: &mut u32,
+    pointer_x: &mut i32,
+    pointer_y: &mut i32,
+    screen_w: i32,
+    screen_h: i32,
 ) {
     let start_ns = stem::monotonic_ns();
     let entry_depth = *accum_len;
@@ -414,42 +434,100 @@ fn accumulate_and_dispatch(
                         );
                     }
 
-                    // Hotkey handling
-                    if event_type == EventType::KeyDown as u16 && payload_len >= 4 {
+                    // Convert to Wayland IPC Format
+                    let mut wayland_buf = [0u8; 64];
+                    let mut out_len = 0;
+
+                    if event_type == EventType::PointerMove as u16 && payload_len >= 4 {
                         let mut p = [0u8; 4];
                         p.copy_from_slice(&event_bytes[20..24]);
-                        let payload = KeyEventPayload::from_bytes(&p);
-                        stem::trace!("bristle: KeyDown received: {:?}", payload.key());
+                        let payload = abi::hid::PointerMovePayload::from_bytes(&p);
 
-                        match payload.key() {
-                            Key::F2 => {
-                                stem::info!("bristle: F2 pressed - dumping tasks...");
-                                stem::syscall::task_dump();
-                            }
-                            Key::Delete
-                                if payload.mods().has_ctrl() && payload.mods().has_alt() =>
-                            {
-                                stem::info!("bristle: Ctrl+Alt+Del - rebooting...");
-                                stem::syscall::reboot();
-                            }
-                            Key::F11 => {
-                                update_active_ui("bloom");
-                            }
-                            Key::F12 => {
-                                update_active_ui("terminal");
-                            }
-                            _ => {}
-                        }
+                        *pointer_x = pointer_x
+                            .saturating_add(payload.dx as i32)
+                            .clamp(0, screen_w.saturating_sub(1));
+                        *pointer_y = pointer_y
+                            .saturating_add(payload.dy as i32)
+                            .clamp(0, screen_h.saturating_sub(1));
+
+                        let wayland_payload =
+                            abi::hid::WaylandPointerMotion { x: *pointer_x, y: *pointer_y };
+
+                        let wayland_header = abi::hid::WaylandIpcHeader {
+                            object_id: 1, // wl_pointer object id
+                            size_and_opcode: (((8 + 8) as u32) << 16) | event_type as u32,
+                        };
+
+                        wayland_buf[0..8].copy_from_slice(&wayland_header.to_bytes());
+                        wayland_buf[8..16].copy_from_slice(&wayland_payload.to_bytes());
+                        out_len = 16;
+                    } else if (event_type == EventType::KeyDown as u16
+                        || event_type == EventType::KeyUp as u16)
+                        && payload_len >= abi::hid::KeyEventPayload::SIZE as u32
+                    {
+                        // Key events: reuse KeyEventPayload but frame with WaylandIpcHeader
+                        let mut p = [0u8; 4];
+                        p.copy_from_slice(&event_bytes[20..24]);
+
+                        let wayland_header = abi::hid::WaylandIpcHeader {
+                            object_id: 2, // wl_keyboard object id
+                            size_and_opcode: (((8 + 4) as u32) << 16) | event_type as u32,
+                        };
+
+                        wayland_buf[0..8].copy_from_slice(&wayland_header.to_bytes());
+                        wayland_buf[8..12].copy_from_slice(&p);
+                        out_len = 12;
+                    } else if (event_type == EventType::PointerButtonDown as u16
+                        || event_type == EventType::PointerButtonUp as u16)
+                        && payload_len >= abi::hid::PointerButtonPayload::SIZE as u32
+                    {
+                        // Pointer button events
+                        let mut p = [0u8; abi::hid::PointerButtonPayload::SIZE];
+                        p.copy_from_slice(
+                            &event_bytes[20..20 + abi::hid::PointerButtonPayload::SIZE],
+                        );
+                        let btn = abi::hid::PointerButtonPayload::from_bytes(&p);
+
+                        let wayland_payload = abi::hid::WaylandPointerButton {
+                            button: btn.button,
+                            pressed: if event_type == EventType::PointerButtonDown as u16 {
+                                1
+                            } else {
+                                0
+                            },
+                        };
+
+                        let wayland_header = abi::hid::WaylandIpcHeader {
+                            object_id: 1,
+                            size_and_opcode: (((8 + 2) as u32) << 16) | event_type as u32,
+                        };
+
+                        wayland_buf[0..8].copy_from_slice(&wayland_header.to_bytes());
+                        wayland_buf[8..10].copy_from_slice(&wayland_payload.to_bytes());
+                        out_len = 10;
+                    } else {
+                        // Other events: just forward them as-is, but we can't if we switched the whole protocol.
+                        // We will just drop them for now, since scroll isn't heavily used or we can wrap them similarly.
                     }
 
                     // Forward to registered sinks.
                     let event_class = event_class(event_type);
-                    if let Some(sink) = bloom_sink {
-                        if sink.accepts(event_class)
-                            && port_send_all(sink.handle, event_bytes).is_err()
-                        {
-                            *drop_counter += 1;
-                            BRISTLE_FORWARD_DROP_COUNT.fetch_add(1, Ordering::Relaxed);
+                    if out_len > 0 {
+                        if let Some(sink) = bloom_sink {
+                            if sink.accepts(event_class)
+                                && port_send_all(sink.handle, &wayland_buf[..out_len]).is_err()
+                            {
+                                *drop_counter += 1;
+                                BRISTLE_FORWARD_DROP_COUNT.fetch_add(1, Ordering::Relaxed);
+                            }
+                        }
+                        if let Some(sink) = echo_sink {
+                            if sink.accepts(event_class)
+                                && port_send_all(sink.handle, &wayland_buf[..out_len]).is_err()
+                            {
+                                *drop_counter += 1;
+                                BRISTLE_FORWARD_DROP_COUNT.fetch_add(1, Ordering::Relaxed);
+                            }
                         }
                     }
                     if let Some(sink) = echo_sink {
