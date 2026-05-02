@@ -721,6 +721,9 @@ dependencies = [
 [[package]]
 name = "blossom"
 version = "0.1.0"
+dependencies = [
+ "petals",
+]
 
 [[package]]
 name = "bran"
@@ -5697,6 +5700,25 @@ dependencies = [
 ]
 
 [[package]]
+name = "petals"
+version = "0.1.0"
+dependencies = [
+ "stem",
+ "stile",
+ "taffy",
+]
+
+[[package]]
+name = "petals_demo"
+version = "0.1.0"
+dependencies = [
+ "petals",
+ "stem",
+ "stile",
+ "taffy",
+]
+
+[[package]]
 name = "phf"
 version = "0.11.3"
 source = "registry+https://github.com/rust-lang/crates.io-index"
@@ -8928,6 +8950,10 @@ dependencies = [
 ]
 
 [[package]]
+name = "stile"
+version = "0.1.0"
+
+[[package]]
 name = "strict-num"
 version = "0.1.1"
 source = "registry+https://github.com/rust-lang/crates.io-index"
@@ -9117,6 +9143,17 @@ checksum = "4c998b0c8b921495196a48aabaf1901ff28be0760136e31604f7967b0792050e"
 dependencies = [
  "papergrid",
  "unicode-width 0.1.14",
+]
+
+[[package]]
+name = "taffy"
+version = "0.10.1"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "aea22054047c16c3f34d3ac473a2170be1424b1115b2a3adcf28cfb067c88859"
+dependencies = [
+ "arrayvec",
+ "serde",
+ "slotmap",
 ]
 
 [[package]]

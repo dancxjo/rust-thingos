@@ -1,0 +1,11 @@
+[package]
+name = "stile"
+version = "0.1.0"
+edition = "2021"
+description = "Description-based styling and cascade for Thing-OS UI"
+license = "MIT OR Apache-2.0"
+
+[lib]
+path = "src/lib.rs"
+
+[dependencies]

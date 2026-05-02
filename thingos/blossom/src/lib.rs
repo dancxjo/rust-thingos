@@ -43,6 +43,7 @@ use alloc::vec;
 use alloc::vec::Vec;
 
 pub mod layer_shell;
+pub mod wm;
 
 pub use layer_shell::{
     LayerShellLayer, LayerSurfaceConfig, LayerSurfacePlacement, LayerSurfaceState,
@@ -159,9 +160,9 @@ fn positioner_apply_gravity(ax: i32, ay: i32, pw: i32, ph: i32, gravity: u32) ->
         | positioner_anchor::TOP_RIGHT
         | positioner_anchor::BOTTOM_RIGHT => ax,
         // LEFT, TOP_LEFT, BOTTOM_LEFT → popup right edge at anchor
-        positioner_anchor::LEFT
-        | positioner_anchor::TOP_LEFT
-        | positioner_anchor::BOTTOM_LEFT => ax - pw,
+        positioner_anchor::LEFT | positioner_anchor::TOP_LEFT | positioner_anchor::BOTTOM_LEFT => {
+            ax - pw
+        }
         // NONE / TOP / BOTTOM → horizontally centered
         _ => ax - pw / 2,
     };
@@ -171,9 +172,9 @@ fn positioner_apply_gravity(ax: i32, ay: i32, pw: i32, ph: i32, gravity: u32) ->
         | positioner_anchor::BOTTOM_LEFT
         | positioner_anchor::BOTTOM_RIGHT => ay,
         // TOP, TOP_LEFT, TOP_RIGHT → popup bottom edge at anchor
-        positioner_anchor::TOP
-        | positioner_anchor::TOP_LEFT
-        | positioner_anchor::TOP_RIGHT => ay - ph,
+        positioner_anchor::TOP | positioner_anchor::TOP_LEFT | positioner_anchor::TOP_RIGHT => {
+            ay - ph
+        }
         // NONE / LEFT / RIGHT → vertically centered
         _ => ay - ph / 2,
     };
@@ -256,8 +257,7 @@ pub fn compute_popup_placement(
     if adj & positioner_constraint::FLIP_X != 0 && (x < 0 || x + w > output_w) {
         let fa = flip_x(anchor);
         let fg = flip_x(gravity);
-        let (nx, _) =
-            positioner_raw_position(positioner.anchor_rect, fa, fg, pw, ph, off_x, off_y);
+        let (nx, _) = positioner_raw_position(positioner.anchor_rect, fa, fg, pw, ph, off_x, off_y);
         // Accept the flip if the new position overflows less than the original.
         let orig_overflow = (-x).max(0).max((x + w - output_w).max(0));
         let new_overflow = (-nx).max(0).max((nx + w - output_w).max(0));
@@ -272,8 +272,7 @@ pub fn compute_popup_placement(
     if adj & positioner_constraint::FLIP_Y != 0 && (y < 0 || y + h > output_h) {
         let fa = flip_y(anchor);
         let fg = flip_y(gravity);
-        let (_, ny) =
-            positioner_raw_position(positioner.anchor_rect, fa, fg, pw, ph, off_x, off_y);
+        let (_, ny) = positioner_raw_position(positioner.anchor_rect, fa, fg, pw, ph, off_x, off_y);
         let orig_overflow = (-y).max(0).max((y + h - output_h).max(0));
         let new_overflow = (-ny).max(0).max((ny + h - output_h).max(0));
         if new_overflow < orig_overflow {

@@ -1013,8 +1013,8 @@ impl InputState {
                     send_wayland_configure(
                         wayland_evt_write,
                         new_size.0,
-                        new_size.1,
-                        new_size.2,
+                        new_size.1 as u32,
+                        new_size.2 as u32,
                         true,
                     );
                     self.resize_sent_this_frame = true;

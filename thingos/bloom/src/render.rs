@@ -5,9 +5,7 @@ use libdl::{RTLD_NOW, dlerror, dlopen_str, dlsym_bytes};
 use pistil_types::Texture;
 
 use crate::display::DisplayBackend;
-use crate::scene::{
-    ChromeButton, CompositionEntry, CursorKind, SurfaceChrome, chrome_button_rects,
-};
+use crate::scene::{ChromeButton, CompositionEntry, CursorKind, SurfaceChrome};
 use crate::theme::{UiTheme, default_theme, theme_by_name};
 
 const PISTIL_PATH: &str = "/lib/libpistil.so";
@@ -594,7 +592,7 @@ impl CompositorVisuals {
         let mut chrome_planes = Vec::new();
 
         for entry in composition.iter().filter(|entry| needs_window_overlay(entry)) {
-            let visual_rect = crate::scene::surface_visual_rect(entry.dest_rect, entry.chrome);
+            let visual_rect = visual_rect_for_entry(entry);
             let local_entry = local_overlay_entry(entry, visual_rect);
             if let Some(body) =
                 self.body_overlays.iter_mut().find(|buffer| buffer.surface_id == entry.surface_id)
@@ -1133,8 +1131,55 @@ fn overlay_size_for(composition: &[CompositionEntry], surface_id: u32) -> Option
     let entry = composition
         .iter()
         .find(|entry| entry.surface_id == surface_id && needs_window_overlay(entry))?;
-    let rect = crate::scene::surface_visual_rect(entry.dest_rect, entry.chrome);
+    let rect = visual_rect_for_entry(entry);
     if rect.w == 0 || rect.h == 0 { None } else { Some((rect.w, rect.h)) }
+}
+
+fn visual_rect_for_entry(entry: &CompositionEntry) -> abi::display_protocol::Rect {
+    crate::scene::from_blossom_rect(blossom::wm::surface_visual_rect(
+        crate::scene::to_blossom_rect(entry.dest_rect),
+        to_blossom_chrome(entry.chrome),
+    ))
+}
+
+fn to_blossom_chrome(chrome: SurfaceChrome) -> blossom::wm::SurfaceChrome {
+    blossom::wm::SurfaceChrome {
+        titlebar_height: chrome.titlebar_height.min(i32::MAX as u32) as i32,
+        frame_thickness: chrome.frame_thickness.min(i32::MAX as u32) as i32,
+    }
+}
+
+fn chrome_button_rects(
+    rect: abi::display_protocol::Rect,
+    chrome: SurfaceChrome,
+) -> Option<[(ChromeButton, abi::display_protocol::Rect); 3]> {
+    blossom::wm::chrome_button_rects(crate::scene::to_blossom_rect(rect), to_blossom_chrome(chrome))
+        .map(|buttons| {
+            [
+                (
+                    from_blossom_chrome_button(buttons[0].0),
+                    crate::scene::from_blossom_rect(buttons[0].1),
+                ),
+                (
+                    from_blossom_chrome_button(buttons[1].0),
+                    crate::scene::from_blossom_rect(buttons[1].1),
+                ),
+                (
+                    from_blossom_chrome_button(buttons[2].0),
+                    crate::scene::from_blossom_rect(buttons[2].1),
+                ),
+            ]
+        })
+}
+
+fn from_blossom_chrome_button(button: blossom::wm::ChromeButton) -> ChromeButton {
+    match button {
+        blossom::wm::ChromeButton::Minimize => ChromeButton::Minimize,
+        blossom::wm::ChromeButton::Shade => ChromeButton::Shade,
+        blossom::wm::ChromeButton::Maximize => ChromeButton::Maximize,
+        blossom::wm::ChromeButton::Fullscreen => ChromeButton::Fullscreen,
+        blossom::wm::ChromeButton::Close => ChromeButton::Close,
+    }
 }
 
 fn needs_window_overlay(entry: &CompositionEntry) -> bool {

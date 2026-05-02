@@ -3,12 +3,42 @@ use alloc::string::String;
 use alloc::vec::Vec;
 
 use abi::display_protocol::Rect;
+use blossom::Rect as BlossomRect;
+pub use blossom::wm::{ChromeButton, CursorKind, HitTarget, ResizeEdge};
 
-const CASCADE_START_X: u32 = 40;
-const CASCADE_START_Y: u32 = 48;
-const CASCADE_STEP_X: u32 = 36;
-const CASCADE_STEP_Y: u32 = 32;
-const CASCADE_SLOTS: u32 = 8;
+#[derive(Clone, Copy, Debug, Default, PartialEq, Eq)]
+pub struct SurfaceChrome {
+    pub titlebar_height: u32,
+    pub frame_thickness: u32,
+}
+
+impl SurfaceChrome {
+    pub fn is_empty(self) -> bool {
+        self.titlebar_height == 0 && self.frame_thickness == 0
+    }
+}
+
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub struct SurfaceMove {
+    pub old_rect: Rect,
+    pub new_rect: Rect,
+    pub changed: bool,
+}
+
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub struct SurfaceResize {
+    pub old_rect: Rect,
+    pub new_rect: Rect,
+    pub changed: bool,
+}
+
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub struct SurfaceToggle {
+    pub old_rect: Rect,
+    pub new_rect: Rect,
+    pub changed: bool,
+    pub active: bool,
+}
 
 #[derive(Clone, Copy, Debug)]
 pub struct Client {
@@ -84,77 +114,6 @@ pub struct SubsurfaceLink {
     pub y: i32,
     /// Stacking offset relative to the parent's z_order.
     pub z_above: i32,
-}
-
-#[derive(Clone, Copy, Debug, Default, PartialEq, Eq)]
-pub struct SurfaceChrome {
-    pub titlebar_height: u32,
-    pub frame_thickness: u32,
-}
-
-impl SurfaceChrome {
-    pub fn is_empty(self) -> bool {
-        self.titlebar_height == 0 && self.frame_thickness == 0
-    }
-}
-
-#[derive(Clone, Copy, Debug, PartialEq, Eq)]
-pub enum HitTarget {
-    Client { surface_id: u32 },
-    TitleBar { surface_id: u32 },
-    ChromeButton { surface_id: u32, button: ChromeButton },
-    Frame { surface_id: u32, edge: ResizeEdge },
-}
-
-#[derive(Clone, Copy, Debug, PartialEq, Eq)]
-pub enum ChromeButton {
-    Minimize,
-    Shade,
-    Maximize,
-    Fullscreen,
-    Close,
-}
-
-#[derive(Clone, Copy, Debug, PartialEq, Eq)]
-pub enum ResizeEdge {
-    North,
-    South,
-    East,
-    West,
-    NorthEast,
-    NorthWest,
-    SouthEast,
-    SouthWest,
-}
-
-#[derive(Clone, Copy, Debug, Default, PartialEq, Eq)]
-pub enum CursorKind {
-    #[default]
-    Default,
-    Move,
-    ResizeNorth,
-    ResizeSouth,
-    ResizeEast,
-    ResizeWest,
-    ResizeNorthEast,
-    ResizeNorthWest,
-    ResizeSouthEast,
-    ResizeSouthWest,
-}
-
-impl CursorKind {
-    pub fn for_resize_edge(edge: ResizeEdge) -> Self {
-        match edge {
-            ResizeEdge::North => Self::ResizeNorth,
-            ResizeEdge::South => Self::ResizeSouth,
-            ResizeEdge::East => Self::ResizeEast,
-            ResizeEdge::West => Self::ResizeWest,
-            ResizeEdge::NorthEast => Self::ResizeNorthEast,
-            ResizeEdge::NorthWest => Self::ResizeNorthWest,
-            ResizeEdge::SouthEast => Self::ResizeSouthEast,
-            ResizeEdge::SouthWest => Self::ResizeSouthWest,
-        }
-    }
 }
 
 #[derive(Clone, Debug)]
@@ -661,7 +620,7 @@ impl Scene {
                         h: pending_buf.height,
                     }
                 } else {
-                    airy_window_rect(
+                    bloom_airy_window_rect(
                         screen_w,
                         screen_h,
                         &existing_rects,
@@ -681,10 +640,10 @@ impl Scene {
 
         if let Some(dest) = pending_dest {
             if old_mapped {
-                damage_rects.push(surface_visual_rect(old_dest, surface.chrome));
+                damage_rects.push(bloom_surface_visual_rect(old_dest, surface.chrome));
             }
             surface.current.dest_rect = dest;
-            damage_rects.push(surface_visual_rect(dest, surface.chrome));
+            damage_rects.push(bloom_surface_visual_rect(dest, surface.chrome));
             changed = true;
         }
         if let Some(z) = surface.pending.z_order.take() {
@@ -716,7 +675,8 @@ impl Scene {
             if let Some(buf) = surface.current.buffer {
                 let dest = surface.current.dest_rect;
                 for rect in surface.pending.damage.drain(..) {
-                    if let Some(rect) = translate_surface_damage(rect, buf.width, buf.height, dest)
+                    if let Some(rect) =
+                        bloom_translate_surface_damage(rect, buf.width, buf.height, dest)
                     {
                         damage_rects.push(rect);
                     }
@@ -727,7 +687,7 @@ impl Scene {
             changed = true;
         }
         if visual_full_damage {
-            damage_rects.push(surface_visual_rect(surface.current.dest_rect, surface.chrome));
+            damage_rects.push(bloom_surface_visual_rect(surface.current.dest_rect, surface.chrome));
         }
 
         surface.frame_serial = surface.frame_serial.saturating_add(1);
@@ -859,10 +819,10 @@ impl Scene {
         if surface.is_fullscreen {
             return Some(HitTarget::Client { surface_id });
         }
-        if let Some(button) = chrome_button_at(rect, surface.chrome, x, y) {
+        if let Some(button) = bloom_chrome_button_at(rect, surface.chrome, x, y) {
             return Some(HitTarget::ChromeButton { surface_id, button });
         }
-        if let Some(edge) = resize_edge_at(rect, surface.chrome.frame_thickness, x, y) {
+        if let Some(edge) = bloom_resize_edge_at(rect, surface.chrome.frame_thickness, x, y) {
             return Some(HitTarget::Frame { surface_id, edge });
         }
         let titlebar_bottom = rect.y.saturating_add(surface.chrome.titlebar_height);
@@ -888,12 +848,12 @@ impl Scene {
 
     pub fn surface_visual_rect(&self, surface_id: u32) -> Option<Rect> {
         let surface = self.surfaces.get(&surface_id)?;
-        Some(surface_visual_rect(surface.current.dest_rect, surface.chrome))
+        Some(bloom_surface_visual_rect(surface.current.dest_rect, surface.chrome))
     }
 
     pub fn visual_rect_for_surface_rect(&self, surface_id: u32, rect: Rect) -> Option<Rect> {
         let surface = self.surfaces.get(&surface_id)?;
-        Some(surface_visual_rect(rect, surface.chrome))
+        Some(bloom_surface_visual_rect(rect, surface.chrome))
     }
 
     pub fn set_surface_visible(&mut self, surface_id: u32, visible: bool) -> Option<Rect> {
@@ -1013,125 +973,6 @@ impl Scene {
     }
 }
 
-fn airy_window_rect(
-    screen_w: u32,
-    screen_h: u32,
-    existing_windows: &[Rect],
-    width: u32,
-    height: u32,
-) -> Rect {
-    let padding_x = 40;
-    let padding_y = 60; // Leave space for a top bar / menu
-
-    // If no windows, start at top-left
-    if existing_windows.is_empty() {
-        return Rect { x: padding_x, y: padding_y, w: width, h: height };
-    }
-
-    // Candidates for "urinal etiquette" placement:
-    // Prefer corners and edges, maximizing distance from neighbors.
-    let mut candidates = Vec::new();
-
-    // 1. The four corners
-    candidates.push((padding_x, padding_y));
-    candidates.push((screen_w.saturating_sub(width).saturating_sub(padding_x), padding_y));
-    candidates.push((padding_x, screen_h.saturating_sub(height).saturating_sub(padding_x)));
-    candidates.push((
-        screen_w.saturating_sub(width).saturating_sub(padding_x),
-        screen_h.saturating_sub(height).saturating_sub(padding_x),
-    ));
-
-    // 2. The center
-    candidates.push((
-        screen_w.saturating_sub(width) / 2,
-        (screen_h.saturating_sub(height).saturating_add(padding_y)) / 2,
-    ));
-
-    // 3. Edge midpoints
-    candidates.push((screen_w.saturating_sub(width) / 2, padding_y));
-    candidates.push((
-        screen_w.saturating_sub(width) / 2,
-        screen_h.saturating_sub(height).saturating_sub(padding_x),
-    ));
-    candidates.push((padding_x, screen_h.saturating_sub(height) / 2));
-    candidates.push((
-        screen_w.saturating_sub(width).saturating_sub(padding_x),
-        screen_h.saturating_sub(height) / 2,
-    ));
-
-    let mut best_pos = candidates[0];
-    let mut max_min_dist_sq = -1i64;
-
-    for (cx, cy) in candidates {
-        let cand = Rect { x: cx, y: cy, w: width, h: height };
-
-        // Check for overlap with existing windows
-        let mut overlaps = false;
-        let mut min_dist_sq = i64::MAX;
-
-        for w in existing_windows {
-            if rect_overlaps(cand, *w) {
-                overlaps = true;
-                break;
-            }
-
-            let d_sq = rect_center_dist_sq(cand, *w);
-            if d_sq < min_dist_sq {
-                min_dist_sq = d_sq;
-            }
-        }
-
-        if overlaps {
-            continue;
-        }
-
-        if min_dist_sq > max_min_dist_sq {
-            max_min_dist_sq = min_dist_sq;
-            best_pos = (cx, cy);
-        }
-    }
-
-    if max_min_dist_sq >= 0 {
-        Rect { x: best_pos.0, y: best_pos.1, w: width, h: height }
-    } else {
-        // Fallback to a simple offset cascade if all ideal spots overlap
-        let slot = (existing_windows.len() as u32) % CASCADE_SLOTS;
-        Rect {
-            x: CASCADE_START_X.saturating_add(slot.saturating_mul(CASCADE_STEP_X)),
-            y: CASCADE_START_Y.saturating_add(slot.saturating_mul(CASCADE_STEP_Y)),
-            w: width,
-            h: height,
-        }
-    }
-}
-
-fn rect_overlaps(a: Rect, b: Rect) -> bool {
-    a.x < b.x.saturating_add(b.w)
-        && a.x.saturating_add(a.w) > b.x
-        && a.y < b.y.saturating_add(b.h)
-        && a.y.saturating_add(a.h) > b.y
-}
-
-fn rect_center_dist_sq(a: Rect, b: Rect) -> i64 {
-    let ax = a.x as i64 + (a.w as i64 / 2);
-    let ay = a.y as i64 + (a.h as i64 / 2);
-    let bx = b.x as i64 + (b.w as i64 / 2);
-    let by = b.y as i64 + (b.h as i64 / 2);
-    let dx = ax - bx;
-    let dy = ay - by;
-    dx * dx + dy * dy
-}
-
-fn cascaded_window_rect(existing_standalone_windows: u32, width: u32, height: u32) -> Rect {
-    let slot = existing_standalone_windows % CASCADE_SLOTS;
-    Rect {
-        x: CASCADE_START_X.saturating_add(slot.saturating_mul(CASCADE_STEP_X)),
-        y: CASCADE_START_Y.saturating_add(slot.saturating_mul(CASCADE_STEP_Y)),
-        w: width,
-        h: height,
-    }
-}
-
 pub struct CommitResult {
     pub changed: bool,
     pub released_buffer_ids: Vec<u32>,
@@ -1155,140 +996,97 @@ pub struct SurfaceSnapshot {
     pub is_window: bool,
 }
 
-pub struct SurfaceMove {
-    pub old_rect: Rect,
-    pub new_rect: Rect,
-    pub changed: bool,
+pub fn to_blossom_rect(r: Rect) -> BlossomRect {
+    BlossomRect { x: r.x as i32, y: r.y as i32, w: r.w as i32, h: r.h as i32 }
 }
 
-pub struct SurfaceResize {
-    pub old_rect: Rect,
-    pub new_rect: Rect,
-    pub changed: bool,
+pub fn from_blossom_rect(r: BlossomRect) -> Rect {
+    Rect { x: r.x.max(0) as u32, y: r.y.max(0) as u32, w: r.w.max(0) as u32, h: r.h.max(0) as u32 }
 }
 
-pub struct SurfaceToggle {
-    pub old_rect: Rect,
-    pub new_rect: Rect,
-    pub changed: bool,
-    pub active: bool,
-}
-
-pub fn surface_visual_rect(rect: Rect, chrome: SurfaceChrome) -> Rect {
-    if chrome.is_empty() {
-        return rect;
-    }
-    Rect { x: rect.x, y: rect.y, w: rect.w.saturating_add(2), h: rect.h.saturating_add(2) }
-}
-
-fn resize_edge_at(rect: Rect, thickness: u32, x: i32, y: i32) -> Option<ResizeEdge> {
-    if thickness == 0 || rect.w == 0 || rect.h == 0 {
-        return None;
-    }
-    let x0 = rect.x as i32;
-    let y0 = rect.y as i32;
-    let x1 = rect.x.saturating_add(rect.w) as i32;
-    let y1 = rect.y.saturating_add(rect.h) as i32;
-    if x < x0 || x >= x1 || y < y0 || y >= y1 {
-        return None;
-    }
-
-    let t = thickness.min(rect.w / 2).min(rect.h / 2) as i32;
-    if t <= 0 {
-        return None;
-    }
-    let north = y < y0.saturating_add(t);
-    let south = y >= y1.saturating_sub(t);
-    let west = x < x0.saturating_add(t);
-    let east = x >= x1.saturating_sub(t);
-
-    match (north, south, west, east) {
-        (true, _, true, _) => Some(ResizeEdge::NorthWest),
-        (true, _, _, true) => Some(ResizeEdge::NorthEast),
-        (_, true, true, _) => Some(ResizeEdge::SouthWest),
-        (_, true, _, true) => Some(ResizeEdge::SouthEast),
-        (true, _, _, _) => Some(ResizeEdge::North),
-        (_, true, _, _) => Some(ResizeEdge::South),
-        (_, _, true, _) => Some(ResizeEdge::West),
-        (_, _, _, true) => Some(ResizeEdge::East),
-        _ => None,
+fn to_blossom_chrome(chrome: SurfaceChrome) -> blossom::wm::SurfaceChrome {
+    blossom::wm::SurfaceChrome {
+        titlebar_height: chrome.titlebar_height.min(i32::MAX as u32) as i32,
+        frame_thickness: chrome.frame_thickness.min(i32::MAX as u32) as i32,
     }
 }
 
-pub fn chrome_button_rects(rect: Rect, chrome: SurfaceChrome) -> Option<[(ChromeButton, Rect); 3]> {
-    if chrome.titlebar_height == 0 || rect.w == 0 || rect.h == 0 {
-        return None;
+fn bloom_airy_window_rect(
+    screen_w: u32,
+    screen_h: u32,
+    existing_rects: &[Rect],
+    width: u32,
+    height: u32,
+) -> Rect {
+    let mut blossom_rects = Vec::new();
+    for rect in existing_rects {
+        blossom_rects.push(to_blossom_rect(*rect));
     }
-    // If the window is shaded, we still want the buttons.
-    // If the window is fullscreen, we don't draw chrome.
-
-    let frame = chrome.frame_thickness.min(rect.w / 2).min(rect.h / 2);
-    let titlebar_height = chrome.titlebar_height.min(rect.h);
-    let button_height = 24u32.min(titlebar_height);
-    let button_width = 28u32;
-    let spacing = 4u32;
-    let right_inset = frame.saturating_add(6);
-    if button_height < 8 || button_width < 12 {
-        return None;
-    }
-
-    let right = rect.x.saturating_add(rect.w).saturating_sub(right_inset);
-    let y = rect.y.saturating_add((titlebar_height.saturating_sub(button_height)) / 2);
-    let total_w = button_width.saturating_mul(3).saturating_add(spacing.saturating_mul(2));
-    if total_w.saturating_add(right_inset) > rect.w {
-        return None;
-    }
-
-    let close_x = right.saturating_sub(button_width);
-    let max_x = close_x.saturating_sub(spacing).saturating_sub(button_width);
-    let min_x = max_x.saturating_sub(spacing).saturating_sub(button_width);
-
-    Some([
-        (ChromeButton::Shade, Rect { x: min_x, y, w: button_width, h: button_height }),
-        (ChromeButton::Fullscreen, Rect { x: max_x, y, w: button_width, h: button_height }),
-        (ChromeButton::Close, Rect { x: close_x, y, w: button_width, h: button_height }),
-    ])
+    from_blossom_rect(blossom::wm::airy_window_rect(
+        screen_w.min(i32::MAX as u32) as i32,
+        screen_h.min(i32::MAX as u32) as i32,
+        &blossom_rects,
+        width.min(i32::MAX as u32) as i32,
+        height.min(i32::MAX as u32) as i32,
+    ))
 }
 
-fn chrome_button_at(rect: Rect, chrome: SurfaceChrome, x: i32, y: i32) -> Option<ChromeButton> {
-    let rects = chrome_button_rects(rect, chrome)?;
-    for (button, bounds) in rects {
-        let x0 = bounds.x as i32;
-        let y0 = bounds.y as i32;
-        let x1 = bounds.x.saturating_add(bounds.w) as i32;
-        let y1 = bounds.y.saturating_add(bounds.h) as i32;
-        if x >= x0 && x < x1 && y >= y0 && y < y1 {
-            return Some(button);
-        }
-    }
-    None
+fn bloom_surface_visual_rect(rect: Rect, chrome: SurfaceChrome) -> Rect {
+    from_blossom_rect(blossom::wm::surface_visual_rect(
+        to_blossom_rect(rect),
+        to_blossom_chrome(chrome),
+    ))
 }
 
-fn translate_surface_damage(local: Rect, src_w: u32, src_h: u32, dest: Rect) -> Option<Rect> {
-    if src_w == 0 || src_h == 0 || dest.w == 0 || dest.h == 0 || local.w == 0 || local.h == 0 {
-        return None;
+fn bloom_translate_surface_damage(local: Rect, src_w: u32, src_h: u32, dest: Rect) -> Option<Rect> {
+    blossom::wm::translate_surface_damage(
+        to_blossom_rect(local),
+        src_w.min(i32::MAX as u32) as i32,
+        src_h.min(i32::MAX as u32) as i32,
+        to_blossom_rect(dest),
+    )
+    .map(from_blossom_rect)
+}
+
+fn bloom_chrome_button_at(
+    rect: Rect,
+    chrome: SurfaceChrome,
+    x: i32,
+    y: i32,
+) -> Option<ChromeButton> {
+    blossom::wm::chrome_button_at(to_blossom_rect(rect), to_blossom_chrome(chrome), x, y)
+        .map(from_blossom_chrome_button)
+}
+
+fn bloom_resize_edge_at(rect: Rect, frame_thickness: u32, x: i32, y: i32) -> Option<ResizeEdge> {
+    blossom::wm::resize_edge_at(
+        to_blossom_rect(rect),
+        frame_thickness.min(i32::MAX as u32) as i32,
+        x,
+        y,
+    )
+    .map(from_blossom_resize_edge)
+}
+
+fn from_blossom_chrome_button(button: blossom::wm::ChromeButton) -> ChromeButton {
+    match button {
+        blossom::wm::ChromeButton::Minimize => ChromeButton::Minimize,
+        blossom::wm::ChromeButton::Shade => ChromeButton::Shade,
+        blossom::wm::ChromeButton::Maximize => ChromeButton::Maximize,
+        blossom::wm::ChromeButton::Fullscreen => ChromeButton::Fullscreen,
+        blossom::wm::ChromeButton::Close => ChromeButton::Close,
     }
+}
 
-    let x0 = local.x.min(src_w);
-    let y0 = local.y.min(src_h);
-    let x1 = local.x.saturating_add(local.w).min(src_w);
-    let y1 = local.y.saturating_add(local.h).min(src_h);
-    if x1 <= x0 || y1 <= y0 {
-        return None;
-    }
-
-    let dx0 = dest.x.saturating_add(((x0 as u64 * dest.w as u64) / src_w as u64) as u32);
-    let dy0 = dest.y.saturating_add(((y0 as u64 * dest.h as u64) / src_h as u64) as u32);
-    let dx1 = dest
-        .x
-        .saturating_add((((x1 as u64 * dest.w as u64) + src_w as u64 - 1) / src_w as u64) as u32);
-    let dy1 = dest
-        .y
-        .saturating_add((((y1 as u64 * dest.h as u64) + src_h as u64 - 1) / src_h as u64) as u32);
-
-    if dx1 <= dx0 || dy1 <= dy0 {
-        None
-    } else {
-        Some(Rect { x: dx0, y: dy0, w: dx1 - dx0, h: dy1 - dy0 })
+fn from_blossom_resize_edge(edge: blossom::wm::ResizeEdge) -> ResizeEdge {
+    match edge {
+        blossom::wm::ResizeEdge::North => ResizeEdge::North,
+        blossom::wm::ResizeEdge::South => ResizeEdge::South,
+        blossom::wm::ResizeEdge::East => ResizeEdge::East,
+        blossom::wm::ResizeEdge::West => ResizeEdge::West,
+        blossom::wm::ResizeEdge::NorthEast => ResizeEdge::NorthEast,
+        blossom::wm::ResizeEdge::NorthWest => ResizeEdge::NorthWest,
+        blossom::wm::ResizeEdge::SouthEast => ResizeEdge::SouthEast,
+        blossom::wm::ResizeEdge::SouthWest => ResizeEdge::SouthWest,
     }
 }

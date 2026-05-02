@@ -380,6 +380,7 @@ pub fn default_programs() -> Vec<ProgramConfig> {
         ProgramConfig { name: "tee", is_init: false, boot_module: true, features: vec![] },
         ProgramConfig { name: "xargs", is_init: false, boot_module: true, features: vec![] },
         ProgramConfig { name: "placed", is_init: false, boot_module: true, features: vec![] },
+        ProgramConfig { name: "petals_demo", is_init: false, boot_module: true, features: vec![] },
         ProgramConfig { name: "bloom", is_init: false, boot_module: true, features: vec![] },
         ProgramConfig { name: "clear", is_init: false, boot_module: true, features: vec![] },
         ProgramConfig { name: "loglevel", is_init: false, boot_module: true, features: vec![] },

@@ -117,10 +117,19 @@ fn main(_arg: usize) -> ! {
         }
     };
 
+    let (control_write, control_read) = match port_create(4096) {
+        Ok(pair) => pair,
+        Err(e) => {
+            warn!("bristle: control port_create failed: {:?}", e);
+            (0, 0)
+        }
+    };
+
     let _ = vfs_mkdir("/run/bristle");
     publish_device_handle("/run/bristle/kbd_in", kbd_write);
     publish_device_handle("/run/bristle/mouse_in", mouse_write);
-    info!("bristle: published device handles kbd_in={} mouse_in={}", kbd_write, mouse_write);
+    publish_device_handle("/run/bristle/control", control_write);
+    info!("bristle: published device handles kbd_in={} mouse_in={} control={}", kbd_write, mouse_write, control_write);
 
     // ── Open ServiceLoop ──────────────────────────────────────────────────
     let mut svc = match ServiceLoop::new(64) {
@@ -162,7 +171,21 @@ fn main(_arg: usize) -> ! {
     };
     let mouse_tok: Option<WaitToken> = mouse_fd.and_then(|fd| svc.add_fd_readable(fd).ok());
 
-    info!("bristle: online (kbd_tok={:?}, mouse_tok={:?})", kbd_tok, mouse_tok);
+    // Control input path.
+    let control_fd: Option<u32> = if control_read != 0 {
+        match vfs_handle_from_port(control_read) {
+            Ok(fd) => Some(fd),
+            Err(e) => {
+                debug!("bristle: control fd bridge failed ({:?})", e);
+                None
+            }
+        }
+    } else {
+        None
+    };
+    let control_tok: Option<WaitToken> = control_fd.and_then(|fd| svc.add_fd_readable(fd).ok());
+
+    info!("bristle: online (kbd_tok={:?}, mouse_tok={:?}, control_tok={:?})", kbd_tok, mouse_tok, control_tok);
 
     // ── Event-dispatch state ──────────────────────────────────────────────
     // Registered event sinks — registered via inbox RegisterSink messages.
@@ -175,6 +198,11 @@ fn main(_arg: usize) -> ! {
     let mut mouse_event_accum = [0u8; 64];
     let mut mouse_accum_len = 0usize;
     let mut drop_counter: u32 = 0;
+
+    let mut screen_w: i32 = 800; // Defaults
+    let mut screen_h: i32 = 600;
+    let mut pointer_x: i32 = screen_w / 2;
+    let mut pointer_y: i32 = screen_h / 2;
 
     // ── Main service loop ─────────────────────────────────────────────────
     loop {
@@ -215,6 +243,7 @@ fn main(_arg: usize) -> ! {
             ServiceEvent::Ready { token, event: ev } if ev.is_readable() => {
                 let is_kbd = Some(token) == kbd_tok;
                 let is_mouse = Some(token) == mouse_tok;
+                let is_control = Some(token) == control_tok;
                 let n_result = if is_kbd {
                     if let Some(fd) = kbd_fd {
                         vfs_read(fd, &mut recv_buf)
@@ -227,26 +256,42 @@ fn main(_arg: usize) -> ! {
                     } else {
                         continue;
                     }
+                } else if is_control {
+                    if let Some(fd) = control_fd {
+                        vfs_read(fd, &mut recv_buf)
+                    } else {
+                        continue;
+                    }
                 } else {
                     continue;
                 };
 
                 if let Ok(n) = n_result {
                     if n > 0 {
-                        let (event_accum, accum_len) = if is_mouse {
-                            (&mut mouse_event_accum, &mut mouse_accum_len)
+                        if is_control {
+                            if n == 8 {
+                                let w = u32::from_le_bytes(recv_buf[0..4].try_into().unwrap()) as i32;
+                                let h = u32::from_le_bytes(recv_buf[4..8].try_into().unwrap()) as i32;
+                                screen_w = w;
+                                screen_h = h;
+                                stem::info!("bristle: updated screen resolution to {}x{}", w, h);
+                            }
                         } else {
-                            (&mut kbd_event_accum, &mut kbd_accum_len)
-                        };
-                        accumulate_and_dispatch(
-                            &recv_buf[..n],
-                            if is_mouse { "mouse_fd" } else { "kbd_fd" },
-                            event_accum,
-                            accum_len,
-                            bloom_sink,
-                            echo_sink,
-                            &mut drop_counter,
-                        );
+                            let (event_accum, accum_len) = if is_mouse {
+                                (&mut mouse_event_accum, &mut mouse_accum_len)
+                            } else {
+                                (&mut kbd_event_accum, &mut kbd_accum_len)
+                            };
+                            accumulate_and_dispatch(
+                                &recv_buf[..n],
+                                if is_mouse { "mouse_fd" } else { "kbd_fd" },
+                                event_accum,
+                                accum_len,
+                                bloom_sink,
+                                echo_sink,
+                                &mut drop_counter,
+                            );
+                        }
                     }
                 }
             }

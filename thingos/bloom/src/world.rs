@@ -69,6 +69,8 @@ impl BloomWorld {
         // coalesce damage rects (and fall back to full-output damage when the
         // rect count exceeds `damage::MAX_DAMAGE_RECTS`).
         damage.set_output_bounds(primary.width, primary.height);
+        Self::send_resolution_to_bristle(primary.width, primary.height);
+
         Self {
             scene,
             damage,
@@ -288,6 +290,29 @@ impl BloomWorld {
         }
     }
 
+    pub fn check_resource_retries(&mut self) -> bool {
+        self.visuals.check_retries(&mut self.damage)
+    }
+
+    fn send_resolution_to_bristle(w: u32, h: u32) {
+        if let Ok(fd) = stem::syscall::vfs::vfs_open("/run/bristle/control", abi::syscall::vfs_flags::O_RDONLY) {
+            let mut buf = [0u8; 16];
+            if let Ok(n) = stem::syscall::vfs::vfs_read(fd, &mut buf) {
+                let _ = stem::syscall::vfs::vfs_close(fd);
+                if let Ok(s) = core::str::from_utf8(&buf[..n]) {
+                    if let Ok(port) = s.trim().parse::<u32>() {
+                        let mut res_buf = [0u8; 8];
+                        res_buf[0..4].copy_from_slice(&w.to_le_bytes());
+                        res_buf[4..8].copy_from_slice(&h.to_le_bytes());
+                        let _ = stem::syscall::port_send_all(port, &res_buf);
+                    }
+                }
+            } else {
+                let _ = stem::syscall::vfs::vfs_close(fd);
+            }
+        }
+    }
+
     pub fn refresh_display_output(&mut self) -> bool {
         let old = self.primary;
         let Some(changed) = self.display.refresh_info_changed() else {
@@ -306,6 +331,7 @@ impl BloomWorld {
         self.vsync_enabled = self.display.supports_vblank();
         self.damage.set_output_bounds(next.width, next.height);
         self.input.update_dimensions(next.width, next.height);
+        Self::send_resolution_to_bristle(next.width, next.height);
         self.visuals.reconfigure_for_output(&self.display);
         self.hw_cursor_position = None;
         self.cursor_present_logged = false;

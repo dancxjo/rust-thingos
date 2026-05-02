@@ -1,0 +1,18 @@
+[package]
+name = "petals"
+version = "0.1.0"
+edition = "2021"
+description = "Description-first UI structure and Taffy layout for Thing-OS"
+license = "MIT OR Apache-2.0"
+
+[lib]
+path = "src/lib.rs"
+
+[features]
+default = []
+stem-service-loop = ["dep:stem"]
+
+[dependencies]
+stile = { path = "../stile" }
+taffy = { version = "0.10.1", default-features = false, features = ["alloc", "taffy_tree", "flexbox"] }
+stem = { path = "../stem", optional = true, features = ["rt"] }

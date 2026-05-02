@@ -19,7 +19,7 @@ use stem::syscall::vfs::vfs_read;
 use stem::{debug, warn};
 
 use crate::loop_types::{BloomService, Interest, LoopAction, LoopEvent};
-use crate::scene::SurfaceBuffer;
+use crate::scene::{SurfaceBuffer, SurfaceChrome};
 use crate::wayland::ipc;
 use crate::world::BloomWorld;
 
@@ -86,7 +86,7 @@ impl WaylandCommandService {
             let _ = world.scene.set_surface_chrome(
                 self.wayland_client_id,
                 bloom_id,
-                crate::scene::SurfaceChrome {
+                SurfaceChrome {
                     titlebar_height: blossom::DEFAULT_TITLEBAR_HEIGHT,
                     frame_thickness: blossom::DEFAULT_FRAME_THICKNESS,
                 },
@@ -248,7 +248,7 @@ impl WaylandCommandService {
         if world.scene.set_surface_chrome(
             self.wayland_client_id,
             bloom_surface_id,
-            crate::scene::SurfaceChrome { titlebar_height, frame_thickness },
+            SurfaceChrome { titlebar_height, frame_thickness },
         ) {
             debug!(
                 "bloom: registered titlebar drag zone surface={} height={} frame={}",
@@ -383,7 +383,7 @@ impl WaylandCommandService {
         let _ = world.scene.set_surface_chrome(
             self.wayland_client_id,
             bloom_surface_id,
-            crate::scene::SurfaceChrome { titlebar_height: 0, frame_thickness: 0 },
+            SurfaceChrome { titlebar_height: 0, frame_thickness: 0 },
         );
 
         if p.x < 0 || p.y < 0 {
