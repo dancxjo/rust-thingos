@@ -47,5 +47,25 @@ Feature: USB storage through the xHCI userspace driver
     And the serial output should contain "ums: mounted read-only block device at /dev/block/usb0" within 120s
     And the serial output should contain "ums: created /dev/disk/usb0" within 120s
     And the serial output should contain "ums: created /dev/disk/by-bus/usb0" within 120s
+    And the serial output should contain "ums: created /dev/storage/usb0" within 120s
     And the serial output should contain "ums: partition scan: read LBA 0 ok" within 120s
     And the serial output should contain "ums: mounted partition 1 at /dev/block/usb0p1" within 120s
+
+  @timeout-120s
+  Scenario: Device directories expose immediate children for shell traversal
+    When I wait for the shell prompt
+    Then the serial output should contain "ums: created /dev/storage/usb0" within 120s
+    When I type "ls /dev" on the serial console
+    Then the command output should contain "disk"
+    And the command output should contain "storage"
+    And the command output should not contain "disk/usb0"
+    And the command output should not contain "disk/by-bus/usb0"
+    When I type "ls /dev/disk" on the serial console
+    Then the command output should contain "usb0"
+    And the command output should contain "by-bus"
+    When I type "ls /dev/disk/by-bus" on the serial console
+    Then the command output should contain "usb0"
+    When I type "ls /dev/storage" on the serial console
+    Then the command output should contain "usb0"
+    When I type "ls /dev/storage/usb0" on the serial console
+    Then the command output should not contain "No such file"

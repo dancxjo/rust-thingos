@@ -1077,12 +1077,24 @@ impl VfsNode for KmsgNode {
 
 #[cfg(test)]
 mod tests {
+    use alloc::string::{String, ToString};
     use alloc::vec;
+    use alloc::vec::Vec;
 
     use super::*;
 
     fn lookup(path: &str) -> SysResult<Arc<dyn VfsNode>> {
         DevFs::new().lookup(path)
+    }
+
+    fn read_names(node: &Arc<dyn VfsNode>) -> Vec<String> {
+        let mut buf = [0u8; 512];
+        let n = node.readdir(0, &mut buf).unwrap();
+        buf[..n]
+            .split(|b| *b == 0)
+            .filter(|entry| !entry.is_empty())
+            .map(|entry| String::from(core::str::from_utf8(entry).unwrap()))
+            .collect()
     }
 
     #[test]
@@ -1174,6 +1186,36 @@ mod tests {
         assert!(n > 0);
         let s = core::str::from_utf8(&buf[..n]).unwrap();
         assert!(s.contains("net"));
+    }
+
+    #[test]
+    fn test_readdir_lists_immediate_children_for_nested_devices() {
+        register(
+            "disk/by-bus/test_devfs_nested_usb0",
+            Arc::new(DevSymlinkNode { target: "/dev/block/test_devfs_nested_usb0".to_string() }),
+        );
+        register(
+            "disk/test_devfs_nested_usb0",
+            Arc::new(DevSymlinkNode { target: "/dev/block/test_devfs_nested_usb0".to_string() }),
+        );
+
+        let root = lookup("").unwrap();
+        let root_names = read_names(&root);
+        assert!(root_names.iter().any(|name| name == "disk"));
+        assert!(!root_names.iter().any(|name| name == "disk/test_devfs_nested_usb0"));
+        assert!(!root_names.iter().any(|name| name == "disk/by-bus/test_devfs_nested_usb0"));
+
+        let disk = lookup("disk").unwrap();
+        let disk_names = read_names(&disk);
+        assert!(disk_names.iter().any(|name| name == "by-bus"));
+        assert!(disk_names.iter().any(|name| name == "test_devfs_nested_usb0"));
+
+        let by_bus = lookup("disk/by-bus").unwrap();
+        let by_bus_names = read_names(&by_bus);
+        assert!(by_bus_names.iter().any(|name| name == "test_devfs_nested_usb0"));
+
+        unregister("disk/by-bus/test_devfs_nested_usb0");
+        unregister("disk/test_devfs_nested_usb0");
     }
 
     #[test]

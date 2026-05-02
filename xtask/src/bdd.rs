@@ -15,7 +15,7 @@ pub fn bdd(
 
     for arch in archs {
         println!("xtask: bdd running tests for arch={arch}...");
-        let mut cmd = xshell::cmd!(sh, "cargo run -p bdd");
+        let mut cmd = xshell::cmd!(sh, "cargo run -p bdd --bin bdd");
         cmd = cmd.env("BDD_ARCH", &arch);
         cmd = cmd.env("BDD_LOGLEVEL", &effective_loglevel);
         if let Some(f) = &feature {

@@ -1683,6 +1683,73 @@ extern "C" fn kernel_secondary_entry<R: BootRuntime>(cpu_index: usize) -> ! {
     }
 }
 
+fn pci_cfg_read_u8(bus: u8, dev: u8, func: u8, offset: u8) -> u8 {
+    let aligned = offset & !0x3;
+    let shift = (offset & 0x3) * 8;
+    ((runtime_base().pci_cfg_read32(bus, dev, func, aligned).unwrap_or(0) >> shift) & 0xff) as u8
+}
+
+fn pci_cfg_read_u16(bus: u8, dev: u8, func: u8, offset: u8) -> u16 {
+    let aligned = offset & !0x3;
+    let shift = (offset & 0x2) * 8;
+    ((runtime_base().pci_cfg_read32(bus, dev, func, aligned).unwrap_or(0) >> shift) & 0xffff) as u16
+}
+
+fn scan_pci_msi_caps(
+    bus: u8,
+    dev: u8,
+    func: u8,
+    header_type: u8,
+) -> (Option<crate::device_registry::MsiCapability>, Option<crate::device_registry::MsixCapability>)
+{
+    let status = pci_cfg_read_u16(bus, dev, func, 0x06);
+    if (status & (1 << 4)) == 0 {
+        return (None, None);
+    }
+
+    let mut msi_cap = None;
+    let mut msix_cap = None;
+    let mut cap = match header_type & 0x7f {
+        0x00 | 0x01 => pci_cfg_read_u8(bus, dev, func, 0x34) & !0x3,
+        _ => 0,
+    };
+
+    for _ in 0..48 {
+        if cap < 0x40 || cap > 0xf8 {
+            break;
+        }
+
+        let cap_id = pci_cfg_read_u8(bus, dev, func, cap);
+        let next = pci_cfg_read_u8(bus, dev, func, cap + 1) & !0x3;
+        match cap_id {
+            0x05 => {
+                let ctrl = pci_cfg_read_u16(bus, dev, func, cap + 0x2);
+                msi_cap = Some(crate::device_registry::MsiCapability {
+                    offset: cap,
+                    is_64bit: (ctrl & (1 << 7)) != 0,
+                    has_mask: (ctrl & (1 << 8)) != 0,
+                });
+            }
+            0x11 => {
+                let table = runtime_base().pci_cfg_read32(bus, dev, func, cap + 0x4).unwrap_or(0);
+                msix_cap = Some(crate::device_registry::MsixCapability {
+                    offset: cap,
+                    table_bar: (table & 0x7) as u8,
+                    table_offset: table & !0x7,
+                });
+            }
+            _ => {}
+        }
+
+        if next == 0 || next == cap {
+            break;
+        }
+        cap = next;
+    }
+
+    (msi_cap, msix_cap)
+}
+
 pub fn scan_pci() {
     let rt = runtime_base();
     let mut reg = crate::device_registry::REGISTRY.lock();
@@ -1716,6 +1783,7 @@ pub fn scan_pci() {
 
                 let header_type =
                     (rt.pci_cfg_read32(bus, dev, func, 0x0C).unwrap_or(0) >> 16) as u8;
+                let (msi_cap, msix_cap) = scan_pci_msi_caps(bus, dev, func, header_type);
 
                 let mut bars = [0u64; 6];
                 let mut sizes = [0u64; 6];
@@ -1799,8 +1867,8 @@ pub fn scan_pci() {
                     subclass,
                     prog_if,
                     pci_location: Some(crate::device_registry::PciLocation { bus, dev, func }),
-                    msi_cap: None,
-                    msix_cap: None,
+                    msi_cap,
+                    msix_cap,
                     irq_mode: crate::device_registry::IrqMode::Legacy,
                     irq_vector: 0,
                 };

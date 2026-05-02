@@ -22,7 +22,7 @@ use abi::vm::{VmBacking, VmMapFlags, VmMapReq, VmProt};
 use ipc_helpers::provider::{ProviderLoop, ProviderRequest, ProviderResponse};
 use stem::abi::module_manifest::{MANIFEST_MAGIC, ManifestHeader, ModuleKind};
 use stem::block::{BlockDevice, BlockError};
-use stem::syscall::vfs::{vfs_handle_from_port, vfs_mount};
+use stem::syscall::vfs::{vfs_handle_from_port, vfs_mkdir, vfs_mount, vfs_symlink};
 use stem::syscall::{device_claim, ioport_read, ioport_write, port_create};
 use stem::{debug, error, info, warn};
 
@@ -448,6 +448,14 @@ fn main(boot_fd: usize) -> ! {
         let (vfs_write, vfs_read) = port_create(65536).expect("ata_disk: port_create failed");
         vfs_mount(vfs_write, &path).expect("ata_disk: vfs_mount failed");
         info!("ATA_DISK: Mounted {} at {}", name, path);
+
+        let _ = vfs_mkdir("/dev/disk");
+        let disk_path = format!("/dev/disk/{}", name);
+        match vfs_symlink(&path, &disk_path) {
+            Ok(()) => info!("ATA_DISK: Created {} -> {}", disk_path, path),
+            Err(Errno::EEXIST) => {}
+            Err(e) => warn!("ATA_DISK: failed to create {}: {:?}", disk_path, e),
+        }
 
         stem::thread::spawn_task_detached(move || {
             let mut ploop = ProviderLoop::new(vfs_read);

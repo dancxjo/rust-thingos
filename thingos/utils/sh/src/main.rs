@@ -1051,6 +1051,36 @@ fn open_write(path: &str, append: bool) -> Result<u32, Errno> {
     vfs::vfs_open(path, flags)
 }
 
+fn canonicalize_path(path: &str) -> Result<String, Errno> {
+    let mut buf = [0u8; 4096];
+    let len = vfs::vfs_realpath(path, &mut buf)?;
+    if len > buf.len() {
+        return Err(Errno::ENAMETOOLONG);
+    }
+    let resolved = core::str::from_utf8(&buf[..len]).map_err(|_| Errno::EINVAL)?;
+    Ok(String::from(resolved))
+}
+
+fn resolve_executable_path(program: &str, path_prefixes: &[&str]) -> Result<String, Errno> {
+    if program.contains('/') {
+        return canonicalize_path(program);
+    }
+
+    for prefix in path_prefixes {
+        let mut candidate = prefix.to_string();
+        if !candidate.ends_with('/') {
+            candidate.push('/');
+        }
+        candidate.push_str(program);
+        if let Ok(probe_fd) = vfs::vfs_open(&candidate, abi::syscall::vfs_flags::O_RDONLY) {
+            let _ = syscall::vfs_close(probe_fd);
+            return Ok(candidate);
+        }
+    }
+
+    Ok(format!("/bin/{}", program))
+}
+
 fn spawn_job(
     cmds: &[Cmd<'_>],
     background: bool,
@@ -1091,24 +1121,7 @@ fn spawn_job(
         stem::debug!("sh: spawning job cmd='{}'", cmd.program);
         #[cfg(feature = "spawn-timing")]
         let t_path_probe_start = stem::syscall::monotonic_ns();
-        let path = if cmd.program.starts_with('/') {
-            String::from(cmd.program)
-        } else {
-            let mut resolved = format!("/bin/{}", cmd.program);
-            for prefix in &path_prefixes {
-                let mut candidate = prefix.to_string();
-                if !candidate.ends_with('/') {
-                    candidate.push('/');
-                }
-                candidate.push_str(cmd.program);
-                if let Ok(probe_fd) = vfs::vfs_open(&candidate, abi::syscall::vfs_flags::O_RDONLY) {
-                    let _ = syscall::vfs_close(probe_fd);
-                    resolved = candidate;
-                    break;
-                }
-            }
-            resolved
-        };
+        let path = resolve_executable_path(cmd.program, &path_prefixes)?;
         #[cfg(feature = "spawn-timing")]
         let t_path_probe_end = stem::syscall::monotonic_ns();
 

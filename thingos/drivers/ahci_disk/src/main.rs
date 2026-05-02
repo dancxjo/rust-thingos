@@ -21,7 +21,7 @@ use abi::vm::{VmBacking, VmMapFlags, VmMapReq, VmProt};
 use ipc_helpers::provider::{ProviderLoop, ProviderRequest, ProviderResponse};
 use stem::abi::module_manifest::{MANIFEST_MAGIC, ManifestHeader, ModuleKind};
 use stem::block::{BlockDevice, BlockError};
-use stem::syscall::vfs::vfs_mount;
+use stem::syscall::vfs::{vfs_mkdir, vfs_mount, vfs_symlink};
 use stem::syscall::{
     device_alloc_dma, device_claim, device_dma_phys, device_map_mmio, port_create,
 };
@@ -563,6 +563,14 @@ fn main(boot_fd: usize) -> ! {
         let (v_w, v_r) = port_create(65536).unwrap();
         vfs_mount(v_w, &path).unwrap();
         info!("AHCI: Mounted {} at {}", name, path);
+
+        let _ = vfs_mkdir("/dev/disk");
+        let disk_path = format!("/dev/disk/{}", name);
+        match vfs_symlink(&path, &disk_path) {
+            Ok(()) => info!("AHCI: Created {} -> {}", disk_path, path),
+            Err(Errno::EEXIST) => {}
+            Err(e) => warn!("AHCI: failed to create {}: {:?}", disk_path, e),
+        }
 
         info!("AHCI: Provider loop online at {}", path);
         let mut ploop = ProviderLoop::new(v_r);

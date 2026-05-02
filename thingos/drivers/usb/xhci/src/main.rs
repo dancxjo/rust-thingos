@@ -1905,6 +1905,7 @@ fn serve_usb_block(controller: XhciController, storage: UsbMassStorage) -> ! {
     let _ = vfs_mkdir("/dev/block");
     let _ = vfs_mkdir("/dev/disk");
     let _ = vfs_mkdir("/dev/disk/by-bus");
+    let _ = vfs_mkdir("/dev/storage");
 
     let (v_w, v_r) = match port_create(65536) {
         Ok(p) => p,
@@ -1934,6 +1935,11 @@ fn serve_usb_block(controller: XhciController, storage: UsbMassStorage) -> ! {
         warn!("ums: failed to create /dev/disk/by-bus/usb0: {:?}", e);
     } else {
         info!("ums: created /dev/disk/by-bus/usb0");
+    }
+    if let Err(e) = vfs_symlink("/dev/block/usb0", "/dev/storage/usb0") {
+        warn!("ums: failed to create /dev/storage/usb0: {:?}", e);
+    } else {
+        info!("ums: created /dev/storage/usb0");
     }
 
     let mut provider = UsbBlockProvider { controller, storage };

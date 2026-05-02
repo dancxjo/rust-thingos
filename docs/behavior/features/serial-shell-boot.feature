@@ -13,3 +13,12 @@ Feature: Serial Shell Boot
     When I wait for the shell prompt
     And I wait for the serial output to contain "SPROUT: Continuing supervisor startup"
     Then the serial shell is still responsive
+
+  @relative-path
+  Scenario: Relative executable paths run from the current directory
+    Given the machine is booted
+    When I wait for the shell prompt
+    And I type "cd /bin" on the serial console
+    And I type "./echo relative-path-ok" on the serial console
+    Then the command output should strictly be "relative-path-ok"
+    And the command output should not contain "spawn failed"
