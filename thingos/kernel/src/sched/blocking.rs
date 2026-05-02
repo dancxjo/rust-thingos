@@ -597,7 +597,10 @@ pub fn try_wake_task_from_irq<R: BootRuntime>(id: u64) -> bool {
             let sched = unsafe { &mut *(ptr as *mut Scheduler<R>) };
             let (ipi_cpu, deferred) = wake_task_locked::<R>(sched, id);
             if let Some(update) = deferred {
-                if update.new_state.is_some() || update.new_enqueued_at_tick.is_some() {
+                // IRQ context must not grow the deferred-sync queue.
+                if (update.new_state.is_some() || update.new_enqueued_at_tick.is_some())
+                    && sched.pending_registry_syncs.len() < sched.pending_registry_syncs.capacity()
+                {
                     sched.pending_registry_syncs.push(crate::sched::types::DeferredRegistrySync {
                         tid: update.tid,
                         new_state: update.new_state,
