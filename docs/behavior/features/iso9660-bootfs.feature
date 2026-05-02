@@ -83,6 +83,7 @@ Feature: ISO9660 boot filesystem mount
     And the command output should contain "rm"
     And the command output should contain "stat"
     And the command output should contain "sh"
+    And the command output should contain "tree"
     And the command output should not contain "bloom"
     And the command output should not contain "bristle"
     And the command output should not contain "cambium"

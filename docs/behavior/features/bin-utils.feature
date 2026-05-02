@@ -23,3 +23,11 @@ Feature: Shell text pipelines
     Then the command output should contain "1  hello"
     When I type "echo -e '1\n2\n3' | head -n 2 | tail -n 1" on the serial console
     Then the command output should strictly be "2"
+
+  Scenario: Tree displays command directories
+    Given the machine is booted
+    When I wait for the shell prompt
+    And I type "tree /bin" on the serial console
+    Then the command output should contain "/bin"
+    And the command output should contain "tree"
+    And the command output should contain "|--"

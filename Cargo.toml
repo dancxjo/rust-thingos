@@ -181,6 +181,7 @@ members = [
   "thingos/utils/time_test",
   "thingos/utils/touch",
   "thingos/utils/top",
+  "thingos/utils/tree",
   "thingos/utils/uname",
   "thingos/utils/true",
   "thingos/utils/vfs_hello",

@@ -15,6 +15,8 @@ Feature: USB storage through the xHCI userspace driver
     And the serial output should contain "CAMBIUM: matched driver '/drivers/xhci' for xHCI PCI device" within 60s
     And the serial output should contain "xhci: starting userspace xHCI driver" within 60s
     And the serial output should contain "xhci: BAR0 mapped" within 60s
+    And the serial output should contain "xhci: IRQ enabled" within 90s
+    And the serial output should not contain "xhci: irq subscribe failed"
     And the serial output should contain "xhci: controller running" within 90s
     And the serial output should contain "xhci: command completion type=NO_OP success" within 90s
     And the serial output should contain "xhci: port " within 120s

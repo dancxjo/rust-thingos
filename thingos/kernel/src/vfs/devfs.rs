@@ -142,6 +142,12 @@ impl VfsDriver for DevFs {
             _ => {}
         }
 
+        let mount_parent = format!("/dev/{}", path.trim_matches('/'));
+        if !path.contains('/') && !super::mount::get_mounts_under(&mount_parent).is_empty() {
+            let prefix = format!("{}/", path.trim_matches('/'));
+            return Ok(Arc::new(DevSubDirNode::new(&prefix)));
+        }
+
         // Fall back to built-in nodes.
         match path {
             "console" => Ok(Arc::new(ConsoleNode)),
@@ -173,7 +179,7 @@ impl VfsDriver for DevFs {
 
     fn mkdir(&self, path: &str) -> SysResult<()> {
         match path.trim_matches('/') {
-            "block" | "disk" | "disk/by-bus" => Ok(()),
+            "block" | "disk" | "disk/by-bus" | "storage" => Ok(()),
             _ => Err(Errno::EROFS),
         }
     }
@@ -188,7 +194,7 @@ impl VfsDriver for DevFs {
         }
         let parent = link_path.rsplit_once('/').map(|(parent, _)| parent).unwrap_or("");
         match parent {
-            "disk" | "disk/by-bus" => {
+            "disk" | "disk/by-bus" | "storage" => {
                 register(link_path, Arc::new(DevSymlinkNode { target: target.to_string() }));
                 Ok(())
             }
@@ -267,8 +273,8 @@ impl VfsNode for DevSubDirNode {
             for name in reg.keys() {
                 if name.starts_with(&self.prefix) {
                     let subname = &name[self.prefix.len()..];
-                    if !subname.is_empty() && !subname.contains('/') {
-                        names.push(subname.to_string());
+                    if let Some(child) = immediate_child(subname) {
+                        names.push(child.to_string());
                     }
                 }
             }
@@ -319,6 +325,8 @@ impl VfsNode for DevDirNode {
         names.push("input".to_string());
         names.push("audio".to_string());
         names.push("net".to_string());
+        names.push("block".to_string());
+        names.push("disk".to_string());
         names.push("storage".to_string());
         names.push("rtc".to_string());
         names.push("random".to_string());
@@ -328,16 +336,44 @@ impl VfsNode for DevDirNode {
         {
             let reg = DEVICE_REGISTRY.lock();
             for name in reg.keys() {
-                if !matches!(
-                    name.as_str(),
-                    "console" | "null" | "zero" | "fb0" | "rtc" | "random" | "urandom"
-                ) {
-                    names.push(name.clone());
+                if let Some(child) = immediate_child(name) {
+                    if !matches!(
+                        child,
+                        "console"
+                            | "null"
+                            | "zero"
+                            | "fb0"
+                            | "rtc"
+                            | "random"
+                            | "urandom"
+                            | "display"
+                            | "input"
+                            | "audio"
+                            | "net"
+                            | "block"
+                            | "disk"
+                            | "storage"
+                            | "tty0"
+                            | "kmsg"
+                    ) {
+                        names.push(child.to_string());
+                    }
                 }
             }
         }
+        for mount in super::mount::get_mounts_under("/dev") {
+            names.push(mount);
+        }
         super::write_readdir_entries(names.iter().map(|s: &String| s.as_str()), offset, buf)
     }
+}
+
+fn immediate_child(path: &str) -> Option<&str> {
+    let path = path.trim_matches('/');
+    if path.is_empty() {
+        return None;
+    }
+    path.split('/').next()
 }
 
 use spin::Once;

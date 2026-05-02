@@ -370,6 +370,7 @@ pub fn default_programs() -> Vec<ProgramConfig> {
         },
         ProgramConfig { name: "cwd_test", is_init: false, boot_module: true, features: vec![] },
         ProgramConfig { name: "date", is_init: false, boot_module: true, features: vec![] },
+        ProgramConfig { name: "tree", is_init: false, boot_module: true, features: vec![] },
         ProgramConfig {
             name: "wayland_hello",
             is_init: false,
@@ -1270,10 +1271,12 @@ fn is_bin_program(name: &str) -> bool {
             | "sort"
             | "env"
             | "date"
+            | "tree"
             | "uname"
             | "true"
             | "false"
             | "tee"
+            | "loglevel"
     )
 }
 
@@ -1492,7 +1495,7 @@ mod tests {
 
     #[test]
     fn executable_staging_keeps_bin_to_core_commands() {
-        for name in ["sh", "ls", "cat", "cp", "mkdir", "printf", "stat"] {
+        for name in ["sh", "ls", "cat", "cp", "mkdir", "printf", "stat", "tree", "loglevel"] {
             assert_eq!(executable_subdir(name), "bin", "{name} should stay in /bin");
         }
         for name in ["sprout", "grep", "find"] {
@@ -1533,6 +1536,7 @@ mod tests {
         assert!(normal_entry.contains("module_path: boot():/bin/ls"));
         assert!(normal_entry.contains("module_path: boot():/bin/mkdir"));
         assert!(normal_entry.contains("module_path: boot():/bin/stat"));
+        assert!(normal_entry.contains("module_path: boot():/bin/tree"));
         assert!(normal_entry.contains("module_path: boot():/services/bloom"));
         assert!(normal_entry.contains("module_path: boot():/services/bristle"));
         assert!(normal_entry.contains("module_path: boot():/applications/clock"));

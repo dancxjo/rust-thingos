@@ -95,7 +95,7 @@ pub fn sys_fs_open(path_ptr: usize, path_len: usize, flags: usize) -> SysResult<
     // Resolve path through the mount table, creating the file if O_CREAT is set.
     let node = if want_creat {
         // Try lookup first; fall back to create if the file doesn't exist.
-        match vfs::mount::lookup(&abs_path) {
+        match vfs::path::resolve(&abs_path) {
             Ok(existing) => {
                 if want_excl {
                     // O_CREAT | O_EXCL: file must not pre-exist.
@@ -111,7 +111,7 @@ pub fn sys_fs_open(path_ptr: usize, path_len: usize, flags: usize) -> SysResult<
             Err(e) => return Err(e),
         }
     } else {
-        vfs::mount::lookup(&abs_path)?
+        vfs::path::resolve(&abs_path)?
     };
 
     enforce_open_access(&node, open_flags)?;
@@ -1211,7 +1211,7 @@ pub fn sys_watch_path(
     let path = core::str::from_utf8(&path_buf).map_err(|_| Errno::EINVAL)?;
 
     let abs_path = resolve_path(path)?;
-    let node = vfs::mount::lookup(&abs_path)?;
+    let node = vfs::path::resolve(&abs_path)?;
     let mount_id = vfs::mount::mount_id_for_path(&abs_path);
 
     let watch = Arc::new(crate::vfs::watch::Watch::new(mask as u32, flags as u32));
@@ -1514,7 +1514,7 @@ pub fn sys_fs_chdir(path_ptr: usize, path_len: usize) -> SysResult<usize> {
     let abs_path = resolve_path(path)?;
 
     // Verify it exists and is a directory
-    let node = vfs::mount::lookup(&abs_path)?;
+    let node = vfs::path::resolve(&abs_path)?;
     let stat = node.stat()?;
     if !stat.is_dir() {
         return Err(Errno::ENOTDIR);

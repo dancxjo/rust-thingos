@@ -32,6 +32,7 @@ use ipc_helpers::provider::{ProviderLoop, ProviderRequest, ProviderResponse};
 use ipc_helpers::service_provider::{ServiceProviderEvent, ServiceProviderLoop};
 use spin::Mutex;
 use stem::abi::module_manifest::{MANIFEST_MAGIC, ManifestHeader, ModuleKind, device_kind_bytes};
+use stem::device::device_enable_msi;
 use stem::syscall::vfs::{vfs_close, vfs_mkdir, vfs_mount, vfs_open, vfs_read, vfs_symlink};
 use stem::syscall::{
     device_alloc_dma, device_claim, device_dma_phys, device_irq_subscribe, device_irq_wait,
@@ -597,17 +598,26 @@ impl XhciController {
     }
 
     fn try_enable_irq(&mut self) {
-        match device_irq_subscribe(self.claim, 0) {
-            Ok(()) => {
-                let off = self.regs.ir_offset(0, IR_IMAN);
-                write32(self.regs.runtime, off, read32(self.regs.runtime, off) | IMAN_IE);
-                write32(self.regs.op, OP_USBCMD, read32(self.regs.op, OP_USBCMD) | USBCMD_INTE);
-                self.irq_enabled = true;
-                info!("xhci: irq subscribed");
-            }
+        match device_enable_msi(self.claim, true) {
+            Ok(resp) => match device_irq_subscribe(self.claim, 0) {
+                Ok(()) => {
+                    let off = self.regs.ir_offset(0, IR_IMAN);
+                    write32(self.regs.runtime, off, read32(self.regs.runtime, off) | IMAN_IE);
+                    write32(self.regs.op, OP_USBCMD, read32(self.regs.op, OP_USBCMD) | USBCMD_INTE);
+                    self.irq_enabled = true;
+                    info!("xhci: IRQ enabled mode={} vector=0x{:02x}", resp.irq_mode, resp.vector);
+                }
+                Err(e) => {
+                    self.irq_enabled = false;
+                    warn!(
+                        "xhci: irq subscribe failed after MSI/MSI-X setup: {:?}; polling controller",
+                        e
+                    );
+                }
+            },
             Err(e) => {
                 self.irq_enabled = false;
-                warn!("xhci: irq subscribe failed: {:?}; polling controller", e);
+                warn!("xhci: MSI/MSI-X unavailable: {:?}; polling controller", e);
             }
         }
     }
