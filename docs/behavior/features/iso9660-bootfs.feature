@@ -42,6 +42,18 @@ Feature: ISO9660 boot filesystem mount
     And I type "cat /etc/hostname" on the serial console
     Then the latest command output should contain "thingos"
 
+  Scenario: runtime root omits unused placeholder directories
+    Given the machine is booted
+    When I wait for the shell prompt
+    And I type "ls /" on the serial console
+    Then the command output should contain "bin"
+    And the command output should contain "etc"
+    And the command output should contain "media"
+    And the command output should not contain "boot"
+    And the command output should not contain "data"
+    And the command output should not contain "hosts"
+    And the command output should not contain "mnt"
+
   Scenario: ELF binaries are loaded correctly via the memfd bulk-transfer path
     # Exercises ReadIntoFd: the kernel injects a memfd into iso9660d's fd table
     # and iso9660d writes the entire binary in one vfs_write syscall, removing

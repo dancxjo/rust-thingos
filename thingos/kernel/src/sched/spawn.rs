@@ -934,7 +934,7 @@ pub unsafe fn boot_spawn_process_with_priority<R: BootRuntime>(
             alloc::vec![module.name.as_bytes().to_vec()],
             crate::task::exec::build_auxv(&aux_info, page_size),
         );
-        lock.exec_path = alloc::format!("/boot/{}", module.name);
+        lock.exec_path = alloc::format!("/{}", module.name.trim_start_matches('/'));
     }
 
     // Store name, process_info, and initial TLS thread pointer on the task struct.
@@ -1431,7 +1431,7 @@ pub unsafe fn boot_spawn_process_ex<R: BootRuntime>(
         } else {
             alloc::string::String::from("/")
         },
-        exec_path: alloc::format!("/boot/{}", module.name),
+        exec_path: alloc::format!("/{}", module.name.trim_start_matches('/')),
         authority,
         space: crate::task::ProcessAddressSpace::from_parts(task_mappings, aspace_raw),
         service_loop: None,

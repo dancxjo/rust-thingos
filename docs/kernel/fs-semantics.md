@@ -180,17 +180,16 @@ them as absent.  Tracked as a known gap.
 
 | Mount point | Driver | open | read | write | readdir | mkdir | unlink | rename |
 |-------------|--------|------|------|-------|---------|-------|--------|--------|
-| `/`         | ramfs  | ✅ | ✅ | ✅ | ✅ | ✅ | ✅ | ✅ |
+| `/`         | union(bootfs, ramfs) | ✅ | ✅ | ✅ | ✅ | ✅ | ✅ | ✅ |
 | `/tmp`      | ramfs  | ✅ | ✅ | ✅ | ✅ | ✅ | ✅ | ✅ |
 | `/run`      | ramfs  | ✅ | ✅ | ✅ | ✅ | ✅ | ✅ | ✅ |
 | `/services` | ramfs  | ✅ | ✅ | ✅ | ✅ | ✅ | ✅ | ✅ |
 | `/dev`      | devfs  | ✅ | ✅ | ✅ | ✅ | ⚠️ | ⚠️ | ⚠️ |
 | `/proc`     | procfs | ✅ | ✅ | ❌ | ⚠️ | ❌ | ❌ | ❌ |
-| `/boot`     | bootfs | ✅ | ✅ | ❌ | ✅ | ❌ | ❌ | ❌ |
 
 > devfs mkdir/unlink/rename are not applicable to the built-in device nodes but
 > can be registered via `devfs::register`/`unregister`.  procfs is intentionally
-> read-only.  bootfs is a static initramfs (read-only).
+> read-only.  bootfs is layered into `/` as the read-only boot module source.
 
 ---
 

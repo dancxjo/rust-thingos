@@ -49,7 +49,6 @@ const ISO_ROOT_DIRS: &[&str] = &[
     "EFI/BOOT",
     "media",
     "media/cdrom",
-    "mnt",
     "dev",
     "proc",
     "sys",
@@ -733,7 +732,7 @@ pub fn build_iso_with_config(
     sh.write_file(iso_root.join("etc/motd"), generate_motd())?;
     sh.write_file(
         iso_root.join("etc/fstab"),
-        "none /net net defaults 0 0\nnone /https https defaults 0 0\nnone /media/cdrom iso9660 defaults 0 0\nnone /hosts mdns defaults 0 0\n",
+        "none /net net defaults 0 0\nnone /https https defaults 0 0\nnone /media/cdrom iso9660 defaults 0 0\n",
     )?;
     sh.write_file(
         iso_root.join("etc/roots/root"),
@@ -1402,6 +1401,7 @@ mod tests {
         assert!(!ISO_ROOT_DIRS.contains(&"net"));
         assert!(!ISO_ROOT_DIRS.contains(&"hosts"));
         assert!(!ISO_ROOT_DIRS.contains(&"https"));
+        assert!(!ISO_ROOT_DIRS.contains(&"mnt"));
         assert!(!ISO_ROOT_DIRS.contains(&"usr/lib"));
     }
 

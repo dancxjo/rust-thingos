@@ -23,18 +23,6 @@ pub fn sys_wait_many(
     let tid = unsafe { crate::sched::current_tid_current() };
     let pinfo_arc = crate::sched::process_info_current().ok_or(Errno::ESRCH)?;
 
-    // Debug: Check for GS corruption early
-    {
-        let cpu_idx = crate::runtime_base().current_cpu_index();
-        let real_cpu_id = crate::runtime_base().current_cpu_id().0 as usize;
-        if cpu_idx != real_cpu_id {
-            panic!(
-                "GS CORRUPTION DETECTED in sys_wait_many: Core {} thinks it is index {} via GS!",
-                real_cpu_id, cpu_idx
-            );
-        }
-    }
-
     if spec_count == 0 || spec_count > wait::WAIT_MANY_MAX_ITEMS {
         return Err(Errno::EINVAL);
     }

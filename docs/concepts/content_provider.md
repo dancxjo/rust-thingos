@@ -74,7 +74,7 @@ Represents a directory in the content graph (future enhancement).
 3. For each module, creates:
    - An `Asset` node (backward compatibility with existing consumers)
    - A `content.File` node with computed content hash and MIME type
-4. Content is reachable via VFS path (e.g., `/boot/modules/{name}`)
+4. Content is reachable via VFS path (e.g., `/media/cdrom/modules/{name}`)
 
 ### ISO9660 Source
 

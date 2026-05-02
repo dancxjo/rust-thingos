@@ -3,7 +3,7 @@
 //! Provides a read-only filesystem whose contents are compiled into the kernel
 //! binary at link time, or passed as boot modules by the loader.
 //!
-//! The boot filesystem is mounted at `/boot` by [`crate::vfs::init`].
+//! The boot filesystem is layered into `/` by [`crate::vfs::init`].
 
 use alloc::collections::{BTreeMap, BTreeSet};
 use alloc::string::{String, ToString};
@@ -22,7 +22,7 @@ const MOTD_DATA: &[u8] = b"\x1B[1;32m\n        .-.\n       /   \\        \x1B[1;
 
 // ── BootFs driver ─────────────────────────────────────────────────────────────
 
-/// The boot filesystem driver.  Mounted at `/boot` by `vfs::init`.
+/// The boot filesystem driver.  Layered into `/` by `vfs::init`.
 ///
 /// An index mapping clean module names (no leading slash, no null padding) to
 /// their module-slice index is built once in [`BootFs::new`].  This makes
@@ -94,7 +94,7 @@ impl VfsDriver for BootFs {
     }
 }
 
-// ── /boot directory node ──────────────────────────────────────────────────────
+// ── Boot directory node ───────────────────────────────────────────────────────
 
 struct BootDirNode {
     prefix: String,

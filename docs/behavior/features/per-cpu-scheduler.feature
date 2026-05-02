@@ -27,3 +27,13 @@ Feature: Per-CPU scheduler allocation and ownership
     Given the machine is started
     When I wait for the system to boot
     Then the serial output should contain "per-CPU preemption initialized"
+
+  @smoke
+  @timeout-60s
+  Scenario: Shell filesystem commands do not trip the per-CPU GS guard
+    Given the machine is booted
+    When I wait for the shell prompt
+    And I type "ls /" on the serial console
+    Then the command output should contain "bin"
+    And the latest serial output should not contain "GS CORRUPTION"
+    And the latest serial output should not contain "FATAL GS CORRUPTION"

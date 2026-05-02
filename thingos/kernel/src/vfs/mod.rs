@@ -49,6 +49,24 @@ use alloc::sync::Arc;
 
 use abi::errors::{Errno, SysResult};
 
+const ROOTFS_VISIBLE_DIRS: &[&str] = &[
+    "bin",
+    "etc",
+    "share",
+    "media",
+    "media/cdrom",
+    "dev",
+    "dev/display",
+    "dev/input",
+    "dev/storage",
+    "proc",
+    "sys",
+    "tmp",
+    "run",
+    "services",
+    "session",
+];
+
 // ── Open flags ─────────────────────────────────────────────────────────────
 
 /// Subset of POSIX open(2) flags understood by the VFS.
@@ -599,8 +617,7 @@ impl Default for NamespaceRef {
 /// processes are spawned.
 ///
 /// Boot mounts:
-/// - `/`         ← boot filesystem (static read-only initramfs)
-/// - `/`         ← root tmpfs (layered over bootfs via union)
+/// - `/`         ← root tmpfs layered over boot modules
 /// - `/dev`      ← device filesystem
 /// - `/proc`     ← process info (stub)
 /// - `/sys`      ← kernel device discovery metadata
@@ -613,27 +630,12 @@ pub fn init(modules: &'static [crate::BootModuleDesc]) {
     // Create the root filesystem (tmpfs) — writable, volatile.
     let root_fs = Arc::new(ramfs::RamFs::new());
 
-    // Pre-populate mount point directories in the root filesystem so they appear in readdir("/")
-    let _ = root_fs.mkdir("boot");
-    let _ = root_fs.mkdir("bin");
-    let _ = root_fs.mkdir("etc");
-    let _ = root_fs.mkdir("share");
-    let _ = root_fs.mkdir("media");
-    let _ = root_fs.mkdir("media/cdrom");
-    let _ = root_fs.mkdir("mnt");
-    let _ = root_fs.mkdir("dev");
-    let _ = root_fs.mkdir("dev/display");
+    // Pre-populate mount point directories in the root filesystem so they appear in readdir("/").
+    for dir in ROOTFS_VISIBLE_DIRS {
+        let _ = root_fs.mkdir(dir);
+    }
     crate::kdebug!("VFS: Created /dev/display directory");
-    let _ = root_fs.mkdir("dev/input");
-    let _ = root_fs.mkdir("dev/storage");
     crate::kdebug!("VFS: Created /dev/storage directory");
-    let _ = root_fs.mkdir("proc");
-    let _ = root_fs.mkdir("sys");
-    let _ = root_fs.mkdir("tmp");
-    let _ = root_fs.mkdir("run");
-    let _ = root_fs.mkdir("services");
-    let _ = root_fs.mkdir("session");
-    let _ = root_fs.mkdir("data");
 
     // Create the root union filesystem.
     let mut root_union = union::UnionFs::new_fallthrough();
@@ -670,10 +672,6 @@ pub fn init(modules: &'static [crate::BootModuleDesc]) {
     // Session namespace — filesystem-native GUI objects live here.
     mount::mount("/session", Arc::new(ramfs::RamFs::new()), abi::syscall::mount_flags::MREPL);
     crate::kdebug!("vfs: mounted tmpfs at /session");
-
-    // Persistent user data — writable scratchpad for userland programs.
-    mount::mount("/data", Arc::new(ramfs::RamFs::new()), abi::syscall::mount_flags::MREPL);
-    crate::kdebug!("vfs: mounted tmpfs at /data");
 }
 
 /// Helper for filesystem drivers to implement `readdir`.
@@ -991,5 +989,23 @@ mod tests {
         assert!(b.is_isolated());
         assert!(a.label().starts_with("ns-"));
         assert!(b.label().starts_with("ns-"));
+    }
+
+    #[test]
+    fn test_rootfs_visible_dirs_exclude_unused_placeholders() {
+        assert!(ROOTFS_VISIBLE_DIRS.contains(&"bin"));
+        assert!(ROOTFS_VISIBLE_DIRS.contains(&"etc"));
+        assert!(ROOTFS_VISIBLE_DIRS.contains(&"media/cdrom"));
+        assert!(ROOTFS_VISIBLE_DIRS.contains(&"dev"));
+        assert!(ROOTFS_VISIBLE_DIRS.contains(&"proc"));
+        assert!(ROOTFS_VISIBLE_DIRS.contains(&"sys"));
+        assert!(ROOTFS_VISIBLE_DIRS.contains(&"tmp"));
+        assert!(ROOTFS_VISIBLE_DIRS.contains(&"run"));
+        assert!(ROOTFS_VISIBLE_DIRS.contains(&"services"));
+        assert!(ROOTFS_VISIBLE_DIRS.contains(&"session"));
+        assert!(!ROOTFS_VISIBLE_DIRS.contains(&"boot"));
+        assert!(!ROOTFS_VISIBLE_DIRS.contains(&"data"));
+        assert!(!ROOTFS_VISIBLE_DIRS.contains(&"hosts"));
+        assert!(!ROOTFS_VISIBLE_DIRS.contains(&"mnt"));
     }
 }

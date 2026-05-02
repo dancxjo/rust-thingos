@@ -18,11 +18,11 @@ pub mod ioapic;
 pub mod paging;
 pub mod pci;
 pub mod pic;
+pub mod serial;
 pub mod simd;
 pub mod smp;
 pub mod syscall;
 pub mod task;
-pub mod serial;
 pub mod tls;
 pub mod trap;
 
@@ -1035,13 +1035,15 @@ impl ArchRuntime for X86_64Runtime {
             };
             let lapic_virt = lapic_base + hhdm;
             if paging::try_translate(self.active_address_space(), lapic_virt).is_none() {
-                kernel::kwarn!(
-                    "SMP: send_ipi skipped (LAPIC unmapped): cpu_index={} apic_id={} vector=0x{:x}",
-                    cpu_index,
-                    apic_id,
-                    vector
-                );
-                return;
+                if !self.try_map_lapic_mmio() {
+                    kernel::kwarn!(
+                        "SMP: send_ipi skipped (LAPIC unmapped): cpu_index={} apic_id={} vector=0x{:x}",
+                        cpu_index,
+                        apic_id,
+                        vector
+                    );
+                    return;
+                }
             }
 
             if !self.wait_lapic_icr_idle(lapic_virt, Self::LAPIC_ICR_DELIVERY_TIMEOUT_US) {

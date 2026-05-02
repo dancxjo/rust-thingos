@@ -21,7 +21,7 @@ and then returns the result to the original caller.
 ```
 User process           Kernel (ProviderFs)          Provider process
 ─────────────          ─────────────────────         ────────────────
-vfs_open("/mnt/foo")
+vfs_open("/media/cdrom/foo")
   │                   parse path → in mounted tree
   │                   serialise Lookup(path) →────── channel_recv_all()
   │                                                  handle_lookup(path)
