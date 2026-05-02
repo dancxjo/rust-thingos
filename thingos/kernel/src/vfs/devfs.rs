@@ -131,7 +131,10 @@ impl VfsDriver for DevFs {
 
         // Handle synthetic subdirectories
         match path {
+            "block" => return Ok(Arc::new(DevSubDirNode::new("block/"))),
             "display" => return Ok(Arc::new(DevSubDirNode::new("display/"))),
+            "disk" => return Ok(Arc::new(DevSubDirNode::new("disk/"))),
+            "disk/by-bus" => return Ok(Arc::new(DevSubDirNode::new("disk/by-bus/"))),
             "input" => return Ok(Arc::new(DevSubDirNode::new("input/"))),
             "audio" => return Ok(Arc::new(DevSubDirNode::new("audio/"))),
             "net" => return Ok(Arc::new(DevSubDirNode::new("net/"))),
@@ -167,9 +170,69 @@ impl VfsDriver for DevFs {
             _ => Err(Errno::ENOENT),
         }
     }
+
+    fn mkdir(&self, path: &str) -> SysResult<()> {
+        match path.trim_matches('/') {
+            "block" | "disk" | "disk/by-bus" => Ok(()),
+            _ => Err(Errno::EROFS),
+        }
+    }
+
+    fn symlink(&self, target: &str, link_path: &str) -> SysResult<()> {
+        let link_path = link_path.trim_matches('/');
+        if link_path.is_empty() {
+            return Err(Errno::EINVAL);
+        }
+        if self.lookup(link_path).is_ok() {
+            return Err(Errno::EEXIST);
+        }
+        let parent = link_path.rsplit_once('/').map(|(parent, _)| parent).unwrap_or("");
+        match parent {
+            "disk" | "disk/by-bus" => {
+                register(link_path, Arc::new(DevSymlinkNode { target: target.to_string() }));
+                Ok(())
+            }
+            _ => Err(Errno::EROFS),
+        }
+    }
 }
 
 // ── Synthetic subdirectory node ──────────────────────────────────────────────
+
+struct DevSymlinkNode {
+    target: String,
+}
+
+impl VfsNode for DevSymlinkNode {
+    fn read(&self, offset: u64, buf: &mut [u8]) -> SysResult<usize> {
+        let bytes = self.target.as_bytes();
+        let start = offset as usize;
+        if start >= bytes.len() {
+            return Ok(0);
+        }
+        let end = core::cmp::min(bytes.len(), start + buf.len());
+        buf[..end - start].copy_from_slice(&bytes[start..end]);
+        Ok(end - start)
+    }
+
+    fn write(&self, _offset: u64, _buf: &[u8]) -> SysResult<usize> {
+        Err(Errno::EPERM)
+    }
+
+    fn stat(&self) -> SysResult<VfsStat> {
+        Ok(VfsStat {
+            mode: VfsStat::S_IFLNK | 0o777,
+            size: self.target.len() as u64,
+            ino: 102,
+            nlink: 1,
+            ..Default::default()
+        })
+    }
+
+    fn readlink(&self) -> SysResult<String> {
+        Ok(self.target.clone())
+    }
+}
 
 struct DevSubDirNode {
     prefix: String,

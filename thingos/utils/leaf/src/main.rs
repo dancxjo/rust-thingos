@@ -287,7 +287,7 @@ mod thingos_app {
     const INITIAL_WIDTH: u32 = 760;
     const INITIAL_HEIGHT: u32 = 460;
     const SHELL_PATH: &str = "/bin/sh";
-    const FONT_PATH: &str = "/share/fonts/unifont.hex";
+    const FONT_PATH: &str = "/public/fonts/unifont.hex";
     const CURSOR_BLINK_NS: u64 = 500_000_000;
     const MAX_WAYLAND_RX_BYTES: usize = 64 * 1024;
 

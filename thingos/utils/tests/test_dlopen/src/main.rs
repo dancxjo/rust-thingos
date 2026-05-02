@@ -206,7 +206,7 @@ fn test_dlopen_pistil_shared_library() {
     let prepare_fn: extern "C" fn(*const u8, *mut u32, u32, u32, u32) -> i32 =
         unsafe { core::mem::transmute(prepare_sym) };
     pixels.fill(0);
-    let rc = prepare_fn(b"/share/wallpapers/flower.png\0".as_ptr(), pixels.as_mut_ptr(), 4, 4, 4);
+    let rc = prepare_fn(b"/public/wallpapers/flower.png\0".as_ptr(), pixels.as_mut_ptr(), 4, 4, 4);
     assert_eq!(rc, 0, "pistil_prepare_background call through libpistil.so failed");
     assert!(pixels.iter().any(|&p| p != 0), "pistil_prepare_background did not write any pixels");
 

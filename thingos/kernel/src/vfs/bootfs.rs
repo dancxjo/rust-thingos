@@ -18,7 +18,7 @@ use crate::BootModuleDesc;
 // ── Embedded file contents ────────────────────────────────────────────────────
 
 const VERSION_DATA: &[u8] = b"Thing-OS v0.1\n";
-const MOTD_DATA: &[u8] = b"\x1B[1;32m\n        .-.\n       /   \\        \x1B[1;36mTHING-OS\x1B[1;32m\n      |     |       \x1B[0;36m\"People, places, things.\"\x1B[1;32m\n       \\   /        \n        `-'        \n       /   \\        v0.1  \xE2\x80\xA2  \n      |     |       2026-04-16\n       \\   /\n        `-'\n\x1B[0m\n\x1B[2m--------------------------------------------------------------\x1B[0m\n\x1B[1m sprout has taken root. the system is awake.\x1B[0m\n\n  try:\n    \x1B[36mls /bin\x1B[0m       browse available shoots\n    \x1B[36mps\x1B[0m            observe living processes\n    \x1B[36mcat /version\x1B[0m  inspect the genome\n\n\x1B[2m--------------------------------------------------------------\x1B[0m\n";
+const MOTD_DATA: &[u8] = b"\x1B[1;32m\n        .-.\n       /   \\        \x1B[1;36mTHING-OS\x1B[1;32m\n      |     |       \x1B[0;36m\"People, places, things.\"\x1B[1;32m\n       \\   /        \n        `-'        \n       /   \\        v0.1  \xE2\x80\xA2  \n      |     |       2026-04-16\n       \\   /\n        `-'\n\x1B[0m\n\x1B[2m--------------------------------------------------------------\x1B[0m\n\x1B[1m sprout has taken root. the system is awake.\x1B[0m\n\n  try:\n    \x1B[36mls /bin\x1B[0m       browse available shoots\n    \x1B[36mps\x1B[0m            observe living processes\n    \x1B[36mcat /version/os\x1B[0m  inspect the genome\n\n\x1B[2m--------------------------------------------------------------\x1B[0m\n";
 
 // ── BootFs driver ─────────────────────────────────────────────────────────────
 
@@ -65,11 +65,17 @@ impl VfsDriver for BootFs {
             }));
         }
 
-        if path == "version" {
+        if path == "version/os" {
             return Ok(Arc::new(StaticFileNode::new(VERSION_DATA, 10)));
         }
-        if path == "motd" {
+        if path == "etc/motd" {
             return Ok(Arc::new(StaticFileNode::new(MOTD_DATA, 11)));
+        }
+        if path == "version" || path == "etc" {
+            return Ok(Arc::new(BootDirNode {
+                prefix: path.to_string(),
+                clean_names: Arc::clone(&self.clean_names),
+            }));
         }
 
         // O(log n) exact match via pre-built index.
@@ -115,9 +121,10 @@ impl VfsNode for BootDirNode {
     fn readdir(&self, offset: u64, buf: &mut [u8]) -> SysResult<usize> {
         let mut components = BTreeSet::new();
 
-        // Standard files at root
-        if self.prefix.is_empty() {
-            components.insert("version".to_string());
+        // Built-in files that are not boot modules.
+        if self.prefix == "version" {
+            components.insert("os".to_string());
+        } else if self.prefix == "etc" {
             components.insert("motd".to_string());
         }
 

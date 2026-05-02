@@ -65,7 +65,7 @@ fn main(_arg: usize) -> ! {
 
     // Default wallpaper config
     if let Ok(fd) = vfs_open("/session/seat0/wallpaper", O_CREAT | O_TRUNC | O_RDWR) {
-        let _ = vfs_write(fd, b"/share/wallpapers/flower.png");
+        let _ = vfs_write(fd, b"/public/wallpapers/flower.png");
         let _ = vfs_close(fd);
     }
 

@@ -12,7 +12,7 @@ use crate::world::BloomWorld;
 /// Handles incoming Bloom protocol requests from compositor clients.
 ///
 /// The service FD is the read end of the port pair published at
-/// `/services/bloom`, bridged to a VFS file descriptor via
+/// `/run/services/bloom`, bridged to a VFS file descriptor via
 /// `vfs_handle_from_port`.  On each dispatch call the service reads one
 /// message chunk and forwards it to [`BloomWorld::handle_wayland_message`].
 pub struct WaylandService {

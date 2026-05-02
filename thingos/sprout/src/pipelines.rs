@@ -104,7 +104,7 @@ pub fn spawn_shell() -> Option<u64> {
 }
 
 pub fn spawn_bristle() -> Option<u64> {
-    let path = "/bin/bristle";
+    let path = "/services/bristle";
     let argv: [&[u8]; 1] = [path.as_bytes()];
     let env = BTreeMap::new();
     let inherit = abi::types::stdio_mode::INHERIT;

@@ -215,9 +215,9 @@ mod tests {
 
     #[test]
     fn test_root_path_is_propagated() {
-        let snap = make_snapshot("/work", "global", "/srv/chroot");
+        let snap = make_snapshot("/work", "global", "/services/chroot");
         let place = place_from_snapshot(&snap);
-        assert_eq!(place.root, "/srv/chroot");
+        assert_eq!(place.root, "/services/chroot");
     }
 
     #[test]
@@ -238,10 +238,10 @@ mod tests {
 
     #[test]
     fn test_place_from_snapshot_as_text_contains_cwd() {
-        let snap = make_snapshot("/srv", "global", "/");
+        let snap = make_snapshot("/services", "global", "/");
         let place = place_from_snapshot(&snap);
         let text = place.as_text();
-        assert!(text.contains("cwd: /srv"), "unexpected: {text}");
+        assert!(text.contains("cwd: /services"), "unexpected: {text}");
     }
 
     #[test]

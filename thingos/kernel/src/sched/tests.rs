@@ -3567,7 +3567,7 @@ fn test_list_processes_projects_place_and_authority_from_process_aggregator() {
     {
         let mut pi = pinfo.lock();
         pi.cwd = alloc::string::String::from("/work");
-        pi.root = alloc::string::String::from("/srv/chroot");
+        pi.root = alloc::string::String::from("/services/chroot");
         pi.exec_path = alloc::string::String::from("/bin/demo");
         pi.authority.uid = 1000;
         pi.authority.gid = 1001;
@@ -3581,7 +3581,7 @@ fn test_list_processes_projects_place_and_authority_from_process_aggregator() {
     let snap = &snapshots[0];
     assert_eq!(snap.pid, 1230);
     assert_eq!(snap.cwd, "/work");
-    assert_eq!(snap.root_path, "/srv/chroot");
+    assert_eq!(snap.root_path, "/services/chroot");
     assert_eq!(snap.exec_path, "/bin/demo");
     assert_eq!(snap.uid, 1000);
     assert_eq!(snap.gid, 1001);

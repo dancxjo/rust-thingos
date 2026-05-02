@@ -41,24 +41,27 @@ const ISO_ROOT_DIRS: &[&str] = &[
     "boot",
     "boot/limine",
     "bin",
-    "drivers",
+    "applications",
+    "lib",
     "etc",
     "etc/roots",
-    "lib",
-    "EFI",
-    "EFI/BOOT",
-    "media",
-    "media/cdrom",
     "dev",
     "proc",
     "sys",
-    "tmp",
     "run",
-    "var",
-    "home",
+    "tmp",
+    "media",
+    "media/cdrom",
+    "drivers",
+    "session",
+    "public",
+    "services",
+    "version",
+    "EFI",
+    "EFI/BOOT",
 ];
 
-const SHARE_ASSET_DIRS: &[(&str, &str)] = &[
+const PUBLIC_ASSET_DIRS: &[(&str, &str)] = &[
     ("assets/cursors", "cursors"),
     ("assets/fonts", "fonts"),
     ("assets/icons/lucide", "icons/lucide"),
@@ -97,16 +100,16 @@ fn create_iso_root_layout(sh: &Shell, iso_root: &Path) -> Result<()> {
     Ok(())
 }
 
-fn stage_share_assets(iso_root: &Path) -> Result<Vec<PathBuf>> {
-    let share_root = iso_root.join("share");
-    std::fs::create_dir_all(&share_root)?;
+fn stage_public_assets(iso_root: &Path) -> Result<Vec<PathBuf>> {
+    let public_root = iso_root.join("public");
+    std::fs::create_dir_all(&public_root)?;
 
-    for (src, dst) in SHARE_ASSET_DIRS {
-        copy_dir_recursive(Path::new(src), &share_root.join(dst))?;
+    for (src, dst) in PUBLIC_ASSET_DIRS {
+        copy_dir_recursive(Path::new(src), &public_root.join(dst))?;
     }
-    ensure_default_wallpapers(&share_root)?;
+    ensure_default_wallpapers(&public_root)?;
 
-    collect_files_under(&share_root)
+    collect_files_under(&public_root)
 }
 
 fn copy_dir_recursive(src: &Path, dst: &Path) -> Result<()> {
@@ -147,11 +150,11 @@ fn stage_default_wallpapers_hdd(sh: &Shell, hdd: &str, arch: &str) -> Result<()>
     }
     ensure_default_wallpapers(&staged)?;
 
-    cmd!(sh, "mmd -i {hdd}@@1M ::/share").run().ok();
-    cmd!(sh, "mmd -i {hdd}@@1M ::/share/wallpapers").run().ok();
+    cmd!(sh, "mmd -i {hdd}@@1M ::/public").run().ok();
+    cmd!(sh, "mmd -i {hdd}@@1M ::/public/wallpapers").run().ok();
     for wallpaper in DEFAULT_WALLPAPERS {
         let src = staged.join("wallpapers").join(wallpaper.file_name);
-        let dst = format!("::/share/wallpapers/{}", wallpaper.file_name);
+        let dst = format!("::/public/wallpapers/{}", wallpaper.file_name);
         cmd!(sh, "mcopy -i {hdd}@@1M {src} {dst}").run()?;
     }
 
@@ -589,15 +592,14 @@ fn limine_modules(
         if bootfb_only && is_non_bootfb_graphics_driver(prog.name) {
             continue;
         }
-        let bin_path = if is_driver(prog.name) {
-            format!("boot():/drivers/{}", prog.name)
-        } else {
-            format!("boot():/bin/{}", prog.name)
-        };
+        let bin_path = format!("boot():/{}/{}", executable_subdir(prog.name), prog.name);
         modules.push_str(&format!("    module_path: {}\n", bin_path));
         if !is_driver(prog.name) {
             for alias in userspace_aliases(prog.name) {
-                modules.push_str(&format!("    module_path: boot():/bin/{alias}\n"));
+                modules.push_str(&format!(
+                    "    module_path: boot():/{}/{alias}\n",
+                    executable_subdir(prog.name)
+                ));
             }
         }
         let is_init_module = if safe_shell_only { prog.name == "sprout" } else { prog.is_init };
@@ -606,7 +608,7 @@ fn limine_modules(
         }
     }
 
-    modules.push_str("    module_path: boot():/share/fonts/unifont.hex\n");
+    modules.push_str("    module_path: boot():/public/fonts/unifont.hex\n");
     modules.push_str("    module_path: boot():/etc/roots/root\n");
     if include_default_shell && !safe_shell_only {
         modules.push_str("    module_path: boot():/etc/default/shell\n");
@@ -638,7 +640,7 @@ fn generate_motd() -> String {
         "  try:\n",
         "    \x1b[36mls /bin\x1b[0m       browse available shoots\n",
         "    \x1b[36mps\x1b[0m            observe living processes\n",
-        "    \x1b[36mcat /version\x1b[0m  inspect the genome\n",
+        "    \x1b[36mcat /version/os\x1b[0m  inspect the genome\n",
         "\n",
         "\x1b[2m--------------------------------------------------------------\x1b[0m\n",
     )
@@ -677,7 +679,7 @@ pub fn build_iso_with_config(
     }
     create_iso_root_layout(sh, iso_root)?;
 
-    let mut asset_files = stage_share_assets(iso_root)?;
+    let mut asset_files = stage_public_assets(iso_root)?;
 
     asset_files.sort_by(|a, b| {
         let a_str = a.to_string_lossy();
@@ -717,7 +719,7 @@ pub fn build_iso_with_config(
     println!("ISO: Using kernel from {kernel_src}");
     cmd!(sh, "file {kernel_src}").run()?;
     sh.copy_file(&kernel_src, iso_root.join("boot/kernel"))?;
-    sh.copy_file("assets/fonts/unifont.hex", iso_root.join("share/fonts/unifont.hex"))?;
+    sh.copy_file("assets/fonts/unifont.hex", iso_root.join("public/fonts/unifont.hex"))?;
 
     sh.write_file(
         iso_root.join("etc/locale.conf"),
@@ -726,7 +728,7 @@ pub fn build_iso_with_config(
 
     sh.write_file(
         iso_root.join("etc/profile"),
-        "export PATH=/bin:/drivers\nalias ll='loglevel'\nalias halt='shutdown'\n",
+        "export PATH=/bin:/applications:/drivers\nalias ll='loglevel'\nalias halt='shutdown'\n",
     )?;
 
     sh.write_file(iso_root.join("etc/motd"), generate_motd())?;
@@ -787,7 +789,7 @@ pub fn build_iso_with_config(
     // Ordering here is stable and avoids concurrent writes to iso_root.
     println!("Staging userspace programs...");
     for prog in programs {
-        let dest_subdir = if is_driver(prog.name) { "drivers" } else { "bin" };
+        let dest_subdir = executable_subdir(prog.name);
         let dest_path = iso_root.join(format!("{}/{}", dest_subdir, prog.name));
         copy_userspace_binary(sh, prog.name, target, "release", dest_path.to_str().unwrap())?;
         if !is_driver(prog.name) {
@@ -810,7 +812,7 @@ pub fn build_iso_with_config(
     }
 
     // Ensure /lib/ld.so exists for dynamic executables.
-    let ld_so_src = iso_root.join("bin/ld_so");
+    let ld_so_src = iso_root.join(format!("{}/ld_so", executable_subdir("ld_so")));
     if ld_so_src.exists() {
         sh.copy_file(&ld_so_src, iso_root.join("lib/ld.so"))?;
     }
@@ -1096,9 +1098,20 @@ pub fn build_hdd(sh: &Shell, arch: &str, programs: &[ProgramConfig]) -> Result<P
     }
 
     cmd!(sh, "mformat -i {hdd}@@1M").run()?;
-    cmd!(sh, "mmd -i {hdd}@@1M ::/EFI ::/EFI/BOOT ::/boot ::/boot/limine ::/drivers ::/bin ::/lib")
-        .run()?;
-    cmd!(sh, "mcopy -i {hdd}@@1M -s assets ::").run()?;
+    cmd!(
+        sh,
+        "mmd -i {hdd}@@1M ::/EFI ::/EFI/BOOT ::/boot ::/boot/limine ::/bin ::/applications ::/lib ::/etc ::/dev ::/proc ::/sys ::/run ::/tmp ::/media ::/media/cdrom ::/drivers ::/session ::/public ::/services ::/version"
+    )
+    .run()?;
+    for (src, dst) in PUBLIC_ASSET_DIRS {
+        let dst_parent = if let Some((parent, _)) = dst.rsplit_once('/') {
+            format!("::/public/{parent}")
+        } else {
+            String::from("::/public")
+        };
+        cmd!(sh, "mmd -i {hdd}@@1M {dst_parent}").run().ok();
+        cmd!(sh, "mcopy -i {hdd}@@1M -s {src} {dst_parent}").run()?;
+    }
     stage_default_wallpapers_hdd(sh, &hdd, arch)?;
 
     let mut asset_files = Vec::new();
@@ -1147,7 +1160,7 @@ pub fn build_hdd(sh: &Shell, arch: &str, programs: &[ProgramConfig]) -> Result<P
 
     sh.write_file(
         "profile",
-        "export PATH=/bin:/drivers\nalias ll='loglevel'\nalias halt='shutdown'\n",
+        "export PATH=/bin:/applications:/drivers\nalias ll='loglevel'\nalias halt='shutdown'\n",
     )?;
     sh.write_file("motd", generate_motd())?;
 
@@ -1231,29 +1244,62 @@ fn is_driver(name: &str) -> bool {
     drivers.contains(&name)
 }
 
+fn is_bin_program(name: &str) -> bool {
+    matches!(
+        name,
+        "sh" | "ls"
+            | "ln"
+            | "cat"
+            | "head"
+            | "tail"
+            | "wc"
+            | "yes"
+            | "cp"
+            | "mv"
+            | "rm"
+            | "rmdir"
+            | "mkdir"
+            | "echo"
+            | "printf"
+            | "pwd"
+            | "touch"
+            | "stat"
+            | "dirname"
+            | "basename"
+            | "sleep"
+            | "sort"
+            | "env"
+            | "date"
+            | "uname"
+            | "true"
+            | "false"
+            | "tee"
+    )
+}
+
+fn is_service_program(name: &str) -> bool {
+    matches!(name, "bloom" | "bristle" | "cambium" | "fatd" | "iso9660d" | "mesocarp" | "netd")
+}
+
+fn executable_subdir(name: &str) -> &'static str {
+    if is_driver(name) {
+        "drivers"
+    } else if is_service_program(name) {
+        "services"
+    } else if is_bin_program(name) {
+        "bin"
+    } else {
+        "applications"
+    }
+}
+
 fn is_bootstrap_boot_module(name: &str) -> bool {
     is_driver(name)
+        || is_bin_program(name)
+        || is_service_program(name)
         || matches!(
             name,
-            "sprout"
-                | "sh"
-                | "echo"
-                | "cat"
-                | "ls"
-                | "terminal"
-                | "cambium"
-                | "iso9660d"
-                | "fatd"
-                | "bristle"
-                | "bloom"
-                | "wayland_hello"
-                | "clock"
-                | "leaf"
-                | "netd"
-                | "fetchd"
-                | "httpsd"
-                | "mesocarp"
-                | "virtio_netd"
+            "sprout" | "terminal" | "wayland_hello" | "clock" | "leaf" | "fetchd" | "httpsd"
         )
 }
 
@@ -1262,13 +1308,13 @@ fn is_non_bootfb_graphics_driver(name: &str) -> bool {
 }
 
 fn is_safe_shell_program(name: &str) -> bool {
-    matches!(name, "sprout" | "sh" | "echo" | "cat" | "ls" | "terminal" | "bristle")
+    is_bin_program(name) || matches!(name, "sprout" | "terminal" | "bristle")
 }
 
 fn userspace_aliases(name: &str) -> &'static [&'static str] {
     match name {
-        // mesocarp is the mDNS daemon; `mount -t mdns` resolves to /bin/mdns
-        // (or /bin/mdnsd). Aliases ensure both spellings land next to the
+        // mesocarp is the mDNS daemon; `mount -t mdns` resolves to /services/mdns
+        // (or /services/mdnsd). Aliases ensure both spellings land next to the
         // real binary in the image.
         "mesocarp" => &["mdns", "mdnsd"],
         _ => &[],
@@ -1319,7 +1365,7 @@ mod tests {
         assert!(!bootfb_entry.contains("module_path: boot():/drivers/display_virtio_gpu"));
         assert!(!bootfb_entry.contains("module_path: boot():/drivers/display_fake"));
         assert!(!bootfb_entry.contains("module_path: boot():/drivers/virtio_gpu"));
-        assert!(bootfb_entry.contains("module_path: boot():/bin/bloom"));
+        assert!(bootfb_entry.contains("module_path: boot():/services/bloom"));
     }
 
     #[test]
@@ -1334,7 +1380,10 @@ mod tests {
             shell,
             test_program("echo"),
             test_program("cat"),
+            test_program("cp"),
             test_program("ls"),
+            test_program("mkdir"),
+            test_program("stat"),
             test_program("terminal"),
             test_program("bloom"),
             test_program("bristle"),
@@ -1348,14 +1397,17 @@ mod tests {
         assert!(safe_entry.contains(
             "kernel_cmdline: loglevel=info display=bootfb sprout.safe=sh sprout.active_ui=terminal"
         ));
-        assert!(safe_entry.contains("module_path: boot():/bin/sprout"));
+        assert!(safe_entry.contains("module_path: boot():/applications/sprout"));
         assert!(safe_entry.contains("module_path: boot():/bin/sh"));
         assert!(safe_entry.contains("module_path: boot():/bin/echo"));
         assert!(safe_entry.contains("module_path: boot():/bin/cat"));
+        assert!(safe_entry.contains("module_path: boot():/bin/cp"));
         assert!(safe_entry.contains("module_path: boot():/bin/ls"));
-        assert!(safe_entry.contains("module_path: boot():/bin/terminal"));
-        assert!(safe_entry.contains("module_path: boot():/bin/bristle"));
-        assert!(!safe_entry.contains("module_path: boot():/bin/bloom"));
+        assert!(safe_entry.contains("module_path: boot():/bin/mkdir"));
+        assert!(safe_entry.contains("module_path: boot():/bin/stat"));
+        assert!(safe_entry.contains("module_path: boot():/applications/terminal"));
+        assert!(safe_entry.contains("module_path: boot():/services/bristle"));
+        assert!(!safe_entry.contains("module_path: boot():/services/bloom"));
         assert!(!safe_entry.contains("module_path: boot():/bin/busybox"));
         assert!(!safe_entry.contains("module_path: boot():/bin/ash"));
         assert!(!safe_entry.contains("module_path: boot():/etc/default/shell"));
@@ -1378,25 +1430,46 @@ mod tests {
 
         let conf = generate_limine_config(&sh, &programs, &assets, None, None, false, false, false);
 
-        assert!(!conf.contains("module_path: boot():/share/cursors/future/default.svg"));
-        assert!(!conf.contains("module_path: boot():/share/cursors/future/fleur.svg"));
-        assert!(!conf.contains("module_path: boot():/share/cursors/future/top_side.svg"));
+        assert!(!conf.contains("module_path: boot():/public/cursors/future/default.svg"));
+        assert!(!conf.contains("module_path: boot():/public/cursors/future/fleur.svg"));
+        assert!(!conf.contains("module_path: boot():/public/cursors/future/top_side.svg"));
         assert!(
-            !conf.contains("module_path: boot():/share/cursors/future/bottom_right_corner.svg")
+            !conf.contains("module_path: boot():/public/cursors/future/bottom_right_corner.svg")
         );
-        assert!(!conf.contains("module_path: boot():/share/cursors/plain/Normal.cur"));
+        assert!(!conf.contains("module_path: boot():/public/cursors/plain/Normal.cur"));
     }
 
     #[test]
     fn iso_root_layout_is_root_shaped_without_provider_placeholders() {
-        assert!(ISO_ROOT_DIRS.contains(&"bin"));
-        assert!(ISO_ROOT_DIRS.contains(&"drivers"));
-        assert!(ISO_ROOT_DIRS.contains(&"etc"));
+        for dir in [
+            "bin",
+            "applications",
+            "lib",
+            "etc",
+            "dev",
+            "proc",
+            "sys",
+            "run",
+            "tmp",
+            "media",
+            "drivers",
+            "session",
+            "public",
+            "services",
+            "version",
+        ] {
+            assert!(ISO_ROOT_DIRS.contains(&dir), "missing canonical ISO root dir {dir}");
+        }
         assert!(ISO_ROOT_DIRS.contains(&"etc/roots"));
-        assert!(ISO_ROOT_DIRS.contains(&"lib"));
+        assert!(ISO_ROOT_DIRS.contains(&"media/cdrom"));
+        assert!(!ISO_ROOT_DIRS.contains(&"app"));
+        assert!(!ISO_ROOT_DIRS.contains(&"drv"));
+        assert!(!ISO_ROOT_DIRS.contains(&"pub"));
+        assert!(!ISO_ROOT_DIRS.contains(&"ses"));
+        assert!(!ISO_ROOT_DIRS.contains(&"srv"));
+        assert!(!ISO_ROOT_DIRS.contains(&"ver"));
         assert!(!ISO_ROOT_DIRS.contains(&"share"));
-        assert!(!ISO_ROOT_DIRS.contains(&"services"));
-        assert!(!ISO_ROOT_DIRS.contains(&"session"));
+        assert!(!ISO_ROOT_DIRS.contains(&"vol"));
         assert!(!ISO_ROOT_DIRS.contains(&"data"));
         assert!(!ISO_ROOT_DIRS.contains(&"net"));
         assert!(!ISO_ROOT_DIRS.contains(&"hosts"));
@@ -1406,15 +1479,35 @@ mod tests {
     }
 
     #[test]
-    fn iso_share_assets_are_explicit_runtime_subtrees() {
-        assert!(SHARE_ASSET_DIRS.contains(&("assets/cursors", "cursors")));
-        assert!(SHARE_ASSET_DIRS.contains(&("assets/fonts", "fonts")));
-        assert!(SHARE_ASSET_DIRS.contains(&("assets/icons/lucide", "icons/lucide")));
-        assert!(SHARE_ASSET_DIRS.contains(&("assets/themes", "themes")));
-        assert!(SHARE_ASSET_DIRS.contains(&("assets/wallpapers", "wallpapers")));
-        assert!(!SHARE_ASSET_DIRS.iter().any(|(_, dst)| dst.starts_with("assets")));
-        assert!(!SHARE_ASSET_DIRS.iter().any(|(_, dst)| dst.starts_with("icons/chicago95")));
-        assert!(!SHARE_ASSET_DIRS.iter().any(|(_, dst)| dst.starts_with("pci")));
+    fn iso_public_assets_are_explicit_runtime_subtrees() {
+        assert!(PUBLIC_ASSET_DIRS.contains(&("assets/cursors", "cursors")));
+        assert!(PUBLIC_ASSET_DIRS.contains(&("assets/fonts", "fonts")));
+        assert!(PUBLIC_ASSET_DIRS.contains(&("assets/icons/lucide", "icons/lucide")));
+        assert!(PUBLIC_ASSET_DIRS.contains(&("assets/themes", "themes")));
+        assert!(PUBLIC_ASSET_DIRS.contains(&("assets/wallpapers", "wallpapers")));
+        assert!(!PUBLIC_ASSET_DIRS.iter().any(|(_, dst)| dst.starts_with("assets")));
+        assert!(!PUBLIC_ASSET_DIRS.iter().any(|(_, dst)| dst.starts_with("icons/chicago95")));
+        assert!(!PUBLIC_ASSET_DIRS.iter().any(|(_, dst)| dst.starts_with("pci")));
+    }
+
+    #[test]
+    fn executable_staging_keeps_bin_to_core_commands() {
+        for name in ["sh", "ls", "cat", "cp", "mkdir", "printf", "stat"] {
+            assert_eq!(executable_subdir(name), "bin", "{name} should stay in /bin");
+        }
+        for name in ["sprout", "grep", "find"] {
+            assert_eq!(
+                executable_subdir(name),
+                "applications",
+                "{name} should move to /applications"
+            );
+        }
+        for name in ["bristle", "bloom", "cambium", "fatd", "iso9660d", "mesocarp", "netd"] {
+            assert_eq!(executable_subdir(name), "services", "{name} should move to /services");
+        }
+        for name in ["ahci_disk", "display_bootfb", "virtio_netd", "xhci"] {
+            assert_eq!(executable_subdir(name), "drivers", "{name} should move to /drivers");
+        }
     }
 
     #[test]
@@ -1425,27 +1518,34 @@ mod tests {
         let conf = generate_limine_config(&sh, &programs, &[], None, None, false, false, false);
         let normal_entry = limine_entry(&conf, "ThingOS");
 
-        assert!(normal_entry.contains("module_path: boot():/bin/sprout"));
+        assert!(normal_entry.contains("module_path: boot():/applications/sprout"));
         assert!(normal_entry.contains("module_path: boot():/bin/sh"));
-        assert!(normal_entry.contains("module_path: boot():/bin/cambium"));
-        assert!(normal_entry.contains("module_path: boot():/bin/iso9660d"));
+        assert!(normal_entry.contains("module_path: boot():/services/cambium"));
+        assert!(normal_entry.contains("module_path: boot():/services/fatd"));
+        assert!(normal_entry.contains("module_path: boot():/services/iso9660d"));
+        assert!(normal_entry.contains("module_path: boot():/services/mesocarp"));
+        assert!(normal_entry.contains("module_path: boot():/services/mdns"));
+        assert!(normal_entry.contains("module_path: boot():/services/mdnsd"));
+        assert!(normal_entry.contains("module_path: boot():/services/netd"));
         assert!(normal_entry.contains("module_path: boot():/bin/echo"));
         assert!(normal_entry.contains("module_path: boot():/bin/cat"));
+        assert!(normal_entry.contains("module_path: boot():/bin/cp"));
         assert!(normal_entry.contains("module_path: boot():/bin/ls"));
-        assert!(normal_entry.contains("module_path: boot():/bin/bloom"));
-        assert!(normal_entry.contains("module_path: boot():/bin/bristle"));
-        assert!(normal_entry.contains("module_path: boot():/bin/clock"));
+        assert!(normal_entry.contains("module_path: boot():/bin/mkdir"));
+        assert!(normal_entry.contains("module_path: boot():/bin/stat"));
+        assert!(normal_entry.contains("module_path: boot():/services/bloom"));
+        assert!(normal_entry.contains("module_path: boot():/services/bristle"));
+        assert!(normal_entry.contains("module_path: boot():/applications/clock"));
         assert!(normal_entry.contains("module_path: boot():/drivers/ata_disk"));
         assert!(normal_entry.contains("module_path: boot():/drivers/ahci_disk"));
-        assert!(normal_entry.contains("module_path: boot():/share/fonts/unifont.hex"));
+        assert!(normal_entry.contains("module_path: boot():/public/fonts/unifont.hex"));
         assert!(normal_entry.contains("module_path: boot():/etc/roots/root"));
 
         assert!(!normal_entry.contains("module_path: boot():/bin/ps"));
         assert!(!normal_entry.contains("module_path: boot():/bin/grep"));
-        assert!(!normal_entry.contains("module_path: boot():/bin/stat"));
         assert!(!normal_entry.contains("module_path: boot():/lib/libpistil.so"));
         assert!(!normal_entry.contains("module_path: boot():/etc/fstab"));
-        assert!(!normal_entry.contains("module_path: boot():/share/wallpapers/flower.png"));
-        assert!(!normal_entry.contains("module_path: boot():/share/wallpapers/flower.bmp"));
+        assert!(!normal_entry.contains("module_path: boot():/public/wallpapers/flower.png"));
+        assert!(!normal_entry.contains("module_path: boot():/public/wallpapers/flower.bmp"));
     }
 }

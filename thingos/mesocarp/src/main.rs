@@ -161,7 +161,7 @@ fn mount_point_from_args() -> String {
     }
     let args = stem::utils::parse_argv(&buf);
     // mount(8) launches providers as:
-    //   /bin/mesocarp <device> <target>
+    //   /services/mesocarp <device> <target>
     // while direct/debug invocations may only pass <target>. Prefer the
     // target argument when it is present so fstab's "none /hosts mdns" mounts
     // at /hosts, not at a literal "none" path.

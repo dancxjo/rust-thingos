@@ -114,6 +114,32 @@ impl VfsDriver for UnionFs {
         // Multiple nodes found (must all be directories because of the !is_dir break above).
         Ok(Arc::new(UnionDirNode { layers: found_nodes }))
     }
+
+    fn create(&self, path: &str) -> SysResult<Arc<dyn VfsNode>> {
+        let mut rofs = false;
+        for driver in self.layers.iter().rev() {
+            match driver.create(path) {
+                Ok(node) => return Ok(node),
+                Err(Errno::EROFS) => rofs = true,
+                Err(Errno::ENOENT) => continue,
+                Err(e) => return Err(e),
+            }
+        }
+        Err(if rofs { Errno::EROFS } else { Errno::ENOENT })
+    }
+
+    fn mkdir(&self, path: &str) -> SysResult<()> {
+        let mut rofs = false;
+        for driver in self.layers.iter().rev() {
+            match driver.mkdir(path) {
+                Ok(()) => return Ok(()),
+                Err(Errno::EROFS) => rofs = true,
+                Err(Errno::ENOENT) => continue,
+                Err(e) => return Err(e),
+            }
+        }
+        Err(if rofs { Errno::EROFS } else { Errno::ENOENT })
+    }
 }
 
 // ── UnionDirNode ──────────────────────────────────────────────────────────────

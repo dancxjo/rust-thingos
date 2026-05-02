@@ -1075,7 +1075,7 @@ fn spawn_job(
     let bg_in = if background { Some(open_read("/dev/null")?) } else { None };
     let bg_out = if background { Some(open_write("/dev/null", false)?) } else { None };
 
-    let path_env = env_map.get("PATH").map(|s| s.as_str()).unwrap_or("/bin:/drivers");
+    let path_env = env_map.get("PATH").map(|s| s.as_str()).unwrap_or("/bin:/applications:/drivers");
     let path_prefixes: Vec<&str> = path_env.split(':').collect();
 
     let mut spawned = Vec::new();

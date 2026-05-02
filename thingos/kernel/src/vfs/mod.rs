@@ -51,20 +51,24 @@ use abi::errors::{Errno, SysResult};
 
 const ROOTFS_VISIBLE_DIRS: &[&str] = &[
     "bin",
+    "applications",
+    "lib",
     "etc",
-    "share",
-    "media",
-    "media/cdrom",
     "dev",
     "dev/display",
     "dev/input",
     "dev/storage",
     "proc",
     "sys",
-    "tmp",
     "run",
-    "services",
+    "tmp",
+    "media",
+    "media/cdrom",
+    "drivers",
     "session",
+    "public",
+    "services",
+    "version",
 ];
 
 // ── Open flags ─────────────────────────────────────────────────────────────
@@ -623,7 +627,8 @@ impl Default for NamespaceRef {
 /// - `/sys`      ← kernel device discovery metadata
 /// - `/tmp`      ← temporary filesystem (writable, volatile)
 /// - `/run`      ← transient runtime state (tmpfs)
-/// - `/services` ← populated by userland daemons (tmpfs stub for now)
+/// - `/services` ← service binaries and service-owned files
+/// - `/session`  ← session namespace
 pub fn init(modules: &'static [crate::BootModuleDesc]) {
     mount::init();
 
@@ -665,9 +670,8 @@ pub fn init(modules: &'static [crate::BootModuleDesc]) {
     mount::mount("/run", Arc::new(ramfs::RamFs::new()), abi::syscall::mount_flags::MREPL);
     crate::kdebug!("vfs: mounted tmpfs at /run");
 
-    // Service namespace
-    mount::mount("/services", Arc::new(ramfs::RamFs::new()), abi::syscall::mount_flags::MREPL);
-    crate::kdebug!("vfs: mounted tmpfs at /services");
+    // Keep `/services` and `/drivers` unmounted so bootfs service/driver binaries remain visible.
+    // The writable root layer can still create service-owned files underneath these directories.
 
     // Session namespace — filesystem-native GUI objects live here.
     mount::mount("/session", Arc::new(ramfs::RamFs::new()), abi::syscall::mount_flags::MREPL);
@@ -993,19 +997,37 @@ mod tests {
 
     #[test]
     fn test_rootfs_visible_dirs_exclude_unused_placeholders() {
-        assert!(ROOTFS_VISIBLE_DIRS.contains(&"bin"));
-        assert!(ROOTFS_VISIBLE_DIRS.contains(&"etc"));
-        assert!(ROOTFS_VISIBLE_DIRS.contains(&"media/cdrom"));
-        assert!(ROOTFS_VISIBLE_DIRS.contains(&"dev"));
-        assert!(ROOTFS_VISIBLE_DIRS.contains(&"proc"));
-        assert!(ROOTFS_VISIBLE_DIRS.contains(&"sys"));
-        assert!(ROOTFS_VISIBLE_DIRS.contains(&"tmp"));
-        assert!(ROOTFS_VISIBLE_DIRS.contains(&"run"));
-        assert!(ROOTFS_VISIBLE_DIRS.contains(&"services"));
-        assert!(ROOTFS_VISIBLE_DIRS.contains(&"session"));
+        let canonical = [
+            "bin",
+            "applications",
+            "lib",
+            "etc",
+            "dev",
+            "proc",
+            "sys",
+            "run",
+            "tmp",
+            "media",
+            "drivers",
+            "session",
+            "public",
+            "services",
+            "version",
+        ];
+        for dir in canonical {
+            assert!(ROOTFS_VISIBLE_DIRS.contains(&dir), "missing canonical root dir {dir}");
+        }
         assert!(!ROOTFS_VISIBLE_DIRS.contains(&"boot"));
         assert!(!ROOTFS_VISIBLE_DIRS.contains(&"data"));
         assert!(!ROOTFS_VISIBLE_DIRS.contains(&"hosts"));
         assert!(!ROOTFS_VISIBLE_DIRS.contains(&"mnt"));
+        assert!(!ROOTFS_VISIBLE_DIRS.contains(&"app"));
+        assert!(!ROOTFS_VISIBLE_DIRS.contains(&"drv"));
+        assert!(!ROOTFS_VISIBLE_DIRS.contains(&"pub"));
+        assert!(!ROOTFS_VISIBLE_DIRS.contains(&"ses"));
+        assert!(!ROOTFS_VISIBLE_DIRS.contains(&"srv"));
+        assert!(!ROOTFS_VISIBLE_DIRS.contains(&"ver"));
+        assert!(!ROOTFS_VISIBLE_DIRS.contains(&"share"));
+        assert!(!ROOTFS_VISIBLE_DIRS.contains(&"vol"));
     }
 }

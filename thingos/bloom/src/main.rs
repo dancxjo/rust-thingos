@@ -42,7 +42,7 @@ use stem::{error, info, warn};
 use wayland::WaylandThreadArgs;
 use world::BloomWorld;
 
-const SERVICE_PATH: &str = "/services/bloom";
+const SERVICE_PATH: &str = "/run/services/bloom";
 const WP_PATH: &str = "/session/desktop/wallpaper";
 const THEME_PATH: &str = DEFAULT_THEME_CONFIG_PATH;
 
@@ -308,7 +308,7 @@ fn main(_arg: usize) -> ! {
 }
 
 fn publish_service_handle(path: &str, handle: u32) {
-    let _ = vfs_mkdir("/services");
+    let _ = vfs_mkdir("/run/services");
     if let Ok(fd) = vfs_open(path, O_CREAT | O_TRUNC | O_RDWR) {
         let text = alloc::format!("{}\n", handle);
         let _ = vfs_write(fd, text.as_bytes());

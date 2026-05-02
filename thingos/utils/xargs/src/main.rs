@@ -75,18 +75,32 @@ fn split_whitespace_bytes(input: &[u8]) -> Vec<Vec<u8>> {
 fn get_path_entries() -> Vec<String> {
     let needed = env_get(b"PATH", &mut []).unwrap_or(0);
     if needed == 0 {
-        return alloc::vec![String::from("/bin"), String::from("/drivers")];
+        return alloc::vec![
+            String::from("/bin"),
+            String::from("/applications"),
+            String::from("/drivers")
+        ];
     }
 
     let mut buf = alloc::vec![0u8; needed];
     let n = env_get(b"PATH", &mut buf).unwrap_or(0).min(buf.len());
     if n == 0 {
-        return alloc::vec![String::from("/bin"), String::from("/drivers")];
+        return alloc::vec![
+            String::from("/bin"),
+            String::from("/applications"),
+            String::from("/drivers")
+        ];
     }
 
     let path = match core::str::from_utf8(&buf[..n]) {
         Ok(s) => s,
-        Err(_) => return alloc::vec![String::from("/bin"), String::from("/drivers")],
+        Err(_) => {
+            return alloc::vec![
+                String::from("/bin"),
+                String::from("/applications"),
+                String::from("/drivers")
+            ];
+        }
     };
 
     let mut entries = Vec::new();
@@ -97,6 +111,7 @@ fn get_path_entries() -> Vec<String> {
     }
     if entries.is_empty() {
         entries.push(String::from("/bin"));
+        entries.push(String::from("/applications"));
         entries.push(String::from("/drivers"));
     }
     entries

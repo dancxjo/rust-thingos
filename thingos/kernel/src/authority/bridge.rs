@@ -336,7 +336,7 @@ mod tests {
 
     #[test]
     fn test_authority_as_text_contains_name() {
-        let snap = make_snapshot("bristle", "/bin/bristle");
+        let snap = make_snapshot("bristle", "/services/bristle");
         let auth = authority_from_snapshot(&snap);
         let text = auth.as_text();
         assert!(text.contains("name: bristle"), "unexpected text: {text}");
@@ -344,7 +344,7 @@ mod tests {
 
     #[test]
     fn test_authority_as_text_contains_empty_capabilities() {
-        let snap = make_snapshot("bristle", "/bin/bristle");
+        let snap = make_snapshot("bristle", "/services/bristle");
         let auth = authority_from_snapshot(&snap);
         let text = auth.as_text();
         assert!(text.contains("capabilities: []"), "unexpected text: {text}");

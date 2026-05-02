@@ -41,7 +41,7 @@ const DRM_FORMAT_ARGB8888: u32 = 0x3432_5241; // "AR24"
 
 const PISTIL_PATH: &str = "/lib/libpistil.so";
 const DRAW_TEXT_SYMBOL: &[u8] = b"pistil_draw_text";
-const DEFAULT_FONT_PATH: &str = "/share/fonts/Inter-Regular.ttf";
+const DEFAULT_FONT_PATH: &str = "/public/fonts/Inter-Regular.ttf";
 
 type DrawTextFn = extern "C" fn(*const u8, *mut u32, u32, u32, u32, i32, i32, f32, u32) -> i32;
 
@@ -261,15 +261,16 @@ fn main(_arg: usize) -> ! {
                     let seq_lo = if payload.len() >= 24 { read_u32(payload, 20) } else { 0 };
                     info!(
                         "wayland_hello: wp_presentation_feedback.presented object={} tv={}.{:09} refresh_ns={} seq={}",
-                        object_id, ((tv_sec_hi as u64) << 32) | tv_sec_lo as u64, tv_nsec, refresh, seq_lo
+                        object_id,
+                        ((tv_sec_hi as u64) << 32) | tv_sec_lo as u64,
+                        tv_nsec,
+                        refresh,
+                        seq_lo
                     );
                     pending_presentation_feedbacks.retain(|&id| id != object_id);
                 }
                 (_, 2) if pending_presentation_feedbacks.iter().any(|&id| id == object_id) => {
-                    info!(
-                        "wayland_hello: wp_presentation_feedback.discarded object={}",
-                        object_id
-                    );
+                    info!("wayland_hello: wp_presentation_feedback.discarded object={}", object_id);
                     pending_presentation_feedbacks.retain(|&id| id != object_id);
                 }
                 _ => {}
@@ -867,12 +868,7 @@ fn request_frame(fd: u32, surface_id: u32, callback_id: u32) {
 /// The compositor will reply on `feedback_id` with either
 /// `wp_presentation_feedback.presented` (opcode 1) or `discarded`
 /// (opcode 2) once the next commit on `surface_id` is settled.
-fn request_presentation_feedback(
-    fd: u32,
-    presentation_id: u32,
-    surface_id: u32,
-    feedback_id: u32,
-) {
+fn request_presentation_feedback(fd: u32, presentation_id: u32, surface_id: u32, feedback_id: u32) {
     let mut buf = Vec::new();
     encode_header(presentation_id, 1, 16, &mut buf);
     buf.extend_from_slice(&surface_id.to_ne_bytes());

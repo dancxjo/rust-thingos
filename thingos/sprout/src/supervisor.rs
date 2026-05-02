@@ -51,7 +51,7 @@ impl Supervisor {
     }
 
     fn spawn_cambium(&mut self) -> Option<u64> {
-        match stem::syscall::spawn_process("/bin/cambium", 0) {
+        match stem::syscall::spawn_process("/services/cambium", 0) {
             Ok(pid) => {
                 info!("SPROUT: spawned cambium (PID={})", pid);
                 Some(pid)

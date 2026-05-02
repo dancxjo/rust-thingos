@@ -613,7 +613,7 @@ fn main(arg: usize) -> ! {
         }
     }
 
-    let font = match Font::load("/share/fonts/unifont.hex") {
+    let font = match Font::load("/public/fonts/unifont.hex") {
         Ok(f) => f,
         Err(e) => {
             error!("Terminal: Failed to load font: {}", e);

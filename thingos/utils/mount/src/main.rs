@@ -193,6 +193,22 @@ fn resolve_provider_binary(fs_type: &str) -> Option<String> {
     if path_exists(&daemon) {
         return Some(daemon);
     }
+    let service_direct = alloc::format!("/services/{}", fs_type);
+    if path_exists(&service_direct) {
+        return Some(service_direct);
+    }
+    let service_daemon = alloc::format!("/services/{}d", fs_type);
+    if path_exists(&service_daemon) {
+        return Some(service_daemon);
+    }
+    let app_direct = alloc::format!("/applications/{}", fs_type);
+    if path_exists(&app_direct) {
+        return Some(app_direct);
+    }
+    let app_daemon = alloc::format!("/applications/{}d", fs_type);
+    if path_exists(&app_daemon) {
+        return Some(app_daemon);
+    }
     let driver = alloc::format!("/drivers/{}", fs_type);
     if path_exists(&driver) {
         return Some(driver);

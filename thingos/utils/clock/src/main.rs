@@ -30,7 +30,7 @@ const TOPLEVEL_ID: u32 = 12;
 const PISTIL_PATH: &str = "/lib/libpistil.so";
 const DRAW_DSEG7_TEXT_SYMBOL: &[u8] = b"pistil_draw_dseg7_text";
 const DRAW_TEXT_SYMBOL: &[u8] = b"pistil_draw_text";
-const DSEG7_FONT_PATH: &str = "/share/fonts/DSEG7Classic-Regular.ttf";
+const DSEG7_FONT_PATH: &str = "/public/fonts/DSEG7Classic-Regular.ttf";
 const SERIAL_TICK_INTERVAL_NS: u64 = 37_000_000_000;
 const TZ_REFRESH_INTERVAL_NS: u64 = 60_000_000_000;
 const CLOCK_PRIORITY_LOW: usize = 1;
@@ -561,7 +561,7 @@ fn load_text_renderer() -> Option<TextRenderer> {
     let draw_dseg7_text: DrawTextFn = unsafe { core::mem::transmute(sym_dseg7) };
     let draw_text: DrawTextFn = unsafe { core::mem::transmute(sym_text) };
     info!("clock: pistil DSEG7 text renderer loaded with {}", DSEG7_FONT_PATH);
-    info!("clock: pistil generic text renderer loaded with /share/fonts/Inter-Regular.ttf");
+    info!("clock: pistil generic text renderer loaded with /public/fonts/Inter-Regular.ttf");
     Some(TextRenderer { _handle: handle, draw_dseg7_text, draw_text })
 }
 
