@@ -175,8 +175,12 @@ pub struct DirentWire {
 /// Maximum path length accepted in a `Lookup` request.
 pub const VFS_RPC_MAX_PATH: usize = 4096;
 /// Maximum data length for a single `Read` or `Write` payload.
-pub const VFS_RPC_MAX_DATA: usize = 65536;
+///
+/// VFS provider ports are currently capped at 64 KiB. Keep data payloads below
+/// that cap so the largest request/response frame, including RPC headers and
+/// op-specific length fields, still fits in one atomic `port_send_all`.
+pub const VFS_RPC_MAX_DATA: usize = 60 * 1024;
 /// Maximum response buffer size a provider should allocate.
-pub const VFS_RPC_MAX_RESP: usize = VFS_RPC_MAX_DATA + 64;
+pub const VFS_RPC_MAX_RESP: usize = 65536;
 /// Maximum size of a VFS RPC request buffer (header + path or data).
-pub const VFS_RPC_MAX_REQ: usize = core::mem::size_of::<VfsRpcReqHeader>() + VFS_RPC_MAX_DATA + 64;
+pub const VFS_RPC_MAX_REQ: usize = 65536;

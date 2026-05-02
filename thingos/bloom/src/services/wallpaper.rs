@@ -14,6 +14,8 @@ use crate::loop_types::{BloomService, Interest, LoopAction, LoopEvent};
 use crate::world::BloomWorld;
 
 pub const DEFAULT_WALLPAPER_PATH: &str = "/public/wallpapers/flower.png";
+const LEGACY_ASSET_PREFIX: &str = "/share/";
+const PUBLIC_ASSET_PREFIX: &str = "/public/";
 const WALLPAPER_FALLBACK_POLL_TIMER: u64 = 1;
 const WALLPAPER_INITIAL_LOAD_TIMER: u64 = 2;
 const WALLPAPER_FALLBACK_POLL_MS: u64 = 1000;
@@ -28,7 +30,28 @@ struct WallpaperStamp {
     ctime_nsec: u32,
 }
 
-pub fn read_wallpaper_target(config_path: &str) -> Option<String> {
+fn normalize_wallpaper_path(path: &str) -> String {
+    if let Some(rest) = path.strip_prefix(LEGACY_ASSET_PREFIX) {
+        let mut normalized = String::from(PUBLIC_ASSET_PREFIX);
+        normalized.push_str(rest);
+        normalized
+    } else {
+        path.to_string()
+    }
+}
+
+fn write_wallpaper_target(config_path: &str, wallpaper_path: &str) -> bool {
+    if let Ok(fd) = vfs_open(config_path, O_CREAT | O_TRUNC | O_RDWR) {
+        let wrote_path = vfs_write(fd, wallpaper_path.as_bytes()).is_ok();
+        let wrote_newline = vfs_write(fd, b"\n").is_ok();
+        let _ = vfs_close(fd);
+        wrote_path && wrote_newline
+    } else {
+        false
+    }
+}
+
+fn read_wallpaper_config_raw(config_path: &str) -> Option<String> {
     let fd = vfs_open(config_path, O_RDONLY).ok()?;
     let mut buf = [0u8; 256];
     let n = vfs_read(fd, &mut buf).ok()?;
@@ -41,6 +64,15 @@ pub fn read_wallpaper_target(config_path: &str) -> Option<String> {
     if path.is_empty() { None } else { Some(path.to_string()) }
 }
 
+pub fn read_wallpaper_target(config_path: &str) -> Option<String> {
+    let path = read_wallpaper_config_raw(config_path)?;
+    let normalized = normalize_wallpaper_path(&path);
+    if normalized != path && write_wallpaper_target(config_path, &normalized) {
+        stem::info!("bloom: migrated wallpaper path {} -> {}", path, normalized);
+    }
+    Some(normalized)
+}
+
 pub fn wallpaper_target_or_default(config_path: &str) -> String {
     read_wallpaper_target(config_path).unwrap_or_else(|| DEFAULT_WALLPAPER_PATH.to_string())
 }
@@ -50,11 +82,7 @@ pub fn ensure_wallpaper_config(config_path: &str) -> String {
         return path;
     }
 
-    if let Ok(fd) = vfs_open(config_path, O_CREAT | O_TRUNC | O_RDWR) {
-        let _ = vfs_write(fd, DEFAULT_WALLPAPER_PATH.as_bytes());
-        let _ = vfs_write(fd, b"\n");
-        let _ = vfs_close(fd);
-    }
+    let _ = write_wallpaper_target(config_path, DEFAULT_WALLPAPER_PATH);
 
     DEFAULT_WALLPAPER_PATH.to_string()
 }

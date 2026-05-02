@@ -12,12 +12,15 @@ use alloc::string::{String, ToString};
 use alloc::vec::Vec;
 
 use abi::errors::Errno;
-use abi::vfs_rpc::VfsRpcOp;
+use abi::vfs_rpc::{VFS_RPC_MAX_DATA, VfsRpcOp};
 use ipc_helpers::provider::{ProviderLoop, ProviderRequest, ProviderResponse};
 use iso9660::{ISO_SECTOR_SIZE, IsoFs};
+use spin::Mutex;
 use stem::abi::module_manifest::{MANIFEST_MAGIC, ManifestHeader, ModuleKind};
 use stem::block::{BlockDevice, BlockError};
-use stem::syscall::vfs::{vfs_close, vfs_mount, vfs_open, vfs_read, vfs_readdir, vfs_seek};
+use stem::syscall::vfs::{
+    vfs_close, vfs_mount, vfs_open, vfs_read, vfs_readdir, vfs_seek, vfs_write,
+};
 use stem::syscall::{PortHandle, argv_get, port_create};
 use stem::{info, warn};
 
@@ -41,16 +44,31 @@ pub static MANIFEST: ManifestHeader = ManifestHeader {
 
 // ── VFS Block Device Adapter ────────────────────────────────────────────────
 
-/// A VFS block device that opens, seeks, reads, and closes the backing storage
-/// file on every `read_sectors` call.
+/// A VFS block device backed by one open fd.
 ///
-/// The fd is intentionally **not** cached here: each `read_sectors` call is
-/// independent and iso9660d is single-threaded, so a cached fd would require
-/// interior mutability with no practical benefit over the open/close-per-call
-/// pattern (the kernel already handles rapid open/close efficiently at the
-/// driver level).
+/// Keeping the fd open matters during boot: catalog scans and resource loads
+/// otherwise turn every ISO extent read into another `/dev/block/usbN` lookup
+/// and stat chain before the actual block read.
 struct VfsBlockDevice {
     path: String,
+    fd: Mutex<Option<u32>>,
+}
+
+impl VfsBlockDevice {
+    fn new(path: &str) -> Self {
+        Self { path: path.to_string(), fd: Mutex::new(None) }
+    }
+
+    fn fd(&self) -> Result<u32, BlockError> {
+        let mut fd = self.fd.lock();
+        if let Some(existing) = *fd {
+            return Ok(existing);
+        }
+        let opened = vfs_open(&self.path, abi::syscall::vfs_flags::O_RDONLY)
+            .map_err(|_| BlockError::IoError)?;
+        *fd = Some(opened);
+        Ok(opened)
+    }
 }
 
 impl BlockDevice for VfsBlockDevice {
@@ -59,8 +77,7 @@ impl BlockDevice for VfsBlockDevice {
     }
 
     fn read_sectors(&self, lba: u64, _count: u64, buf: &mut [u8]) -> Result<(), BlockError> {
-        let fd = vfs_open(&self.path, abi::syscall::vfs_flags::O_RDONLY)
-            .map_err(|_| BlockError::IoError)?;
+        let fd = self.fd()?;
         let offset = lba * ISO_SECTOR_SIZE;
         vfs_seek(fd, offset as i64, 0).map_err(|_| BlockError::IoError)?;
 
@@ -70,12 +87,10 @@ impl BlockDevice for VfsBlockDevice {
                 Ok(0) => break,
                 Ok(n) => total += n,
                 Err(_) => {
-                    let _ = vfs_close(fd);
                     return Err(BlockError::IoError);
                 }
             }
         }
-        let _ = vfs_close(fd);
         if total == buf.len() { Ok(()) } else { Err(BlockError::IoError) }
     }
 }
@@ -98,7 +113,7 @@ fn decode_handle(h: u64) -> (u32, u32, bool) {
 
 const S_IFDIR: u32 = 0o040000;
 const S_IFREG: u32 = 0o100000;
-const MAX_READ_CHUNK: usize = 16 * 1024;
+const MAX_READ_CHUNK: usize = VFS_RPC_MAX_DATA;
 
 // ── VFS RPC dispatch ────────────────────────────────────────────────────────
 
@@ -106,7 +121,7 @@ fn dispatch_request(fs: &IsoFs, dev: &VfsBlockDevice, req: &ProviderRequest) -> 
     match req.op {
         VfsRpcOp::Lookup => handle_lookup(fs, dev, &req.payload),
         VfsRpcOp::Read => handle_read(dev, &req.payload),
-        VfsRpcOp::ReadIntoFd => ProviderResponse::err(Errno::ENOSYS),
+        VfsRpcOp::ReadIntoFd => handle_read_into_fd(dev, &req.payload),
         VfsRpcOp::Readdir => handle_readdir(fs, dev, &req.payload),
         VfsRpcOp::Stat => handle_stat(&req.payload),
         VfsRpcOp::Close | VfsRpcOp::SubscribeReady | VfsRpcOp::UnsubscribeReady => {
@@ -136,6 +151,9 @@ fn handle_lookup(fs: &IsoFs, dev: &VfsBlockDevice, payload: &[u8]) -> ProviderRe
 }
 
 fn handle_read(dev: &VfsBlockDevice, payload: &[u8]) -> ProviderResponse {
+    if payload.len() < 20 {
+        return ProviderResponse::err(Errno::EINVAL);
+    }
     let handle = u64::from_le_bytes(payload[0..8].try_into().unwrap());
     let offset = u64::from_le_bytes(payload[8..16].try_into().unwrap());
     let len = u32::from_le_bytes(payload[16..20].try_into().unwrap()) as usize;
@@ -153,6 +171,46 @@ fn handle_read(dev: &VfsBlockDevice, payload: &[u8]) -> ProviderResponse {
         Ok(data) => ProviderResponse::ok_read(&data),
         Err(_) => ProviderResponse::err(Errno::EIO),
     }
+}
+
+fn handle_read_into_fd(dev: &VfsBlockDevice, payload: &[u8]) -> ProviderResponse {
+    if payload.len() < 24 {
+        return ProviderResponse::err(Errno::EINVAL);
+    }
+    let handle = u64::from_le_bytes(payload[0..8].try_into().unwrap());
+    let offset = u64::from_le_bytes(payload[8..16].try_into().unwrap());
+    let len = u32::from_le_bytes(payload[16..20].try_into().unwrap()) as usize;
+    let dest_fd = u32::from_le_bytes(payload[20..24].try_into().unwrap());
+    let (lba, size, is_dir) = decode_handle(handle);
+
+    if is_dir {
+        return ProviderResponse::err(Errno::EISDIR);
+    }
+    if offset >= size as u64 || len == 0 {
+        return ProviderResponse::ok_written(0);
+    }
+
+    let iso_file = iso9660::IsoFile { extent_lba: lba, size };
+    let mut written = 0usize;
+    let total = len.min((size as u64 - offset) as usize);
+    while written < total {
+        let chunk_len = (total - written).min(MAX_READ_CHUNK);
+        let chunk_offset = offset + written as u64;
+        let data = match iso_file.read_range(dev, chunk_offset, chunk_len) {
+            Ok(data) => data,
+            Err(_) => return ProviderResponse::err(Errno::EIO),
+        };
+        if data.is_empty() {
+            break;
+        }
+        match vfs_write(dest_fd, &data) {
+            Ok(0) => break,
+            Ok(n) => written += n.min(data.len()),
+            Err(_) => return ProviderResponse::err(Errno::EIO),
+        }
+    }
+
+    ProviderResponse::ok_written(written as u32)
 }
 
 fn handle_readdir(fs: &IsoFs, dev: &VfsBlockDevice, payload: &[u8]) -> ProviderResponse {
@@ -324,7 +382,7 @@ fn try_mount_device(
     let _ = vfs_close(fd);
 
     info!("iso9660d: probing device {}", device_name);
-    let dev = VfsBlockDevice { path: device_path.to_string() };
+    let dev = VfsBlockDevice::new(device_path);
     let fs = IsoFs::probe(&dev)?;
     info!("iso9660d: found ISO9660 on device {}", device_name);
     let (w, r) = port_create(65536).ok()?;

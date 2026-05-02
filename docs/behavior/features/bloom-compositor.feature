@@ -13,7 +13,7 @@ Feature: Bloom compositor desktop behavior
     And the serial output should contain "bloom: service loop started" within 60s
     And the serial output should contain "bloom: output0" within 60s
     And the serial output should contain "bloom: pistil background renderer loaded from /lib/libpistil.so" within 60s
-    And the serial output should contain "bloom: pistil font text renderer loaded with default /share/fonts/Inter-Regular.ttf" within 60s
+    And the serial output should contain "bloom: pistil font text renderer loaded with default /public/fonts/Inter-Regular.ttf" within 60s
     And the serial output should contain "bloom: initial theme configured Solarized Warm" within 60s
     And the serial output should contain "bloom: watching theme config /session/desktop/theme" within 60s
     And the serial output should contain "bloom: watching wallpaper config /session/desktop/wallpaper" within 60s
@@ -32,10 +32,12 @@ Feature: Bloom compositor desktop behavior
     When I wait for the shell prompt
     And I type "echo Solarized Warm > /session/desktop/theme" on the serial console
     Then the serial output should contain "bloom: reacting to theme change: Solarized Warm -> Solarized Warm" within 60s
-    When I type "echo /share/wallpapers/flower.png > /session/desktop/wallpaper" on the serial console
+    When I type "echo /public/wallpapers/flower.png > /session/desktop/wallpaper" on the serial console
     Then the serial output should contain "bloom: reacting to wallpaper change" within 60s
-    When I type "echo /share/wallpapers/clouds.bmp > /session/desktop/wallpaper" on the serial console
-    Then the serial output should contain "/share/wallpapers/clouds.bmp" within 60s
+    When I type "echo /public/wallpapers/clouds.bmp > /session/desktop/wallpaper" on the serial console
+    Then the serial output should contain "/public/wallpapers/clouds.bmp" within 60s
+    When I type "echo /share/wallpapers/flower.png > /session/desktop/wallpaper" on the serial console
+    Then the serial output should contain "bloom: migrated wallpaper path /share/wallpapers/flower.png -> /public/wallpapers/flower.png" within 60s
     When I type "echo /nonexistent/bad.bmp > /session/desktop/wallpaper" on the serial console
     Then the serial output should contain "bloom: wallpaper decode failed" within 60s
     When I type "echo wallpaper-watch-idle" on the serial console

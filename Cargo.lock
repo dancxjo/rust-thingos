@@ -3971,6 +3971,7 @@ dependencies = [
  "abi",
  "ipc_helpers",
  "iso9660",
+ "spin",
  "stem",
 ]
 

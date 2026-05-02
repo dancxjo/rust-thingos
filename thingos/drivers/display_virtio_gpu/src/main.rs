@@ -421,6 +421,12 @@ const HANDLE_CARD: u64 = 1;
 const S_IFDIR: u32 = 0o040000;
 const S_IFCHR: u32 = 0o020000;
 
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+enum Accel2dBatchMode {
+    CpuBacking,
+    GpuResource,
+}
+
 /// All mutable state for the virtio GPU display driver.
 struct VirtioGpuDriver {
     gpu: VirtioGpu,
@@ -2413,6 +2419,12 @@ fn execute_accel2d(driver: &mut VirtioGpuDriver, call_payload: &[u8]) -> Provide
         return ProviderResponse::err(Errno::ENXIO);
     }
 
+    let mode = if accel2d_batch_can_use_gpu(driver, call_payload, batch_size, cmd_count) {
+        Accel2dBatchMode::GpuResource
+    } else {
+        Accel2dBatchMode::CpuBacking
+    };
+
     for i in 0..cmd_count {
         let off = batch_size + i * ACCEL2D_COMMAND_SIZE;
         let cmd: Accel2dCommand = unsafe {
@@ -2420,7 +2432,7 @@ fn execute_accel2d(driver: &mut VirtioGpuDriver, call_payload: &[u8]) -> Provide
                 call_payload[off..off + ACCEL2D_COMMAND_SIZE].as_ptr() as *const _
             )
         };
-        if let Err(e) = execute_accel2d_cmd(driver, idx, &cmd) {
+        if let Err(e) = execute_accel2d_cmd(driver, idx, &cmd, mode) {
             return ProviderResponse::err(e);
         }
     }
@@ -2428,17 +2440,68 @@ fn execute_accel2d(driver: &mut VirtioGpuDriver, call_payload: &[u8]) -> Provide
     ProviderResponse::ok_device_call(0, &[])
 }
 
+fn accel2d_batch_can_use_gpu(
+    driver: &VirtioGpuDriver,
+    call_payload: &[u8],
+    batch_size: usize,
+    cmd_count: usize,
+) -> bool {
+    if driver.virgl_ctx_id == 0 || driver.virgl_src_res_id == 0 {
+        return false;
+    }
+
+    let mut saw_gpu_draw = false;
+    for i in 0..cmd_count {
+        let off = batch_size + i * ACCEL2D_COMMAND_SIZE;
+        let cmd: Accel2dCommand = unsafe {
+            core::ptr::read_unaligned(
+                call_payload[off..off + ACCEL2D_COMMAND_SIZE].as_ptr() as *const _
+            )
+        };
+        match cmd.kind {
+            ACCEL2D_CMD_COPY_RECT => {
+                let c = unsafe { cmd.body.copy_rect };
+                if !accel2d_rect_fits_staging(driver, c.src_rect) {
+                    return false;
+                }
+                saw_gpu_draw = true;
+            }
+            ACCEL2D_CMD_ALPHA_BLIT => {
+                let c = unsafe { cmd.body.alpha_blit };
+                if !accel2d_rect_fits_staging(driver, c.src_rect) {
+                    return false;
+                }
+                saw_gpu_draw = true;
+            }
+            ACCEL2D_CMD_FLUSH_DAMAGE => {}
+            _ => return false,
+        }
+    }
+
+    saw_gpu_draw
+}
+
+fn accel2d_rect_fits_staging(driver: &VirtioGpuDriver, rect: abi::display_protocol::Rect) -> bool {
+    let Some(pixels) = (rect.w as usize).checked_mul(rect.h as usize) else {
+        return false;
+    };
+    let Some(bytes) = pixels.checked_mul(4) else {
+        return false;
+    };
+    bytes <= driver.virgl_blend_staging_size
+}
+
 /// Execute a single 2D acceleration command against `driver.frame_pool[idx]`.
 ///
-/// For `ACCEL2D_CMD_COPY_RECT` and `ACCEL2D_CMD_ALPHA_BLIT`, the GPU (virgl)
-/// path is attempted first; if the GPU subsystem is not ready (`ENOSYS`), the
-/// command silently falls back to the CPU path.  All other commands always use
-/// the CPU path.  The `accel2d_gpu_cmds` / `accel2d_cpu_cmds` counters are
-/// updated accordingly for diagnostics.
+/// For batches made entirely of GPU-safe `COPY_RECT` / `ALPHA_BLIT` draws plus
+/// `FLUSH_DAMAGE`, commands target the virgl resource directly. Mixed batches
+/// use the CPU backing store for every command so `FLUSH_DAMAGE` can safely
+/// upload the final pixels without overwriting GPU-rendered planes.
 fn execute_accel2d_cmd(
     driver: &mut VirtioGpuDriver,
     idx: usize,
     cmd: &Accel2dCommand,
+    mode: Accel2dBatchMode,
 ) -> abi::errors::SysResult<()> {
     match cmd.kind {
         ACCEL2D_CMD_CLEAR_RECT => {
@@ -2455,24 +2518,24 @@ fn execute_accel2d_cmd(
                     validate_accel2d_src_format(s.format)?;
                     Ok(*s)
                 })?;
-            // Try GPU path first; fall back to CPU on ENOSYS.
+            if mode == Accel2dBatchMode::CpuBacking {
+                trace!("display_virtio_gpu: [batch {}] copy_rect using CPU", idx);
+                driver.accel2d_cpu_cmds = driver.accel2d_cpu_cmds.saturating_add(1);
+                return accel2d_copy_rect(
+                    driver,
+                    idx,
+                    c.src_buffer,
+                    c.dst_buffer,
+                    c.src_rect,
+                    c.dst_rect,
+                );
+            }
+
             match gpu_accel2d_copy_rect(driver, idx, &src_snapshot, c.src_rect, c.dst_rect) {
                 Ok(()) => {
                     trace!("display_virtio_gpu: [batch {}] copy_rect using GPU", idx);
                     driver.accel2d_gpu_cmds = driver.accel2d_gpu_cmds.saturating_add(1);
                     Ok(())
-                }
-                Err(abi::errors::Errno::ENOSYS) => {
-                    trace!("display_virtio_gpu: [batch {}] copy_rect using CPU", idx);
-                    driver.accel2d_cpu_cmds = driver.accel2d_cpu_cmds.saturating_add(1);
-                    accel2d_copy_rect(
-                        driver,
-                        idx,
-                        c.src_buffer,
-                        c.dst_buffer,
-                        c.src_rect,
-                        c.dst_rect,
-                    )
                 }
                 Err(e) => {
                     warn!(
@@ -2497,7 +2560,20 @@ fn execute_accel2d_cmd(
                     validate_accel2d_src_format(s.format)?;
                     Ok(*s)
                 })?;
-            // Try GPU path first; fall back to CPU on ENOSYS.
+            if mode == Accel2dBatchMode::CpuBacking {
+                trace!("display_virtio_gpu: [batch {}] alpha_blit using CPU", idx);
+                driver.accel2d_cpu_cmds = driver.accel2d_cpu_cmds.saturating_add(1);
+                return accel2d_alpha_blit(
+                    driver,
+                    idx,
+                    c.src_buffer,
+                    c.dst_buffer,
+                    c.src_rect,
+                    c.dst_rect,
+                    c.global_alpha,
+                );
+            }
+
             match gpu_accel2d_alpha_blit(
                 driver,
                 idx,
@@ -2510,19 +2586,6 @@ fn execute_accel2d_cmd(
                     trace!("display_virtio_gpu: [batch {}] alpha_blit using GPU", idx);
                     driver.accel2d_gpu_cmds = driver.accel2d_gpu_cmds.saturating_add(1);
                     Ok(())
-                }
-                Err(abi::errors::Errno::ENOSYS) => {
-                    trace!("display_virtio_gpu: [batch {}] alpha_blit using CPU", idx);
-                    driver.accel2d_cpu_cmds = driver.accel2d_cpu_cmds.saturating_add(1);
-                    accel2d_alpha_blit(
-                        driver,
-                        idx,
-                        c.src_buffer,
-                        c.dst_buffer,
-                        c.src_rect,
-                        c.dst_rect,
-                        c.global_alpha,
-                    )
                 }
                 Err(e) => {
                     warn!(
@@ -2562,7 +2625,7 @@ fn execute_accel2d_cmd(
         }
         ACCEL2D_CMD_FLUSH_DAMAGE => {
             let c = unsafe { cmd.body.flush_damage };
-            accel2d_flush_damage(driver, idx, &c)
+            accel2d_flush_damage(driver, idx, &c, mode)
         }
         _ => Err(Errno::ENOSYS),
     }
@@ -2806,6 +2869,7 @@ fn accel2d_flush_damage(
     driver: &mut VirtioGpuDriver,
     idx: usize,
     cmd: &abi::display::accel2d::FlushDamageCmd,
+    mode: Accel2dBatchMode,
 ) -> abi::errors::SysResult<()> {
     if driver.frame_pool.is_empty() {
         return Err(Errno::ENXIO);
@@ -2837,12 +2901,17 @@ fn accel2d_flush_damage(
     }
     note_damage_snapshot(driver, &damage_rects);
 
-    // Transfer each damaged region to the GPU resource, then flush.
+    // CPU batches render into the guest backing store and must upload the
+    // damaged bytes before flushing. GPU batches have already rendered into
+    // the virtio resource; uploading here would overwrite the GPU result with
+    // stale backing memory, which makes alpha-blit planes like cursors vanish.
     let stride = driver.disp_stride;
     for dmg in &damage_rects {
-        if let Err(e) = driver.gpu.transfer_to_host_with_stride(res_id, *dmg, stride) {
-            stem::warn!("ACCEL2D: transfer_to_host failed: {}", e);
-            return Err(Errno::EIO);
+        if mode == Accel2dBatchMode::CpuBacking {
+            if let Err(e) = driver.gpu.transfer_to_host_with_stride(res_id, *dmg, stride) {
+                stem::warn!("ACCEL2D: transfer_to_host failed: {}", e);
+                return Err(Errno::EIO);
+            }
         }
         if let Err(e) = driver.gpu.flush_resource(res_id, *dmg) {
             stem::warn!("ACCEL2D: flush_resource failed: {}", e);

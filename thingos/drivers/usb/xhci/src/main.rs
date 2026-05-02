@@ -1514,7 +1514,7 @@ impl UsbBlockProvider {
                 let s_lba = abs_offset / sector_size;
                 let e_lba = (abs_offset + actual_len as u64 - 1) / sector_size;
                 let count = e_lba - s_lba + 1;
-                info!(
+                debug!(
                     "ums: partition read offset={} len={} abs_lba={} count={}",
                     offset, actual_len, s_lba, count
                 );

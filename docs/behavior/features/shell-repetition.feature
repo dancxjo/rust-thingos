@@ -19,3 +19,5 @@ Feature: Shell Command Repetition
     And I type "ls" on the serial console
     And I type "ls" on the serial console
     Then the command output should contain "bin"
+    And the latest serial output should not contain "spawn failed: connection timed out"
+    And the latest serial output should not contain "VFS RPC: TIMEOUT"
