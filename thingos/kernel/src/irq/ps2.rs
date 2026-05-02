@@ -95,6 +95,9 @@ const SCANCODE_MAP_SHIFT: &[u8] =
 pub fn buffer_scancode(byte: u8, is_aux: bool) -> bool {
     let val = byte as u16 | ((is_aux as u16) << 8);
     PS2_QUEUE.push(val);
+    if is_aux {
+        return false;
+    }
     update_pause_hotkey_state(byte)
 }
 
@@ -132,7 +135,6 @@ pub fn take_log_level_hotkey() -> Option<u8> {
         level => Some((level - 1) as u8),
     }
 }
-
 
 fn update_pause_hotkey_state(byte: u8) -> bool {
     match byte {
@@ -255,6 +257,18 @@ mod tests {
     }
 
     #[test]
+    fn aux_bytes_do_not_drive_keyboard_hotkeys() {
+        reset_state();
+
+        assert!(!buffer_scancode(0x38, false));
+        assert!(!buffer_scancode(0x58, true));
+        assert!(!take_terminal_hotkey());
+        assert!(!buffer_scancode(0x3B, true));
+        assert_eq!(take_log_level_hotkey(), None);
+        assert_eq!(crate::logging::get_log_level(), 3);
+    }
+
+    #[test]
     fn right_alt_triggers_combo() {
         reset_state();
 
@@ -296,17 +310,17 @@ mod tests {
     #[test]
     fn plain_f1_cycles_log_level_once_per_press() {
         reset_state();
- 
+
         assert_eq!(crate::logging::get_log_level(), 3);
         assert!(!buffer_scancode(0x3B, false));
         assert_eq!(take_log_level_hotkey(), Some(4));
         assert_eq!(crate::logging::get_log_level(), 4);
- 
+
         // Typematic repeat while held should not cycle.
         assert!(!buffer_scancode(0x3B, false));
         assert_eq!(take_log_level_hotkey(), None);
         assert_eq!(crate::logging::get_log_level(), 4);
- 
+
         assert!(!buffer_scancode(0xBB, false));
         assert!(!buffer_scancode(0x3B, false));
         assert_eq!(take_log_level_hotkey(), Some(5));
@@ -317,11 +331,11 @@ mod tests {
     fn f1_cycle_wraps_through_off() {
         reset_state();
         crate::logging::set_log_level(5);
- 
+
         assert!(!buffer_scancode(0x3B, false));
         assert_eq!(take_log_level_hotkey(), Some(0));
         assert_eq!(crate::logging::get_log_level(), 0);
- 
+
         assert!(!buffer_scancode(0xBB, false));
         assert!(!buffer_scancode(0x3B, false));
         assert_eq!(take_log_level_hotkey(), Some(1));

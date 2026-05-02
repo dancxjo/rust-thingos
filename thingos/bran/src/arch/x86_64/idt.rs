@@ -883,7 +883,11 @@ fn reboot_from_ctrl_alt_del() -> ! {
     runtime.reboot();
 }
 
-fn capture_ps2_keyboard(max_reads: usize) -> (bool, bool, bool, Option<u8>, usize) {
+fn capture_ps2_keyboard(
+    max_reads: usize,
+    consume_action_hotkeys: bool,
+    trace_bytes: bool,
+) -> (bool, bool, bool, Option<u8>, usize) {
     let mut pause_dump = false;
     let mut f12_press = false;
     let mut ctrl_alt_del = false;
@@ -898,7 +902,9 @@ fn capture_ps2_keyboard(max_reads: usize) -> (bool, bool, bool, Option<u8>, usiz
         let is_aux = (status & PS2_STATUS_AUX_DATA) != 0;
         let byte = raw_inb(PS2_DATA_PORT);
         captured += 1;
-        kernel::ktrace!("PS/2 byte received: 0x{:02x} (is_aux={})", byte, is_aux);
+        if trace_bytes {
+            kernel::ktrace!("PS/2 byte received: 0x{:02x} (is_aux={})", byte, is_aux);
+        }
 
         if is_aux {
             kernel::irq::ps2::buffer_scancode(byte, true);
@@ -911,11 +917,13 @@ fn capture_ps2_keyboard(max_reads: usize) -> (bool, bool, bool, Option<u8>, usiz
         if kernel::irq::ps2::buffer_scancode(byte, false) {
             pause_dump = true;
         }
-        if kernel::irq::ps2::take_terminal_hotkey() {
-            f12_press = true;
-        }
-        if let Some(level) = kernel::irq::ps2::take_log_level_hotkey() {
-            log_level = Some(level);
+        if consume_action_hotkeys {
+            if kernel::irq::ps2::take_terminal_hotkey() {
+                f12_press = true;
+            }
+            if let Some(level) = kernel::irq::ps2::take_log_level_hotkey() {
+                log_level = Some(level);
+            }
         }
     }
 
@@ -953,7 +961,9 @@ fn capture_pause_reboot_hotkey(max_reads: usize) -> bool {
 }
 
 fn capture_ps2_keyboard_irq() -> (bool, bool, bool) {
-    let (pause, f12, ctrl_alt_del, log_level, _) = capture_ps2_keyboard(32);
+    let (pause, mut f12, ctrl_alt_del, mut log_level, _) = capture_ps2_keyboard(32, true, false);
+    f12 |= kernel::irq::ps2::take_terminal_hotkey();
+    log_level = log_level.or_else(kernel::irq::ps2::take_log_level_hotkey);
     if let Some(level) = log_level {
         announce_log_level_hotkey(level);
     }
@@ -961,7 +971,10 @@ fn capture_ps2_keyboard_irq() -> (bool, bool, bool) {
 }
 
 fn poll_ps2_keyboard_fallback() -> (bool, bool) {
-    let (pause_dump, f12_press, ctrl_alt_del, log_level, captured) = capture_ps2_keyboard(8);
+    let (pause_dump, mut f12_press, ctrl_alt_del, mut log_level, captured) =
+        capture_ps2_keyboard(8, true, false);
+    f12_press |= kernel::irq::ps2::take_terminal_hotkey();
+    log_level = log_level.or_else(kernel::irq::ps2::take_log_level_hotkey);
     if let Some(level) = log_level {
         announce_log_level_hotkey(level);
     }
@@ -1410,22 +1423,14 @@ pub extern "C" fn rust_nmi_handler(snapshot: &IrqRegisterSnapshot) {
         crate::arch::x86_64::hcf();
     }
 
-    let count = IRQ1_COUNT.fetch_add(1, Ordering::Relaxed) + 1;
-    let (pause_dump, f12_press, ctrl_alt_del, log_level, captured) = capture_ps2_keyboard(32);
-    if let Some(level) = log_level {
-        announce_log_level_hotkey(level);
-    }
+    IRQ1_COUNT.fetch_add(1, Ordering::Relaxed);
+    let (pause_dump, _f12_press, ctrl_alt_del, _log_level, captured) =
+        capture_ps2_keyboard(32, false, false);
     if ctrl_alt_del {
         reboot_from_ctrl_alt_del();
     }
-    if f12_press {
-        activate_terminal_and_spawn_shell();
-    }
 
     if captured != 0 {
-        if count <= 3 || (count % 128 == 0) {
-            kernel::kdebug!("PS/2 keyboard NMI fired (count={})", count);
-        }
         kernel::irq::dispatch_irq(0x21);
     }
 
@@ -1465,8 +1470,8 @@ pub extern "C" fn rust_irq_handler(vector: u64, irq_snapshot: *const IrqRegister
     }
 
     if resolved == 0x2C {
-        let count = IRQ12_COUNT.fetch_add(1, Ordering::Relaxed) + 1;
-        let _ = capture_ps2_keyboard(32);
+        IRQ12_COUNT.fetch_add(1, Ordering::Relaxed);
+        let _ = capture_ps2_keyboard(32, false, false);
     }
 
     // Send EOI to Local APIC early to avoid wedging during context switch
