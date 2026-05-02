@@ -26,10 +26,7 @@ const STRESS_SETTLE_MS: u64 = 15;
 /// pair (key-down + key-up, or mouse rel move) counts as one event unit toward
 /// `count`.
 #[when(regex = r#"^I stress PS/2 input with (\d+) high-frequency events$"#)]
-async fn stress_ps2_input(
-    world: &mut ThingOsWorld,
-    count: u64,
-) -> Result<(), StepError> {
+async fn stress_ps2_input(world: &mut ThingOsWorld, count: u64) -> Result<(), StepError> {
     let settle = std::time::Duration::from_millis(STRESS_SETTLE_MS);
     // Upper bound: even events emit 2 commands (key-down + key-up),
     // odd events emit 1 command (mouse-move).  Maximum is count * 2.

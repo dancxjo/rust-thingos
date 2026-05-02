@@ -69,7 +69,7 @@ Feature: blossom xdg-shell lifecycle
     Then the Wayland hello client should be visible
     And the compositor should render themed window bodies
     And active window chrome button glyphs should be centered inside their buttons
-    And active window chrome should be rendered with flat thick borders
+    And active window chrome should be rendered with beveled gradient borders
     And active window chrome should include facet frame focus accents
 
   @pointer-debug @wayland-visible

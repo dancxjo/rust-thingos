@@ -49,6 +49,9 @@ pub struct InputState {
     visible_x: i32,
     visible_y: i32,
     pending_cursor_motion: bool,
+    deferred_cursor_target: Option<(i32, i32)>,
+    deferred_cursor_latest_ts: Option<u64>,
+    deferred_cursor_events: u32,
     /// Timestamp of the most recent coalesced PointerMove event awaiting
     /// delivery to clients.  Multiple raw motion samples between frames are
     /// collapsed here so focus lookup and client delivery happen only once per
@@ -93,6 +96,9 @@ impl InputState {
             visible_x: pointer_x,
             visible_y: pointer_y,
             pending_cursor_motion: false,
+            deferred_cursor_target: None,
+            deferred_cursor_latest_ts: None,
+            deferred_cursor_events: 0,
             pending_motion_ts: None,
             pointer_overlay_enabled: false,
             primary_button_down: false,
@@ -121,6 +127,10 @@ impl InputState {
         self.pointer_y = self.pointer_y.clamp(0, self.output_h.saturating_sub(1));
         self.visible_x = self.visible_x.clamp(0, self.output_w.saturating_sub(1));
         self.visible_y = self.visible_y.clamp(0, self.output_h.saturating_sub(1));
+        if let Some((x, y)) = self.deferred_cursor_target.as_mut() {
+            *x = (*x).clamp(0, self.output_w.saturating_sub(1));
+            *y = (*y).clamp(0, self.output_h.saturating_sub(1));
+        }
         self.pending_cursor_motion |=
             self.pointer_x != self.visible_x || self.pointer_y != self.visible_y;
     }
@@ -250,12 +260,55 @@ impl InputState {
         send_wayland_configure(wayland_evt_write, surface_id, width, height, true);
     }
 
+    pub fn replay_deferred_cursor_motion(
+        &mut self,
+        scene: &mut Scene,
+        damage: &mut DamageTracker,
+        wayland_evt_write: Option<u32>,
+    ) -> bool {
+        let Some((target_x, target_y)) = self.deferred_cursor_target.take() else {
+            return false;
+        };
+        let timestamp_ns = self.deferred_cursor_latest_ts.take();
+        let event_count = core::mem::take(&mut self.deferred_cursor_events);
+        let old_x = self.pointer_x;
+        let old_y = self.pointer_y;
+        if target_x == old_x && target_y == old_y {
+            stem::debug!(
+                "bloom: discarded {} deferred cursor motion events at cursor boundary",
+                event_count
+            );
+            return false;
+        }
+
+        self.pointer_x = target_x;
+        self.pointer_y = target_y;
+        self.pending_cursor_motion = true;
+        if let Some(ts) = timestamp_ns {
+            self.pending_motion_ts = Some(ts);
+        }
+        COALESCE_PRE.fetch_add(event_count, Ordering::Relaxed);
+        stem::info!(
+            "bloom: replayed {} deferred cursor motion events pos={},{}",
+            event_count,
+            self.pointer_x,
+            self.pointer_y
+        );
+
+        if self.update_pointer_grab(scene, damage, wayland_evt_write) {
+            return true;
+        }
+        self.update_cursor_kind(scene, damage);
+        true
+    }
+
     pub fn handle_bristle_event(
         &mut self,
         bytes: &[u8],
         scene: &mut Scene,
         damage: &mut DamageTracker,
         wayland_evt_write: Option<u32>,
+        defer_cursor_motion: bool,
     ) -> bool {
         let mut immediate_repaint = false;
         if bytes.len() < BristleEventHeader::SIZE {
@@ -279,6 +332,10 @@ impl InputState {
                 let move_ev = PointerMovePayload::from_bytes(&p);
                 let dx = move_ev.dx;
                 let dy = move_ev.dy;
+                if defer_cursor_motion {
+                    self.defer_cursor_motion(dx, dy, timestamp_ns);
+                    return false;
+                }
                 let old_x = self.pointer_x;
                 let old_y = self.pointer_y;
                 self.pointer_x = self
@@ -1026,6 +1083,26 @@ impl InputState {
         self.pending_cursor_motion = true;
         mark_cursor_rect(damage, self.visible_x, self.visible_y);
         stem::debug!("bloom: cursor kind {:?}", next);
+    }
+
+    fn defer_cursor_motion(&mut self, dx: i16, dy: i16, timestamp_ns: u64) {
+        let (old_x, old_y) =
+            self.deferred_cursor_target.unwrap_or((self.pointer_x, self.pointer_y));
+        let next_x = old_x.saturating_add(dx as i32).clamp(0, self.output_w.saturating_sub(1));
+        let next_y = old_y.saturating_add(dy as i32).clamp(0, self.output_h.saturating_sub(1));
+        self.deferred_cursor_target = Some((next_x, next_y));
+        self.deferred_cursor_latest_ts = Some(timestamp_ns);
+        self.deferred_cursor_events = self.deferred_cursor_events.saturating_add(1);
+        if POINTER_MOVE_LOGS.fetch_add(1, Ordering::Relaxed) < MAX_STARTUP_LOGS {
+            stem::trace!(
+                "bloom: deferred cursor motion dx={} dy={} queued={} target={},{}",
+                dx,
+                dy,
+                self.deferred_cursor_events,
+                next_x,
+                next_y
+            );
+        }
     }
 
     fn send_keyboard_focus_events(

@@ -17,6 +17,7 @@ Feature: Bloom compositor desktop behavior
     And the serial output should contain "bloom: initial theme configured Solarized Warm" within 60s
     And the serial output should contain "bloom: watching theme config /session/desktop/theme" within 60s
     And the serial output should contain "bloom: watching wallpaper config /session/desktop/wallpaper" within 60s
+    And the serial output should contain "bloom: built-in busy cursor ready" within 60s
     And the serial output should contain "bloom: cursor ready" within 60s
     And the serial output should contain "bloom: deferred visual resources ready" within 60s
     And the serial output should contain "size=96x96" within 60s

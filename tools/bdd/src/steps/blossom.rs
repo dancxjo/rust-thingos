@@ -33,8 +33,11 @@ fn is_paper_text_pixel(pixel: [u8; 3]) -> bool {
 fn is_chrome_border_pixel(pixel: [u8; 3]) -> bool {
     color_close(pixel, [0x0F, 0x0C, 0x18], 16)
         || color_close(pixel, [0x1A, 0x14, 0x24], 18)
+        || color_close(pixel, [0x2C, 0x21, 0x40], 18)
+        || color_close(pixel, [0x14, 0x10, 0x1D], 18)
         || color_close(pixel, [0x23, 0x1A, 0x33], 18)
         || color_close(pixel, [0x2A, 0x1F, 0x3A], 18)
+        || color_close(pixel, [0x6D, 0x53, 0xD9], 24)
         || color_close(pixel, [0x7C, 0x5C, 0xFF], 24)
         || color_close(pixel, [0xB8, 0xA8, 0xFF], 24)
 }
@@ -778,15 +781,15 @@ async fn active_window_chrome_button_glyphs_are_centered_inside_their_buttons(
     )))
 }
 
-#[then("active window chrome should be rendered with flat thick borders")]
-async fn active_window_chrome_should_be_rendered_with_flat_thick_borders(
+#[then("active window chrome should be rendered with beveled gradient borders")]
+async fn active_window_chrome_should_be_rendered_with_beveled_gradient_borders(
     world: &mut ThingOsWorld,
 ) -> Result<(), StepError> {
     let _ = world.wait_for_serial("First frame rendered", 60.0).await;
 
     let start = std::time::Instant::now();
     let timeout = std::time::Duration::from_secs(30);
-    let mut last = (0u32, 0u32, 0u32, 0u32);
+    let mut last = (0u32, 0u32, 0u32, 0u32, 0u32, 0u32);
     let mut attempt = 0u32;
 
     while start.elapsed() < timeout {
@@ -822,28 +825,68 @@ async fn active_window_chrome_should_be_rendered_with_flat_thick_borders(
             }
         }
         if best_count < 200 {
-            last = (best_row, best_count, 0, 0);
+            last = (best_row, best_count, 0, 0, 0, 0);
             tokio::time::sleep(std::time::Duration::from_millis(500)).await;
             continue;
         }
 
         let mut thick_rows = 0u32;
+        let mut bevel_light_pixels = 0u32;
+        let mut bevel_shadow_pixels = 0u32;
+        let mut title_top_pixels = 0u32;
+        let mut title_bottom_pixels = 0u32;
         for y in 0..max_y {
             let mut count = 0u32;
             for x in 0..max_x {
-                if is_window_chrome_pixel(img.get_pixel(x, y).0) {
+                let pixel = img.get_pixel(x, y).0;
+                if is_window_chrome_pixel(pixel) {
                     count += 1;
+                }
+                if color_close(pixel, [0x6D, 0x53, 0xD9], 24)
+                    || color_close(pixel, [0x7C, 0x5C, 0xFF], 24)
+                {
+                    bevel_light_pixels += 1;
+                }
+                if color_close(pixel, [0x08, 0x06, 0x0C], 12)
+                    || color_close(pixel, [0x0F, 0x0C, 0x18], 16)
+                {
+                    bevel_shadow_pixels += 1;
+                }
+                if color_close(pixel, [0x2C, 0x21, 0x40], 18) {
+                    title_top_pixels += 1;
+                }
+                if color_close(pixel, [0x14, 0x10, 0x1D], 18) {
+                    title_bottom_pixels += 1;
                 }
             }
             if count >= 200 {
                 thick_rows += 1;
             }
         }
-        last = (best_row, best_count, thick_rows, 0);
-        if best_count >= 300 && thick_rows >= 6 {
+        last = (
+            best_row,
+            best_count,
+            thick_rows,
+            bevel_light_pixels,
+            bevel_shadow_pixels,
+            title_top_pixels.min(title_bottom_pixels),
+        );
+        if best_count >= 300
+            && thick_rows >= 6
+            && bevel_light_pixels >= 20
+            && bevel_shadow_pixels >= 80
+            && title_top_pixels >= 80
+            && title_bottom_pixels >= 80
+        {
             eprintln!(
-                "│  │  │      Active chrome has flat thick border geometry (row={}, row_pixels={}, thick_rows={})",
-                best_row, best_count, thick_rows
+                "│  │  │      Active chrome has beveled gradient border geometry (row={}, row_pixels={}, thick_rows={}, light={}, shadow={}, title_top={}, title_bottom={})",
+                best_row,
+                best_count,
+                thick_rows,
+                bevel_light_pixels,
+                bevel_shadow_pixels,
+                title_top_pixels,
+                title_bottom_pixels
             );
             return Ok(());
         }
@@ -852,8 +895,8 @@ async fn active_window_chrome_should_be_rendered_with_flat_thick_borders(
     }
 
     Err(StepError(format!(
-        "Active chrome did not have flat thick border geometry (best_row={}, row_pixels={}, thick_rows={}, unused={})",
-        last.0, last.1, last.2, last.3
+        "Active chrome did not have beveled gradient border geometry (best_row={}, row_pixels={}, thick_rows={}, light={}, shadow={}, title_gradient_min={})",
+        last.0, last.1, last.2, last.3, last.4, last.5
     )))
 }
 

@@ -30,13 +30,8 @@ const KERNEL_MARKERS: &[&str] = &[
 ];
 
 /// Serial-log substrings that confirm at least one userspace process is running.
-const USERSPACE_MARKERS: &[&str] = &[
-    "SPROUT:",
-    "CAMBIUM:",
-    "sprout: service",
-    "BOOT: heartbeat",
-    "BOOT: ready",
-];
+const USERSPACE_MARKERS: &[&str] =
+    &["SPROUT:", "CAMBIUM:", "sprout: service", "BOOT: heartbeat", "BOOT: ready"];
 
 /// Serial-log substrings that confirm the graphical desktop is up.
 const DESKTOP_MARKERS: &[&str] = &[
@@ -160,11 +155,7 @@ impl BootPhaseTracker {
 
     /// Classify a freeze/stall event.  Returns a string tag used in log output.
     fn classify_freeze(&self) -> &'static str {
-        if !self.kernel_seen {
-            "pre_kernel_hunter_false_positive"
-        } else {
-            "os_freeze"
-        }
+        if !self.kernel_seen { "pre_kernel_hunter_false_positive" } else { "os_freeze" }
     }
 
     /// Mark the current run as stalled.  If the kernel was previously observed
@@ -329,7 +320,10 @@ async fn run_session(
         &mut log_file,
         format_args!(
             "session={session_id:04} arch={} timeout={:?} desktop_ready_timeout={:?} loglevel={} ps2_input_mode={}",
-            config.arch, config.timeout, config.desktop_ready_timeout, config.loglevel,
+            config.arch,
+            config.timeout,
+            config.desktop_ready_timeout,
+            config.loglevel,
             config.ps2_input_mode
         ),
     )?;
@@ -461,10 +455,7 @@ async fn wait_for_desktop_readiness(
 
         let log = world.get_serial_log().await;
         if tracker.update(&log) {
-            write_hunter_event(
-                log_file,
-                format_args!("boot phase advanced: {}", tracker.phase),
-            )?;
+            write_hunter_event(log_file, format_args!("boot phase advanced: {}", tracker.phase))?;
         }
         if append_serial_delta(log_file, &log, last_len)? {
             *last_output = Instant::now();
@@ -574,13 +565,9 @@ async fn capture_freeze_artifacts(
     tracker: &BootPhaseTracker,
 ) {
     let classification = tracker.classify_freeze();
-    let screenshot_path = config
-        .log_dir
-        .join(format!("rust_run_{session_id:04}_freeze_{classification}"));
-    eprintln!(
-        "[hunter] classification={classification} phase={}",
-        tracker.phase
-    );
+    let screenshot_path =
+        config.log_dir.join(format!("rust_run_{session_id:04}_freeze_{classification}"));
+    eprintln!("[hunter] classification={classification} phase={}", tracker.phase);
     match world.take_screenshot(&screenshot_path).await {
         Ok(path) => eprintln!("[hunter] screenshot={}", path.display()),
         Err(err) => eprintln!("[hunter] screenshot failed: {err}"),

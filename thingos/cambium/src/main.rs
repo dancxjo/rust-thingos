@@ -195,6 +195,11 @@ fn path_exists(path: &str) -> bool {
 fn run_daemon_mode() -> ! {
     stem::info!("CAMBIUM: starting device discovery manager (daemon mode)");
 
+    let fallback_bootfb = is_fallback_bootfb();
+    if fallback_bootfb {
+        stem::info!("CAMBIUM: booted with fallback bootfb; skipping alternate display drivers");
+    }
+
     let mut drivers: BTreeMap<String, ManagedDriver> = BTreeMap::new();
     let mut catalog = Catalog::new();
     let mut observed_pids: BTreeMap<u64, ()> = BTreeMap::new();
@@ -203,7 +208,7 @@ fn run_daemon_mode() -> ! {
     catalog.scan();
 
     match scan_devices() {
-        Ok(devices) => reconcile_devices(&mut drivers, &catalog, devices),
+        Ok(devices) => reconcile_devices(&mut drivers, &catalog, devices, fallback_bootfb),
         Err(err) => warn!("CAMBIUM: initial scan of /sys/devices failed: {:?}", err),
     }
     register_observers_for_running(&mut drivers, &mut observed_pids);
@@ -314,7 +319,7 @@ fn run_daemon_mode() -> ! {
         if reconcile_due {
             match scan_devices() {
                 Ok(devices) => {
-                    reconcile_devices(&mut drivers, &catalog, devices);
+                    reconcile_devices(&mut drivers, &catalog, devices, fallback_bootfb);
                     register_observers_for_running(&mut drivers, &mut observed_pids);
                 }
                 Err(err) => warn!("CAMBIUM: scan of /sys/devices failed: {:?}", err),
@@ -529,6 +534,7 @@ fn reconcile_devices(
     drivers: &mut BTreeMap<String, ManagedDriver>,
     catalog: &Catalog,
     devices: Vec<SysDevice>,
+    fallback_bootfb: bool,
 ) {
     let mut seen = BTreeMap::new();
 
@@ -593,6 +599,14 @@ fn reconcile_devices(
                 );
                 continue;
             }
+            if fallback_bootfb && entry.driver_class == DriverClass::Display {
+                stem::info!(
+                    "CAMBIUM: fallback bootfb mode skipping display driver '{}' for {}",
+                    entry.path,
+                    device.slot
+                );
+                continue;
+            }
             if entry.driver_class == DriverClass::Audio && path_exists(SPROUT_EARLY_AUDIO_MARKER) {
                 stem::debug!(
                     "CAMBIUM: skipping audio driver '{}' for {}; Sprout owns early audio",
@@ -647,6 +661,24 @@ fn reconcile_devices(
 fn should_skip_for_display_input_isolation(driver_class: DriverClass, path: &str) -> bool {
     let _ = path;
     DISPLAY_INPUT_ISOLATION && matches!(driver_class, DriverClass::Net | DriverClass::Audio)
+}
+
+fn is_fallback_bootfb() -> bool {
+    match vfs_open("/sys/boot/cmdline", O_RDONLY) {
+        Ok(fd) => {
+            let mut buf = [0u8; 512];
+            let res = vfs_read(fd, &mut buf);
+            let _ = vfs_close(fd);
+            match res {
+                Ok(len) => {
+                    let cmdline = core::str::from_utf8(&buf[..len]).unwrap_or("");
+                    cmdline.contains("display=bootfb")
+                }
+                Err(_) => false,
+            }
+        }
+        Err(_) => false,
+    }
 }
 
 // ── argv helper ──────────────────────────────────────────────────────────────

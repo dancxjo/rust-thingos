@@ -609,6 +609,8 @@ fn limine_modules(
     }
 
     modules.push_str("    module_path: boot():/public/fonts/unifont.hex\n");
+    modules.push_str("    module_path: boot():/public/wallpapers/flower.png\n");
+    modules.push_str("    module_path: boot():/public/cursors/future/default.svg\n");
     modules.push_str("    module_path: boot():/etc/roots/boot\n");
     if include_default_shell && !safe_shell_only {
         modules.push_str("    module_path: boot():/etc/default/shell\n");

@@ -163,6 +163,7 @@ fn main(_arg: usize) -> ! {
 
     info!("bloom.phase=init_cursor");
     if !minimal_mode {
+        visuals.prepare_busy_cursor(&display);
         stem::info!("bloom: cursor init deferred until visual resources are ready");
     } else {
         stem::info!("bloom: skipping cursor init (minimal mode)");

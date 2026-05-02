@@ -39,6 +39,27 @@ const DEFAULT_FONT_PATH: &str = "/public/fonts/Inter-Regular.ttf";
 const SYMBOL_FONT_PATH: &str = "/public/fonts/NotoSansSymbol2-Regular.ttf";
 const CURSOR_SIZE: u32 = 48;
 const CURSOR_PIXELS: usize = (CURSOR_SIZE * CURSOR_SIZE) as usize;
+const BUSY_CURSOR_MASK_SIZE: u32 = 24;
+const BUSY_CURSOR_MASK_STRIDE: usize = 3;
+const BUSY_CURSOR_SCALE: u32 = CURSOR_SIZE / BUSY_CURSOR_MASK_SIZE;
+const BUSY_CURSOR_HOTSPOT_X: u32 = CURSOR_SIZE / 2;
+const BUSY_CURSOR_HOTSPOT_Y: u32 = CURSOR_SIZE / 2;
+const BUSY_CURSOR_FRAME: u32 = 0xFF15171F;
+const BUSY_CURSOR_FRAME_LIGHT: u32 = 0xFFFFFFFF;
+const BUSY_CURSOR_SAND: u32 = 0xFFD99A2B;
+const BUSY_CURSOR_SAND_DARK: u32 = 0xFF7A4C15;
+const BUSY_CURSOR_SHADOW: u32 = 0x88000000;
+const BUSY_CURSOR_MASK: [u8; (BUSY_CURSOR_MASK_SIZE as usize) * BUSY_CURSOR_MASK_STRIDE] = [
+    0b11111111, 0b11111111, 0b11111111, 0b10000000, 0b00000000, 0b00000001, 0b01000000, 0b00000000,
+    0b00000010, 0b00111111, 0b11111111, 0b11111100, 0b00010000, 0b00000000, 0b00001000, 0b00001000,
+    0b00000000, 0b00010000, 0b00000100, 0b00000000, 0b00100000, 0b00000010, 0b00000000, 0b01000000,
+    0b00000001, 0b00000000, 0b10000000, 0b00000000, 0b10000001, 0b00000000, 0b00000000, 0b01000010,
+    0b00000000, 0b00000000, 0b00100100, 0b00000000, 0b00000000, 0b00100100, 0b00000000, 0b00000000,
+    0b01000010, 0b00000000, 0b00000000, 0b10000001, 0b00000000, 0b00000001, 0b00000000, 0b10000000,
+    0b00000010, 0b00000000, 0b01000000, 0b00000100, 0b00000000, 0b00100000, 0b00001000, 0b00000000,
+    0b00010000, 0b00010000, 0b00000000, 0b00001000, 0b00111111, 0b11111111, 0b11111100, 0b01000000,
+    0b00000000, 0b00000010, 0b10000000, 0b00000000, 0b00000001, 0b11111111, 0b11111111, 0b11111111,
+];
 const POINTER_OVERLAY_MAX_W: u32 = 460;
 const POINTER_OVERLAY_MAX_H: u32 = 144;
 const POINTER_OVERLAY_MARGIN: u32 = 12;
@@ -149,6 +170,7 @@ struct CursorBuffer {
     height: u32,
     hotspot_x: u32,
     hotspot_y: u32,
+    fallback: bool,
 }
 
 struct PointerOverlayBuffer {
@@ -371,9 +393,9 @@ impl CompositorVisuals {
             }
         }
 
-        if load_cursor && self.pistil.is_some() && self.cursor.is_none() {
+        if load_cursor && self.pistil.is_some() && self.needs_asset_cursor() {
             self.prepare_cursor(display);
-            if self.cursor.is_some() {
+            if !self.needs_asset_cursor() {
                 improved = true;
             }
         }
@@ -381,7 +403,7 @@ impl CompositorVisuals {
         let wallpaper_pending = wallpaper_path
             .map(|path| self.wallpaper_path.as_deref() != Some(path))
             .unwrap_or(false);
-        let cursor_pending = load_cursor && self.cursor.is_none();
+        let cursor_pending = load_cursor && self.needs_asset_cursor();
         let pending = self.pistil.is_none() || font_pending || wallpaper_pending || cursor_pending;
 
         ResourceRetryStatus { pending, improved }
@@ -402,6 +424,55 @@ impl CompositorVisuals {
 
     pub fn fallback_buffer_id(&self) -> Option<u32> {
         self.background.as_ref().map(|b| b.buffer_id)
+    }
+
+    pub fn prepare_busy_cursor(&mut self, display: &DisplayBackend) {
+        if self.cursor.is_some() {
+            return;
+        }
+
+        let mut texture =
+            match Texture::new("bloom.compositor.cursor.busy", CURSOR_SIZE, CURSOR_SIZE, 4) {
+                Some(t) => t,
+                None => {
+                    stem::warn!("bloom: failed to allocate built-in busy cursor texture");
+                    return;
+                }
+            };
+        let stride_pixels = texture.stride / 4;
+        let height = texture.height;
+        draw_builtin_busy_cursor(texture.as_slice_mut(), stride_pixels, height);
+
+        let Some(buffer_id) = display.import_buffer(
+            texture.fd,
+            texture.width,
+            texture.height,
+            texture.stride,
+            PixelFormat::Bgra8888,
+            0,
+            0,
+        ) else {
+            stem::warn!("bloom: failed to import built-in busy cursor texture");
+            return;
+        };
+
+        self.cursor = Some(CursorBuffer {
+            _texture: texture,
+            buffer_id,
+            width: CURSOR_SIZE,
+            height: CURSOR_SIZE,
+            hotspot_x: BUSY_CURSOR_HOTSPOT_X,
+            hotspot_y: BUSY_CURSOR_HOTSPOT_Y,
+            fallback: true,
+        });
+        stem::info!(
+            "bloom: built-in busy cursor ready buffer={} size={}x{} hotspot={},{}",
+            buffer_id,
+            CURSOR_SIZE,
+            CURSOR_SIZE,
+            BUSY_CURSOR_HOTSPOT_X,
+            BUSY_CURSOR_HOTSPOT_Y
+        );
     }
 
     pub fn prepare_cursor(&mut self, display: &DisplayBackend) {
@@ -461,6 +532,7 @@ impl CompositorVisuals {
             height: CURSOR_SIZE,
             hotspot_x: hotspot[0],
             hotspot_y: hotspot[1],
+            fallback: false,
         });
         stem::info!(
             "bloom: cursor ready buffer={} size={}x{} hotspot={},{}",
@@ -470,6 +542,14 @@ impl CompositorVisuals {
             hotspot[0],
             hotspot[1]
         );
+    }
+
+    fn needs_asset_cursor(&self) -> bool {
+        self.cursor.as_ref().map(|cursor| cursor.fallback).unwrap_or(true)
+    }
+
+    pub fn cursor_is_fallback(&self) -> bool {
+        self.cursor.as_ref().map(|cursor| cursor.fallback).unwrap_or(false)
     }
 
     pub fn cursor_plane(
@@ -582,7 +662,9 @@ impl CompositorVisuals {
         if let Some(idx) = self.cursor_variants.iter().position(|(k, _)| *k == kind) {
             return Some(&self.cursor_variants[idx].1);
         }
-        self.prepare_cursor_variant(display, kind)?;
+        if self.prepare_cursor_variant(display, kind).is_none() {
+            return self.cursor.as_ref();
+        }
         self.cursor_variants
             .iter()
             .find_map(|(k, cursor)| if *k == kind { Some(cursor) } else { None })
@@ -634,6 +716,7 @@ impl CompositorVisuals {
                 height: CURSOR_SIZE,
                 hotspot_x: hotspot[0],
                 hotspot_y: hotspot[1],
+                fallback: false,
             },
         ));
         stem::info!("bloom: cursor {:?} ready from {} buffer={}", kind, cursor_path, buffer_id);
@@ -890,6 +973,75 @@ fn call_draw_svg_icon(
         icon_h,
         color,
     )
+}
+
+fn draw_builtin_busy_cursor(dst: &mut [u32], stride: u32, height: u32) {
+    dst.fill(0);
+    if stride < CURSOR_SIZE || height < CURSOR_SIZE {
+        return;
+    }
+
+    for y in 0..BUSY_CURSOR_MASK_SIZE {
+        for x in 0..BUSY_CURSOR_MASK_SIZE {
+            if busy_cursor_mask_bit(x, y) {
+                draw_scaled_cursor_pixel(dst, stride, x + 1, y + 1, BUSY_CURSOR_SHADOW);
+            }
+        }
+    }
+
+    for y in 5..11 {
+        let radius = 11u32.saturating_sub(y);
+        for x in BUSY_CURSOR_MASK_SIZE / 2 - radius..=BUSY_CURSOR_MASK_SIZE / 2 + radius {
+            draw_scaled_cursor_pixel(dst, stride, x, y, BUSY_CURSOR_SAND);
+        }
+    }
+    for y in 14..21 {
+        let radius = (y - 14).min(7);
+        for x in BUSY_CURSOR_MASK_SIZE / 2 - radius..=BUSY_CURSOR_MASK_SIZE / 2 + radius {
+            let color = if y >= 19 { BUSY_CURSOR_SAND_DARK } else { BUSY_CURSOR_SAND };
+            draw_scaled_cursor_pixel(dst, stride, x, y, color);
+        }
+    }
+    for y in 10..15 {
+        draw_scaled_cursor_pixel(dst, stride, BUSY_CURSOR_MASK_SIZE / 2, y, BUSY_CURSOR_SAND);
+    }
+
+    for y in 0..BUSY_CURSOR_MASK_SIZE {
+        for x in 0..BUSY_CURSOR_MASK_SIZE {
+            if busy_cursor_mask_bit(x, y) {
+                let color = if y <= 2 || (x <= 2 && y < BUSY_CURSOR_MASK_SIZE - 2) {
+                    BUSY_CURSOR_FRAME_LIGHT
+                } else {
+                    BUSY_CURSOR_FRAME
+                };
+                draw_scaled_cursor_pixel(dst, stride, x, y, color);
+            }
+        }
+    }
+}
+
+fn busy_cursor_mask_bit(x: u32, y: u32) -> bool {
+    if x >= BUSY_CURSOR_MASK_SIZE || y >= BUSY_CURSOR_MASK_SIZE {
+        return false;
+    }
+    let row = y as usize * BUSY_CURSOR_MASK_STRIDE;
+    let byte = BUSY_CURSOR_MASK[row + (x as usize / 8)];
+    let bit = 7 - (x % 8);
+    (byte & (1 << bit)) != 0
+}
+
+fn draw_scaled_cursor_pixel(dst: &mut [u32], stride: u32, x: u32, y: u32, color: u32) {
+    let dst_x = x * BUSY_CURSOR_SCALE;
+    let dst_y = y * BUSY_CURSOR_SCALE;
+    if dst_x >= CURSOR_SIZE || dst_y >= CURSOR_SIZE {
+        return;
+    }
+    for yy in 0..BUSY_CURSOR_SCALE {
+        let row = ((dst_y + yy) * stride) as usize;
+        for xx in 0..BUSY_CURSOR_SCALE {
+            dst[row + (dst_x + xx) as usize] = color;
+        }
+    }
 }
 
 fn copy_cursor_sample(cursor: &CursorBuffer, dst: &mut [u32; CURSOR_PIXELS]) -> Option<()> {
@@ -1196,25 +1348,83 @@ fn draw_facet_window_frame(
     }
 
     let frame = frame.min(w / 2).min(h / 2);
-    let fill = if active { theme.frame_fill } else { theme.frame_fill_inactive };
+    let fill_top = if active { theme.frame_fill } else { theme.frame_fill_inactive };
+    let fill_bottom =
+        if active { theme.frame_fill_bottom } else { theme.frame_fill_bottom_inactive };
     let inner = if active { theme.inner_stroke } else { theme.inner_stroke_inactive };
     let facet = if active { theme.facet } else { theme.facet_inactive };
-    let title_fill = if active { theme.active.title_top } else { theme.inactive.title_top };
+    let state = if active { theme.active } else { theme.inactive };
 
     if titlebar_height > 0 {
-        fill_rect(dst, stride, x, y, w, titlebar_height, title_fill);
+        fill_vertical_gradient(
+            dst,
+            stride,
+            height,
+            x,
+            y,
+            w,
+            titlebar_height,
+            state.title_top,
+            state.title_bottom,
+        );
+        if active && titlebar_height > 6 && w > frame.saturating_mul(2) {
+            fill_horizontal_gradient(
+                dst,
+                stride,
+                height,
+                x + frame as i32,
+                y + 2,
+                w.saturating_sub(frame.saturating_mul(2)),
+                2,
+                state.title_top,
+                theme.title_sheen,
+                state.title_top,
+            );
+        }
     } else {
-        fill_rect(dst, stride, x, y, w, frame, fill);
+        fill_vertical_gradient(dst, stride, height, x, y, w, frame, fill_top, fill_bottom);
     }
-    fill_rect(dst, stride, x, y, frame, h, fill);
-    fill_rect(dst, stride, x + w.saturating_sub(frame) as i32, y, frame, h, fill);
-    fill_rect(dst, stride, x, y + h.saturating_sub(frame) as i32, w, frame, fill);
+    fill_vertical_gradient(dst, stride, height, x, y, frame, h, fill_top, fill_bottom);
+    fill_vertical_gradient(
+        dst,
+        stride,
+        height,
+        x + w.saturating_sub(frame) as i32,
+        y,
+        frame,
+        h,
+        fill_top,
+        fill_bottom,
+    );
+    fill_horizontal_gradient(
+        dst,
+        stride,
+        height,
+        x,
+        y + h.saturating_sub(frame) as i32,
+        w,
+        frame,
+        fill_bottom,
+        fill_top,
+        fill_bottom,
+    );
 
     draw_rect_stroke(dst, stride, height, x, y, w, h, 2, theme.outer_stroke);
+    draw_frame_bevel(dst, stride, height, x, y, w, h, frame, active, theme);
 
     if titlebar_height > 0 && titlebar_height < h {
         let sep_y = y.saturating_add(titlebar_height as i32).saturating_sub(1);
         let rule = if active { theme.title_rule_active } else { theme.title_rule_inactive };
+        fill_rect_i32(
+            dst,
+            stride,
+            height,
+            x + frame as i32,
+            sep_y.saturating_sub(1),
+            w.saturating_sub(frame * 2) as i32,
+            1,
+            if active { theme.frame_bevel_light } else { theme.frame_bevel_light_inactive },
+        );
         fill_rect_i32(
             dst,
             stride,
@@ -1255,26 +1465,6 @@ fn draw_facet_window_frame(
             dst,
             stride,
             height,
-            x + 2,
-            y + 2,
-            1,
-            h.saturating_sub(4) as i32,
-            theme.edge_light,
-        );
-        fill_rect_i32(
-            dst,
-            stride,
-            height,
-            x + w.saturating_sub(3) as i32,
-            y + 2,
-            1,
-            h.saturating_sub(4) as i32,
-            theme.edge_dark,
-        );
-        fill_rect_i32(
-            dst,
-            stride,
-            height,
             x + w.saturating_sub(4) as i32,
             y + 2,
             2,
@@ -1290,6 +1480,80 @@ fn draw_facet_window_frame(
             2,
             2,
             theme.focus_accent,
+        );
+    }
+}
+
+fn draw_frame_bevel(
+    dst: &mut [u32],
+    stride: u32,
+    height: u32,
+    x: i32,
+    y: i32,
+    w: u32,
+    h: u32,
+    frame: u32,
+    active: bool,
+    theme: UiTheme,
+) {
+    if w < 6 || h < 6 || frame == 0 {
+        return;
+    }
+
+    let light = if active { theme.frame_bevel_light } else { theme.frame_bevel_light_inactive };
+    let shadow = theme.frame_bevel_shadow;
+    let mid = if active { theme.edge_light } else { theme.inner_stroke_inactive };
+
+    let inner_x = x + frame.min(w / 2) as i32;
+    let inner_y = y + frame.min(h / 2) as i32;
+    let inner_w = w.saturating_sub(frame.saturating_mul(2));
+    let inner_h = h.saturating_sub(frame.saturating_mul(2));
+
+    fill_rect_i32(dst, stride, height, x + 2, y + 2, w.saturating_sub(4) as i32, 1, light);
+    fill_rect_i32(dst, stride, height, x + 2, y + 2, 1, h.saturating_sub(4) as i32, mid);
+    fill_rect_i32(
+        dst,
+        stride,
+        height,
+        x + 2,
+        y + h.saturating_sub(3) as i32,
+        w.saturating_sub(4) as i32,
+        1,
+        shadow,
+    );
+    fill_rect_i32(
+        dst,
+        stride,
+        height,
+        x + w.saturating_sub(3) as i32,
+        y + 2,
+        1,
+        h.saturating_sub(4) as i32,
+        shadow,
+    );
+
+    if inner_w > 4 && inner_h > 4 {
+        fill_rect_i32(dst, stride, height, inner_x, inner_y, inner_w as i32, 1, shadow);
+        fill_rect_i32(dst, stride, height, inner_x, inner_y, 1, inner_h as i32, shadow);
+        fill_rect_i32(
+            dst,
+            stride,
+            height,
+            inner_x,
+            inner_y + inner_h.saturating_sub(1) as i32,
+            inner_w as i32,
+            1,
+            light,
+        );
+        fill_rect_i32(
+            dst,
+            stride,
+            height,
+            inner_x + inner_w.saturating_sub(1) as i32,
+            inner_y,
+            1,
+            inner_h as i32,
+            light,
         );
     }
 }
@@ -1387,6 +1651,61 @@ fn draw_top_glow_strip(
             lerp_argb(theme.control_icon, 0x00B8A8FF, (t - 170).saturating_mul(3))
         };
         fill_rect_i32(dst, stride, height, x + sx as i32, y, 1, 2, color);
+    }
+}
+
+fn fill_vertical_gradient(
+    dst: &mut [u32],
+    stride: u32,
+    height: u32,
+    x: i32,
+    y: i32,
+    w: u32,
+    h: u32,
+    top: u32,
+    bottom: u32,
+) {
+    if h == 0 {
+        return;
+    }
+    for row in 0..h {
+        let t = if h <= 1 { 0 } else { row.saturating_mul(255) / (h - 1) };
+        fill_rect_i32(
+            dst,
+            stride,
+            height,
+            x,
+            y + row as i32,
+            w as i32,
+            1,
+            lerp_argb(top, bottom, t),
+        );
+    }
+}
+
+fn fill_horizontal_gradient(
+    dst: &mut [u32],
+    stride: u32,
+    height: u32,
+    x: i32,
+    y: i32,
+    w: u32,
+    h: u32,
+    left: u32,
+    center: u32,
+    right: u32,
+) {
+    if w == 0 || h == 0 {
+        return;
+    }
+    for col in 0..w {
+        let t = if w <= 1 { 0 } else { col.saturating_mul(255) / (w - 1) };
+        let color = if t < 128 {
+            lerp_argb(left, center, t.saturating_mul(2))
+        } else {
+            lerp_argb(center, right, (t - 128).saturating_mul(2))
+        };
+        fill_rect_i32(dst, stride, height, x + col as i32, y, 1, h as i32, color);
     }
 }
 

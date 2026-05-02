@@ -54,11 +54,15 @@ impl BloomService for ResourceRetryService {
         }
 
         let wallpaper_path = self.wallpaper_config_path.map(wallpaper_target_or_default);
-        let status = world.visuals.retry_deferred_resources(
+        let had_fallback_cursor = world.visuals.cursor_is_fallback();
+        let mut status = world.visuals.retry_deferred_resources(
             &world.display,
             wallpaper_path.as_deref(),
             self.load_cursor,
         );
+        if had_fallback_cursor && !world.visuals.cursor_is_fallback() {
+            status.improved |= world.replay_deferred_cursor_motion();
+        }
 
         if status.improved {
             world.damage.mark_full(world.primary.width, world.primary.height);
