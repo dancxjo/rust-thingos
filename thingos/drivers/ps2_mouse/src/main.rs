@@ -7,6 +7,7 @@
 #![no_main]
 use alloc::string::ToString;
 use core::default::Default;
+use core::sync::atomic::{AtomicU64, Ordering};
 extern crate alloc;
 
 use abi::driver_interface::{
@@ -123,6 +124,9 @@ const POINTER_MOTION_MIN_INTERVAL_NS: u64 = 16_666_666;
 const POINTER_MOTION_MAX_DELTA_PER_EVENT: i32 = 20;
 const POINTER_MOTION_MAX_PENDING_DELTA: i32 = 40;
 
+static PS2_MOUSE_BYTE_COUNT: AtomicU64 = AtomicU64::new(0);
+static PS2_MOUSE_DRAIN_COUNT: AtomicU64 = AtomicU64::new(0);
+
 /// Preferred PS/2 mouse sample rate (Hz). Keep this modest while isolating
 /// compositor freezes under fast pointer movement.
 const PREFERRED_SAMPLE_RATE: u8 = 60;
@@ -142,10 +146,7 @@ fn wait_input_empty() {
     }
     // Timed out: log the controller status so the phase and cause are auditable.
     let status = ioport_read(PS2_STATUS, 1) as u8;
-    warn!(
-        "ps2_mouse: wait_input_empty timed out (status=0x{:02x}); proceeding anyway",
-        status
-    );
+    warn!("ps2_mouse: wait_input_empty timed out (status=0x{:02x}); proceeding anyway", status);
 }
 
 fn flush_output_buffer() {
@@ -598,13 +599,13 @@ fn drain_mouse_data(
         if status & STATUS_AUX_DATA != 0 {
             let byte = ioport_read(PS2_DATA, 1) as u8;
             bytes_read += 1;
-            stem::info!(
-                "ps2_mouse: take_scancode byte=0x{:02x} status=0x{:02x} packet_idx={} drain_depth={}",
-                byte,
-                status,
-                *idx,
-                bytes_read
-            );
+            let byte_no = PS2_MOUSE_BYTE_COUNT.fetch_add(1, Ordering::Relaxed) + 1;
+            if should_log_input(byte_no) {
+                trace!(
+                    "ps2_mouse: take_scancode byte=0x{:02x} status=0x{:02x} packet_idx={} drain_depth={}",
+                    byte, status, *idx, bytes_read
+                );
+            }
 
             // First byte must have bit 3 set and overflow bits clear.
             if *idx == 0 && !mouse::is_packet_start(byte) {
@@ -638,14 +639,13 @@ fn drain_mouse_data(
     }
     if bytes_read != 0 {
         let elapsed_ns = stem::monotonic_ns().saturating_sub(start_ns);
-        stem::info!(
-            "ps2_mouse: drain exit bytes={} packets={} pending_idx={} elapsed_ns={} dropped={}",
-            bytes_read,
-            packets_sent,
-            *idx,
-            elapsed_ns,
-            *drop_counter
-        );
+        let drain_no = PS2_MOUSE_DRAIN_COUNT.fetch_add(1, Ordering::Relaxed) + 1;
+        if should_log_input(drain_no) {
+            trace!(
+                "ps2_mouse: drain exit bytes={} packets={} pending_idx={} elapsed_ns={} dropped={}",
+                bytes_read, packets_sent, *idx, elapsed_ns, *drop_counter
+            );
+        }
     }
     bytes_read
 }
@@ -683,13 +683,9 @@ fn interrupt_loop(bristle_pid: u32) -> ! {
 
     loop {
         if should_log_input(irq_wake_count + timeout_count + 1) {
-            stem::info!(
+            trace!(
                 "ps2_mouse: irq_wait entry vector=0x{:02x} wakes={} timeouts={} input_total={} dropped={}",
-                MOUSE_VECTOR,
-                irq_wake_count,
-                timeout_count,
-                input_count,
-                drop_counter
+                MOUSE_VECTOR, irq_wake_count, timeout_count, input_count, drop_counter
             );
         }
         match waitset.wait(Some(Duration::from_millis(IRQ_ASSIST_POLL_MS))) {
@@ -705,11 +701,9 @@ fn interrupt_loop(bristle_pid: u32) -> ! {
                     timeout_count = timeout_count.wrapping_add(1);
                 }
                 if saw_irq && should_log_input(irq_wake_count) {
-                    stem::info!(
+                    trace!(
                         "ps2_mouse: irq_wait exit vector=0x{:02x} wakes={} timeouts={}",
-                        MOUSE_VECTOR,
-                        irq_wake_count,
-                        timeout_count
+                        MOUSE_VECTOR, irq_wake_count, timeout_count
                     );
                 }
             }

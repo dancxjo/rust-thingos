@@ -42,7 +42,6 @@ pub const EXTERNAL_VECTOR_END: u8 = 0xEF;
 /// Maximum supported vectors for IRQ dispatch
 pub const MAX_VECTORS: usize = 256;
 pub const MAX_SUBSCRIBERS_PER_VECTOR: usize = 4;
-static IRQ_WAKE_TRACE_LOGS: AtomicU64 = AtomicU64::new(0);
 
 /// IRQ slot for a single vector
 struct IrqSlot {
@@ -115,21 +114,14 @@ impl IrqRegistry {
         for i in 0..MAX_SUBSCRIBERS_PER_VECTOR {
             let task_id = slot.subscribers[i].load(Ordering::Acquire);
             if task_id != 0 {
-                let pending = slot.pending_counts[i].fetch_add(1, Ordering::Relaxed) + 1;
-                trace_irq_wake_entry(vector, task_id, pending);
-                let woke = unsafe {
+                slot.pending_counts[i].fetch_add(1, Ordering::Relaxed);
+                unsafe {
                     if is_ps2_vector(vector) {
-                        crate::sched::try_wake_task_from_irq_erased(task_id)
+                        let _ = crate::sched::try_wake_task_from_irq_erased(task_id);
                     } else {
                         crate::sched::wake_task_erased(task_id);
-                        true
                     }
                 };
-                if woke {
-                    trace_irq_wake_exit(vector, task_id, pending);
-                } else {
-                    trace_irq_wake_skipped(vector, task_id, pending);
-                }
             }
         }
     }
@@ -162,54 +154,6 @@ static REGISTRY_MUTEX: Mutex<()> = Mutex::new(());
 
 /// Global IRQ registry instance
 pub static IRQ_REGISTRY: IrqRegistry = IrqRegistry::new();
-
-fn trace_irq_wake_entry(vector: u8, task_id: u64, pending: u32) {
-    if !is_ps2_vector(vector) {
-        return;
-    }
-    let count = IRQ_WAKE_TRACE_LOGS.fetch_add(1, Ordering::Relaxed) + 1;
-    if count <= 32 || count % 128 == 0 {
-        let owner = crate::sched::SCHEDULER_LOCK_OWNER.load(Ordering::Acquire);
-        crate::kinfo!(
-            "PS/2 IRQ wake entry: vector=0x{:02x} task={} pending={} scheduler_owner={}",
-            vector,
-            task_id,
-            pending,
-            owner
-        );
-    }
-}
-
-fn trace_irq_wake_exit(vector: u8, task_id: u64, pending: u32) {
-    if !is_ps2_vector(vector) {
-        return;
-    }
-    let count = IRQ_WAKE_TRACE_LOGS.fetch_add(1, Ordering::Relaxed) + 1;
-    if count <= 32 || count % 128 == 0 {
-        let owner = crate::sched::SCHEDULER_LOCK_OWNER.load(Ordering::Acquire);
-        crate::kinfo!(
-            "PS/2 IRQ wake exit: vector=0x{:02x} task={} pending={} scheduler_owner={}",
-            vector,
-            task_id,
-            pending,
-            owner
-        );
-    }
-}
-
-fn trace_irq_wake_skipped(vector: u8, task_id: u64, pending: u32) {
-    if !is_ps2_vector(vector) {
-        return;
-    }
-    let owner = crate::sched::SCHEDULER_LOCK_OWNER.load(Ordering::Acquire);
-    crate::kinfo!(
-        "PS/2 IRQ wake skipped: vector=0x{:02x} task={} pending={} scheduler_owner={}",
-        vector,
-        task_id,
-        pending,
-        owner
-    );
-}
 
 fn is_ps2_vector(vector: u8) -> bool {
     vector == 0x21 || vector == 0x2C

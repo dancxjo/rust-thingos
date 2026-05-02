@@ -116,6 +116,7 @@ const INPUT_TRACE_INTERVAL: u64 = 128;
 
 /// Counts how many times drain_keyboard_data has found at least one scancode.
 static PS2_KBD_DRAIN_COUNT: AtomicU64 = AtomicU64::new(0);
+static PS2_KBD_BYTE_COUNT: AtomicU64 = AtomicU64::new(0);
 
 /// Driver state node kind
 const KIND_DRV_PS2_KBD: &str = "drv.Ps2Keyboard";
@@ -206,7 +207,7 @@ fn drain_keyboard_data(
             if bytes_read == 1 {
                 let drain_no = PS2_KBD_DRAIN_COUNT.fetch_add(1, Ordering::Relaxed) + 1;
                 if should_log_input(drain_no) {
-                    stem::info!(
+                    stem::trace!(
                         "PS/2 take_scancode entry: drain={} scancode=0x{:02x} status=0x{:02x}",
                         drain_no,
                         scancode,
@@ -214,14 +215,17 @@ fn drain_keyboard_data(
                     );
                 }
             }
-            stem::info!(
-                "ps2_kbd: take_scancode scancode=0x{:02x} status=0x{:02x} drain_depth={}",
-                scancode,
-                status,
-                bytes_read
-            );
+            let byte_no = PS2_KBD_BYTE_COUNT.fetch_add(1, Ordering::Relaxed) + 1;
+            if should_log_input(byte_no) {
+                stem::trace!(
+                    "ps2_kbd: take_scancode scancode=0x{:02x} status=0x{:02x} drain_depth={}",
+                    scancode,
+                    status,
+                    bytes_read
+                );
+            }
             if let Some(edge) = state.process_ps2(scancode) {
-                stem::info!("ps2_kbd: edge detected: {:?}", edge);
+                stem::trace!("ps2_kbd: edge detected: {:?}", edge);
                 send_key_event(bristle_pid, edge, drop_counter);
                 events_sent += 1;
             }
@@ -233,13 +237,16 @@ fn drain_keyboard_data(
     }
     let elapsed_ns = stem::monotonic_ns().saturating_sub(start_ns);
     if bytes_read != 0 {
-        stem::info!(
-            "ps2_kbd: drain exit bytes={} events={} elapsed_ns={} dropped={}",
-            bytes_read,
-            events_sent,
-            elapsed_ns,
-            *drop_counter
-        );
+        let drain_no = PS2_KBD_DRAIN_COUNT.load(Ordering::Relaxed);
+        if should_log_input(drain_no) {
+            stem::trace!(
+                "ps2_kbd: drain exit bytes={} events={} elapsed_ns={} dropped={}",
+                bytes_read,
+                events_sent,
+                elapsed_ns,
+                *drop_counter
+            );
+        }
     }
     bytes_read
 }
@@ -269,7 +276,7 @@ fn send_key_event(bristle_pid: u32, edge: KeyEdge, drop_counter: &mut u32) {
 
     let send_ok = msg_send(bristle_pid, abi::KindId(KIND_BRISTLE_DEVICE_EVENT), &buf[..24]).is_ok();
     if send_ok {
-        stem::info!("ps2_kbd: sent {:?} to bristle (pid={})", key, bristle_pid);
+        stem::trace!("ps2_kbd: sent {:?} to bristle (pid={})", key, bristle_pid);
     } else {
         *drop_counter = drop_counter.wrapping_add(1);
         if *drop_counter <= 4 || *drop_counter % 100 == 0 {
@@ -332,7 +339,7 @@ fn interrupt_loop(bristle_pid: u32) -> ! {
                     }
                 }
                 if saw_irq && should_log_input(irq_wake_count) {
-                    stem::info!(
+                    stem::trace!(
                         "PS/2 IRQ wake entry: vector=0x{:02x} wakes={} pending={}",
                         KBD_VECTOR,
                         irq_wake_count,
@@ -343,7 +350,7 @@ fn interrupt_loop(bristle_pid: u32) -> ! {
                     timeout_count = timeout_count.wrapping_add(1);
                 }
                 if saw_irq && should_log_input(irq_wake_count) {
-                    stem::info!(
+                    stem::trace!(
                         "ps2_kbd: irq_wait exit vector=0x{:02x} wakes={} timeouts={} pending={}",
                         KBD_VECTOR,
                         irq_wake_count,

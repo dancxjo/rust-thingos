@@ -93,7 +93,6 @@ static CTRL_DOWN: AtomicBool = AtomicBool::new(false);
 static CAPS_LOCK: AtomicBool = AtomicBool::new(false);
 
 static INPUT_QUEUE: Ps2Queue = Ps2Queue::new();
-static BUFFER_LOGS: AtomicU64 = AtomicU64::new(0);
 static TAKE_LOGS: AtomicU64 = AtomicU64::new(0);
 
 pub fn set_fb_input_enabled(enabled: bool) {
@@ -112,19 +111,6 @@ const SCANCODE_MAP_SHIFT: &[u8] =
 pub fn buffer_scancode(byte: u8, is_aux: bool) -> bool {
     let val = byte as u16 | ((is_aux as u16) << 8);
     PS2_QUEUE.push(val);
-    let pushed = PS2_QUEUE.pushed.load(Ordering::Relaxed);
-    let depth = PS2_QUEUE.depth();
-    let overwritten = PS2_QUEUE.overwritten.load(Ordering::Relaxed);
-    if should_log_counter(&BUFFER_LOGS, pushed, 16, 256) {
-        crate::kinfo!(
-            "PS/2 buffer_scancode: byte=0x{:02x} is_aux={} total={} depth={} overwritten={}",
-            byte,
-            is_aux,
-            pushed,
-            depth,
-            overwritten
-        );
-    }
     if is_aux {
         return false;
     }

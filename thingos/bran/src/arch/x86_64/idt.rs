@@ -16,7 +16,6 @@ pub const IRQ_TLB_SHOOTDOWN_VECTOR: u8 = 0x41;
 static IRQ12_COUNT: AtomicU64 = AtomicU64::new(0);
 static IRQ1_COUNT: AtomicU64 = AtomicU64::new(0);
 static IRQ4_COUNT: AtomicU64 = AtomicU64::new(0);
-static PS2_IRQ_TRACE_LOGS: AtomicU64 = AtomicU64::new(0);
 static HOTKEY_SHELL_TID: AtomicU64 = AtomicU64::new(0);
 static PAUSE_DUMP_ACTIVE: AtomicBool = AtomicBool::new(false);
 static PAUSE_DUMP_OWNER_CPU: AtomicU64 = AtomicU64::new(u64::MAX);
@@ -823,64 +822,13 @@ pub struct IrqRegisterSnapshot {
     pub rax: u64,
 }
 
-#[inline]
-fn read_rflags() -> u64 {
-    let rflags: u64;
-    unsafe {
-        core::arch::asm!("pushfq", "pop {}", out(reg) rflags, options(nomem, preserves_flags));
-    }
-    rflags
+fn ps2_irq_trace_enter(_vector: u8, _count: u64, _irq_snapshot: *const IrqRegisterSnapshot) -> u64 {
+    if kernel::is_runtime_initialized() { kernel::runtime_base().mono_ticks() } else { 0 }
 }
 
-fn saved_irq_rflags(irq_snapshot: *const IrqRegisterSnapshot) -> u64 {
-    if irq_snapshot.is_null() {
-        return 0;
-    }
-    unsafe {
-        let frame_ptr = (irq_snapshot as *const u64).add(15);
-        *frame_ptr.add(2)
-    }
-}
-
-fn ps2_irq_should_log(count: u64) -> bool {
-    count <= 24 || count % 128 == 0
-}
-
-fn ps2_irq_trace_enter(vector: u8, count: u64, irq_snapshot: *const IrqRegisterSnapshot) -> u64 {
-    let start_ticks =
-        if kernel::is_runtime_initialized() { kernel::runtime_base().mono_ticks() } else { 0 };
-    if ps2_irq_should_log(count) {
-        let saved_rflags = saved_irq_rflags(irq_snapshot);
-        let current_rflags = read_rflags();
-        PS2_IRQ_TRACE_LOGS.fetch_add(1, Ordering::Relaxed);
-        kinfo!(
-            "PS/2 IRQ entry: vector=0x{:02x} count={} saved_if={} current_if={} ticks={}",
-            vector,
-            count,
-            (saved_rflags & (1 << 9)) != 0,
-            (current_rflags & (1 << 9)) != 0,
-            start_ticks
-        );
-    }
-    start_ticks
-}
-
-fn ps2_irq_trace_exit(vector: u8, count: u64, start_ticks: u64) {
-    if ps2_irq_should_log(count) {
-        let end_ticks =
-            if kernel::is_runtime_initialized() { kernel::runtime_base().mono_ticks() } else { 0 };
-        let elapsed_ticks = end_ticks.saturating_sub(start_ticks);
-        let current_rflags = read_rflags();
-        PS2_IRQ_TRACE_LOGS.fetch_add(1, Ordering::Relaxed);
-        kinfo!(
-            "PS/2 IRQ exit: vector=0x{:02x} count={} current_if={} ticks={} elapsed_ticks={}",
-            vector,
-            count,
-            (current_rflags & (1 << 9)) != 0,
-            end_ticks,
-            elapsed_ticks
-        );
-    }
+fn ps2_irq_trace_exit(_vector: u8, _count: u64, _start_ticks: u64) {
+    // Keep hard IRQ paths free of formatted console logging. Entry/exit are
+    // already recorded in the progress ring around the interrupt dispatch.
 }
 
 const PS2_STATUS_PORT: u16 = 0x64;
@@ -1548,9 +1496,6 @@ pub extern "C" fn rust_irq_handler(vector: u64, irq_snapshot: *const IrqRegister
         let count = IRQ1_COUNT.fetch_add(1, Ordering::Relaxed) + 1;
         ps2_irq_count = count;
         ps2_irq_start_ticks = ps2_irq_trace_enter(resolved, count, irq_snapshot);
-        if count <= 3 || (count % 16 == 0) {
-            kernel::kinfo!("IRQ1 fired (count={})", count);
-        }
         let (pause, f12, reboot) = capture_ps2_keyboard_irq();
         pause_dump = pause;
         f12_press = f12;
