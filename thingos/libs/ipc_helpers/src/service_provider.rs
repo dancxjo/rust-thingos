@@ -341,6 +341,13 @@ impl ServiceProviderLoop {
         &mut self,
         timeout: Option<Duration>,
     ) -> Result<ServiceProviderEvent<'_>, Errno> {
+        match self.provider.try_next_request() {
+            Ok(Some(req)) => return Ok(ServiceProviderEvent::ProviderRequest(req)),
+            Ok(None) => {}
+            Err(Errno::EPIPE) => return Ok(ServiceProviderEvent::InboxClosed),
+            Err(e) => return Err(e),
+        }
+
         let provider_token = self.provider_token;
         loop {
             // We use a raw pointer to bypass the borrow checker's conservative
@@ -352,7 +359,12 @@ impl ServiceProviderLoop {
 
             match svc_ev {
                 ServiceEvent::InboxClosed => return Ok(ServiceProviderEvent::InboxClosed),
-                ServiceEvent::Timeout => return Ok(ServiceProviderEvent::Timeout),
+                ServiceEvent::Timeout => match self.provider.try_next_request() {
+                    Ok(Some(req)) => return Ok(ServiceProviderEvent::ProviderRequest(req)),
+                    Ok(None) => return Ok(ServiceProviderEvent::Timeout),
+                    Err(Errno::EPIPE) => return Ok(ServiceProviderEvent::InboxClosed),
+                    Err(e) => return Err(e),
+                },
                 ServiceEvent::Message { kind, payload, .. } => {
                     return Ok(ServiceProviderEvent::Message { kind, payload });
                 }

@@ -11372,6 +11372,7 @@ version = "0.1.0"
 dependencies = [
  "abi",
  "ipc_helpers",
+ "spin",
  "stem",
 ]
 

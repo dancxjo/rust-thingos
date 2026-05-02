@@ -12,6 +12,7 @@
 extern crate alloc;
 
 use alloc::string::{String, ToString};
+use alloc::sync::Arc;
 use alloc::vec::Vec;
 use alloc::{format, vec};
 use core::cmp::min;
@@ -28,12 +29,15 @@ use abi::errors::Errno;
 use abi::vfs_rpc::VfsRpcOp;
 use abi::vm::{VmBacking, VmMapFlags, VmMapReq, VmProt};
 use ipc_helpers::provider::{ProviderLoop, ProviderRequest, ProviderResponse};
+use ipc_helpers::service_provider::{ServiceProviderEvent, ServiceProviderLoop};
+use spin::Mutex;
 use stem::abi::module_manifest::{MANIFEST_MAGIC, ManifestHeader, ModuleKind, device_kind_bytes};
 use stem::syscall::vfs::{vfs_mkdir, vfs_mount, vfs_symlink};
 use stem::syscall::{
     device_alloc_dma, device_claim, device_dma_phys, device_irq_subscribe, device_irq_wait,
     device_map_mmio, port_create,
 };
+use stem::time::Duration;
 use stem::{debug, error, info, trace, warn};
 
 const THINGOS_DRIVER_NAME: &[u8] = b"xhci";
@@ -1410,6 +1414,8 @@ struct UsbBlockProvider {
     storage: UsbMassStorage,
 }
 
+type SharedUsbBlockProvider = Arc<Mutex<UsbBlockProvider>>;
+
 impl UsbBlockProvider {
     fn handle_rpc(&mut self, req: &ProviderRequest) -> ProviderResponse {
         match req.op {
@@ -1482,6 +1488,10 @@ impl UsbBlockProvider {
                 let s_lba = abs_offset / sector_size;
                 let e_lba = (abs_offset + actual_len as u64 - 1) / sector_size;
                 let count = e_lba - s_lba + 1;
+                info!(
+                    "ums: partition read offset={} len={} abs_lba={} count={}",
+                    offset, actual_len, s_lba, count
+                );
                 let mut bounce = vec![0u8; (count * sector_size) as usize];
                 match self.storage.read_sectors(&mut self.controller, s_lba, count, &mut bounce) {
                     Ok(()) => {
@@ -1538,15 +1548,6 @@ fn parse_mbr_partitions(sector: &[u8], disk_sectors: u64) -> Vec<MbrPartition> {
         parts.push(MbrPartition { start_lba, lba_count });
     }
     parts
-}
-
-/// A mounted partition provider, holding its event-loop and LBA bounds.
-struct PartitionEntry {
-    ploop: ProviderLoop,
-    start_lba: u64,
-    lba_count: u64,
-    /// Unique inode number for this partition (1-based partition index).
-    ino: u64,
 }
 
 fn fill_address_input_context(
@@ -1733,6 +1734,117 @@ fn publish_status(path: &str) {
     }
 }
 
+fn spawn_whole_disk_provider(provider: SharedUsbBlockProvider, ploop: ProviderLoop) {
+    match stem::thread::spawn_task_detached(move || {
+        let mut svc = match ServiceProviderLoop::new(ploop, 4096) {
+            Ok(svc) => svc,
+            Err(e) => {
+                warn!("ums: failed to start service loop for /dev/block/usb0: {:?}", e);
+                return;
+            }
+        };
+        svc.register_mount_path("/dev/block/usb0");
+        info!("ums: whole-disk service provider online for /dev/block/usb0");
+        loop {
+            let req = match svc.next_event(Some(Duration::from_millis(10))) {
+                Ok(ServiceProviderEvent::ProviderRequest(req)) => req,
+                Ok(ServiceProviderEvent::Message { kind, payload }) => {
+                    debug!(
+                        "ums: control message on /dev/block/usb0 kind={:?} len={}",
+                        kind,
+                        payload.len()
+                    );
+                    continue;
+                }
+                Ok(ServiceProviderEvent::Ready { .. }) | Ok(ServiceProviderEvent::Timeout) => {
+                    continue;
+                }
+                Ok(ServiceProviderEvent::InboxClosed) => {
+                    info!("ums: service loop closed for /dev/block/usb0");
+                    svc.shutdown_sequence();
+                    return;
+                }
+                Err(e) => {
+                    warn!("ums: service loop error for /dev/block/usb0: {:?}", e);
+                    svc.shutdown_sequence();
+                    return;
+                }
+            };
+            let resp = {
+                let mut provider = provider.lock();
+                provider.handle_rpc(&req)
+            };
+            let _ = svc.send_response(&req, resp);
+        }
+    }) {
+        Ok(tid) => info!("ums: spawned whole-disk service provider tid={}", tid),
+        Err(e) => warn!("ums: failed to spawn whole-disk service provider: {:?}", e),
+    }
+}
+
+fn spawn_partition_provider(
+    provider: SharedUsbBlockProvider,
+    ploop: ProviderLoop,
+    path: String,
+    start_lba: u64,
+    lba_count: u64,
+    ino: u64,
+) {
+    let log_path = path.clone();
+    match stem::thread::spawn_task_detached(move || {
+        run_partition_provider(provider, ploop, path, start_lba, lba_count, ino);
+    }) {
+        Ok(tid) => info!("ums: spawned partition service provider for {} tid={}", log_path, tid),
+        Err(e) => {
+            warn!("ums: failed to spawn partition service provider for {}: {:?}", log_path, e)
+        }
+    }
+}
+
+fn run_partition_provider(
+    provider: SharedUsbBlockProvider,
+    ploop: ProviderLoop,
+    path: String,
+    start_lba: u64,
+    lba_count: u64,
+    ino: u64,
+) {
+    let mut svc = match ServiceProviderLoop::new(ploop, 4096) {
+        Ok(svc) => svc,
+        Err(e) => {
+            warn!("ums: failed to start service loop for {}: {:?}", path, e);
+            return;
+        }
+    };
+    svc.register_mount_path(&path);
+    info!("ums: partition service provider online for {}", path);
+    loop {
+        let req = match svc.next_event(Some(Duration::from_millis(10))) {
+            Ok(ServiceProviderEvent::ProviderRequest(req)) => req,
+            Ok(ServiceProviderEvent::Message { kind, payload }) => {
+                debug!("ums: control message on {} kind={:?} len={}", path, kind, payload.len());
+                continue;
+            }
+            Ok(ServiceProviderEvent::Ready { .. }) | Ok(ServiceProviderEvent::Timeout) => continue,
+            Ok(ServiceProviderEvent::InboxClosed) => {
+                info!("ums: service loop closed for {}", path);
+                svc.shutdown_sequence();
+                return;
+            }
+            Err(e) => {
+                warn!("ums: service loop error for {}: {:?}", path, e);
+                svc.shutdown_sequence();
+                return;
+            }
+        };
+        let resp = {
+            let mut provider = provider.lock();
+            provider.handle_partition_rpc(&req, start_lba, lba_count, ino)
+        };
+        let _ = svc.send_response(&req, resp);
+    }
+}
+
 fn serve_usb_block(controller: XhciController, storage: UsbMassStorage) -> ! {
     let _ = vfs_mkdir("/dev/block");
     let _ = vfs_mkdir("/dev/disk");
@@ -1785,8 +1897,19 @@ fn serve_usb_block(controller: XhciController, storage: UsbMassStorage) -> ! {
         }
     };
 
-    // Mount a provider for each discovered MBR partition.
-    let mut partitions: Vec<PartitionEntry> = Vec::new();
+    // Provider worker tasks run independently of the startup task that
+    // subscribed the controller IRQ. Poll completions here so USB block reads
+    // do not depend on IRQ delivery affinity.
+    provider.controller.irq_enabled = false;
+    info!("ums: provider worker I/O using xhci completion polling");
+
+    let provider = Arc::new(Mutex::new(provider));
+    spawn_whole_disk_provider(provider.clone(), ProviderLoop::new(v_r));
+
+    // Mount a provider for each discovered MBR partition.  Keep the first
+    // partition on the original xHCI task so the hot USB-FAT path uses the
+    // same task that initialized and successfully probed the controller.
+    let mut foreground_partition: Option<(ProviderLoop, String, u64, u64, u64)> = None;
     for (i, part) in parts.iter().enumerate() {
         let part_path = format!("/dev/block/usb0p{}", i + 1);
         match port_create(65536) {
@@ -1799,12 +1922,25 @@ fn serve_usb_block(controller: XhciController, storage: UsbMassStorage) -> ! {
                         part.lba_count,
                         part.start_lba
                     );
-                    partitions.push(PartitionEntry {
-                        ploop: ProviderLoop::new(pr),
-                        start_lba: part.start_lba,
-                        lba_count: part.lba_count,
-                        ino: (i + 1) as u64,
-                    });
+                    let ploop = ProviderLoop::new(pr);
+                    if foreground_partition.is_none() {
+                        foreground_partition = Some((
+                            ploop,
+                            part_path,
+                            part.start_lba,
+                            part.lba_count,
+                            (i + 1) as u64,
+                        ));
+                    } else {
+                        spawn_partition_provider(
+                            provider.clone(),
+                            ploop,
+                            part_path,
+                            part.start_lba,
+                            part.lba_count,
+                            (i + 1) as u64,
+                        );
+                    }
                 } else {
                     warn!("ums: failed to mount partition provider at {}", part_path);
                 }
@@ -1815,37 +1951,12 @@ fn serve_usb_block(controller: XhciController, storage: UsbMassStorage) -> ! {
         }
     }
 
-    let mut ploop = ProviderLoop::new(v_r);
+    if let Some((ploop, path, start_lba, lba_count, ino)) = foreground_partition {
+        run_partition_provider(provider.clone(), ploop, path, start_lba, lba_count, ino);
+    }
+
     loop {
-        // Poll partition providers (non-blocking) before blocking on the main device.
-        for part in partitions.iter_mut() {
-            match part.ploop.try_next_request() {
-                Ok(Some(req)) => {
-                    let resp = provider.handle_partition_rpc(
-                        &req,
-                        part.start_lba,
-                        part.lba_count,
-                        part.ino,
-                    );
-                    let _ = part.ploop.send_response(&req, resp);
-                }
-                Ok(None) => {}
-                Err(e) => {
-                    warn!("ums: partition provider loop error: {:?}", e);
-                }
-            }
-        }
-        // Block until the main device receives a request.
-        let req = match ploop.next_request() {
-            Ok(req) => req,
-            Err(e) => {
-                warn!("ums: provider loop closed: {:?}", e);
-                stem::time::sleep_ms(1000);
-                continue;
-            }
-        };
-        let resp = provider.handle_rpc(&req);
-        let _ = ploop.send_response(&req, resp);
+        stem::time::sleep_ms(60_000);
     }
 }
 

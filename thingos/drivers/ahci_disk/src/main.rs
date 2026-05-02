@@ -364,7 +364,7 @@ impl AhciDevice {
             mmio_read32(pb, PORT_CI),
             mmio_read32(pb, PORT_IS)
         );
-        let mut loop_timeout = 4096;
+        let mut loop_timeout = 16;
         loop {
             let ci = mmio_read32(pb, PORT_CI);
             if ci & slot_bit == 0 {
