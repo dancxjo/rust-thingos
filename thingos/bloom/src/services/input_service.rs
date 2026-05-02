@@ -25,6 +25,7 @@ const INPUT_TRACE_INITIAL: u64 = 24;
 const INPUT_TRACE_INTERVAL: u64 = 128;
 static BLOOM_INPUT_READ_COUNT: AtomicU64 = AtomicU64::new(0);
 static BLOOM_INPUT_EVENT_COUNT: AtomicU64 = AtomicU64::new(0);
+static BLOOM_INPUT_VFS_READ_COUNT: AtomicU64 = AtomicU64::new(0);
 
 /// Handles normalized HID events forwarded by the bristle input service.
 ///
@@ -95,8 +96,44 @@ impl BloomService for InputService {
                     );
                 }
 
-                for _ in 0..MAX_READS_PER_WAKE {
-                    match vfs_read(self.fd, &mut buf) {
+                for read_iter in 0..MAX_READS_PER_WAKE {
+                    let read_no = BLOOM_INPUT_VFS_READ_COUNT.fetch_add(1, Ordering::Relaxed) + 1;
+                    let read_start_ns = stem::monotonic_ns();
+                    if should_log_input(read_wake) || should_log_input(read_no) {
+                        stem::info!(
+                            "bloom: input vfs_read entry wake={} read={} iter={} fd={} accum_depth={}",
+                            read_wake,
+                            read_no,
+                            read_iter,
+                            self.fd,
+                            self.accum_len
+                        );
+                    }
+                    let read_result = vfs_read(self.fd, &mut buf);
+                    let read_elapsed_ns = stem::monotonic_ns().saturating_sub(read_start_ns);
+                    if should_log_input(read_wake) || should_log_input(read_no) {
+                        match &read_result {
+                            Ok(n) => stem::info!(
+                                "bloom: input vfs_read exit wake={} read={} iter={} fd={} result=ok bytes={} elapsed_ns={}",
+                                read_wake,
+                                read_no,
+                                read_iter,
+                                self.fd,
+                                *n,
+                                read_elapsed_ns
+                            ),
+                            Err(e) => stem::info!(
+                                "bloom: input vfs_read exit wake={} read={} iter={} fd={} result=err err={:?} elapsed_ns={}",
+                                read_wake,
+                                read_no,
+                                read_iter,
+                                self.fd,
+                                e,
+                                read_elapsed_ns
+                            ),
+                        }
+                    }
+                    match read_result {
                         Ok(0) => break,
                         Ok(n) => {
                             handled |= self.drain_bristle_bytes(&buf[..n], world);

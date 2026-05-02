@@ -4,11 +4,14 @@
 //! passed across ports using the standard handle-passing mechanism.
 
 use alloc::sync::Arc;
+use core::sync::atomic::{AtomicU64, Ordering};
 
 use abi::errors::SysResult;
 
 use super::{VfsNode, VfsStat};
 use crate::ipc::{IpcHandleMode, Port};
+
+static PORT_NODE_READ_TRACE_COUNT: AtomicU64 = AtomicU64::new(0);
 
 /// A VFS node that wraps an IPC port.
 pub struct PortNode {
@@ -36,7 +39,31 @@ impl VfsNode for PortNode {
         if self.mode != IpcHandleMode::Read {
             return Err(abi::errors::Errno::EBADF);
         }
-        Ok(self.port.try_recv(buf))
+        let trace_no = PORT_NODE_READ_TRACE_COUNT.fetch_add(1, Ordering::Relaxed) + 1;
+        let should_trace = trace_no <= 32 || trace_no % 128 == 0;
+        let start_ns = if should_trace { crate::time::monotonic_now_ns() } else { 0 };
+        if should_trace {
+            crate::kinfo!(
+                "PORT_NODE read entry: trace={} port={:p} len={} queued={} writers={}",
+                trace_no,
+                Arc::as_ptr(&self.port),
+                buf.len(),
+                self.port.len(),
+                self.port.has_writers()
+            );
+        }
+        let n = self.port.try_recv(buf);
+        if should_trace {
+            crate::kinfo!(
+                "PORT_NODE read exit: trace={} port={:p} bytes={} queued={} elapsed_ns={}",
+                trace_no,
+                Arc::as_ptr(&self.port),
+                n,
+                self.port.len(),
+                crate::time::monotonic_now_ns().saturating_sub(start_ns)
+            );
+        }
+        Ok(n)
     }
 
     fn write(&self, _offset: u64, buf: &[u8]) -> SysResult<usize> {
