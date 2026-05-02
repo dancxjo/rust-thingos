@@ -57,6 +57,10 @@ pub enum BootPhase {
     KernelSeen,
     /// At least one userspace process is running.
     UserspaceSeen,
+    /// PS/2 controller init has started (first `ps2.phase=` marker seen).
+    Ps2InitSeen,
+    /// PS/2 controller init has completed (`ps2.phase=ready` seen).
+    Ps2Ready,
     /// The graphical desktop (Bloom/Wayland) is up.
     DesktopSeen,
     /// Serial output went silent after the kernel was confirmed running.
@@ -69,6 +73,8 @@ impl std::fmt::Display for BootPhase {
             BootPhase::QemuStarted => write!(f, "qemu_started"),
             BootPhase::KernelSeen => write!(f, "kernel_seen"),
             BootPhase::UserspaceSeen => write!(f, "userspace_seen"),
+            BootPhase::Ps2InitSeen => write!(f, "ps2_init_seen"),
+            BootPhase::Ps2Ready => write!(f, "ps2_ready"),
             BootPhase::DesktopSeen => write!(f, "desktop_seen"),
             BootPhase::StalledAfterKernel => write!(f, "stalled_after_kernel"),
         }
@@ -81,6 +87,8 @@ struct BootPhaseTracker {
     pub phase: BootPhase,
     pub kernel_seen: bool,
     pub userspace_seen: bool,
+    pub ps2_init_seen: bool,
+    pub ps2_ready: bool,
     pub desktop_seen: bool,
 }
 
@@ -92,7 +100,14 @@ impl Default for BootPhase {
 
 impl BootPhaseTracker {
     fn new() -> Self {
-        Self { phase: BootPhase::QemuStarted, kernel_seen: false, userspace_seen: false, desktop_seen: false }
+        Self {
+            phase: BootPhase::QemuStarted,
+            kernel_seen: false,
+            userspace_seen: false,
+            ps2_init_seen: false,
+            ps2_ready: false,
+            desktop_seen: false,
+        }
     }
 
     /// Update internal state from the current serial log and return `true` if
@@ -111,6 +126,15 @@ impl BootPhaseTracker {
                 self.userspace_seen = true;
             }
         }
+        if !self.ps2_init_seen && lower.contains("ps2.phase=") {
+            // Note: "ps2.phase=" is a substring of every PS/2 marker including
+            // "ps2.phase=ready", so if the ready marker appears first it will
+            // set ps2_init_seen here before the ps2_ready check below.
+            self.ps2_init_seen = true;
+        }
+        if self.ps2_init_seen && !self.ps2_ready && lower.contains("ps2.phase=ready") {
+            self.ps2_ready = true;
+        }
         if self.kernel_seen && !self.desktop_seen {
             if DESKTOP_MARKERS.iter().any(|m| lower.contains(&m.to_lowercase())) {
                 self.desktop_seen = true;
@@ -119,6 +143,10 @@ impl BootPhaseTracker {
 
         self.phase = if self.desktop_seen {
             BootPhase::DesktopSeen
+        } else if self.ps2_ready {
+            BootPhase::Ps2Ready
+        } else if self.ps2_init_seen {
+            BootPhase::Ps2InitSeen
         } else if self.userspace_seen {
             BootPhase::UserspaceSeen
         } else if self.kernel_seen {
@@ -164,6 +192,8 @@ impl<'a> FreezeSummary<'a> {
         writeln!(file, "  last_serial_ago_secs: {:.1}", self.silence_duration.as_secs_f64())?;
         writeln!(file, "  kernel_marker_observed: {}", self.tracker.kernel_seen)?;
         writeln!(file, "  userspace_observed: {}", self.tracker.userspace_seen)?;
+        writeln!(file, "  ps2_init_seen: {}", self.tracker.ps2_init_seen)?;
+        writeln!(file, "  ps2_ready: {}", self.tracker.ps2_ready)?;
         writeln!(file, "  desktop_observed: {}", self.tracker.desktop_seen)?;
         writeln!(file, "  guest_phase_at_capture: {}", self.tracker.phase)?;
         writeln!(file, "  classification: {}", self.classification)?;
@@ -173,6 +203,47 @@ impl<'a> FreezeSummary<'a> {
             self.last_serial_timestamp.elapsed().as_secs_f64()
         )?;
         file.flush()
+    }
+}
+
+/// Controls when the hunter begins injecting QMP keyboard/mouse input relative
+/// to the PS/2 controller initialisation sequence.
+#[derive(Clone, Copy, Debug, PartialEq, Eq, Default)]
+pub enum Ps2InputMode {
+    /// Normal: inject input as soon as the kernel is confirmed running.
+    /// This is the pre-existing behaviour.
+    #[default]
+    Normal,
+    /// WaitForReady: suppress QMP input until `ps2.phase=ready` appears in the
+    /// serial log.  Use this mode to establish a clean baseline: if no stalls
+    /// occur here but do occur in `Normal`, the problem is early-input related.
+    WaitForReady,
+    /// AdversarialDuringInit: begin injecting input as soon as the first
+    /// `ps2.phase=` marker appears (i.e. during controller init) to stress the
+    /// byte-demultiplexing and IRQ paths.  Use this to reproduce timing bugs
+    /// deliberately and measure their stall rate.
+    AdversarialDuringInit,
+}
+
+impl std::fmt::Display for Ps2InputMode {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        match self {
+            Ps2InputMode::Normal => write!(f, "normal"),
+            Ps2InputMode::WaitForReady => write!(f, "wait_for_ready"),
+            Ps2InputMode::AdversarialDuringInit => write!(f, "adversarial_during_init"),
+        }
+    }
+}
+
+impl core::str::FromStr for Ps2InputMode {
+    type Err = String;
+    fn from_str(s: &str) -> Result<Self, Self::Err> {
+        match s {
+            "normal" => Ok(Ps2InputMode::Normal),
+            "wait_for_ready" => Ok(Ps2InputMode::WaitForReady),
+            "adversarial_during_init" => Ok(Ps2InputMode::AdversarialDuringInit),
+            other => Err(format!("unknown ps2_input_mode: {other}")),
+        }
     }
 }
 
@@ -186,6 +257,8 @@ pub struct FreezeHunterConfig {
     pub sessions: Option<u64>,
     pub seed: Option<u64>,
     pub log_dir: PathBuf,
+    /// Controls when QMP input injection begins relative to PS/2 init.
+    pub ps2_input_mode: Ps2InputMode,
 }
 
 impl Default for FreezeHunterConfig {
@@ -199,6 +272,7 @@ impl Default for FreezeHunterConfig {
             sessions: None,
             seed: None,
             log_dir: PathBuf::from("freeze_logs"),
+            ps2_input_mode: Ps2InputMode::Normal,
         }
     }
 }
@@ -222,7 +296,10 @@ pub async fn run(config: FreezeHunterConfig) -> HunterResult<()> {
         "[hunter] arch={} timeout={:?} desktop_ready_timeout={:?} loglevel={}",
         config.arch, config.timeout, config.desktop_ready_timeout, config.loglevel
     );
-    eprintln!("[hunter] action_interval={:?} seed={}", config.action_interval, seed);
+    eprintln!(
+        "[hunter] action_interval={:?} seed={} ps2_input_mode={}",
+        config.action_interval, seed, config.ps2_input_mode
+    );
     eprintln!("[hunter] logs={}", config.log_dir.display());
 
     let mut session_id = 0u64;
@@ -251,8 +328,9 @@ async fn run_session(
     write_hunter_event(
         &mut log_file,
         format_args!(
-            "session={session_id:04} arch={} timeout={:?} desktop_ready_timeout={:?} loglevel={}",
-            config.arch, config.timeout, config.desktop_ready_timeout, config.loglevel
+            "session={session_id:04} arch={} timeout={:?} desktop_ready_timeout={:?} loglevel={} ps2_input_mode={}",
+            config.arch, config.timeout, config.desktop_ready_timeout, config.loglevel,
+            config.ps2_input_mode
         ),
     )?;
 
@@ -320,10 +398,19 @@ async fn run_session(
             return Ok(());
         }
 
-        // Only fire random actions once the kernel has been confirmed running.
-        // This prevents accidental Limine/UEFI menu navigation that produces
-        // false-positive freeze captures.
-        if tracker.kernel_seen && Instant::now() >= next_action {
+        // Gate random actions on the PS/2 input mode.  This controls whether
+        // input injection races against controller initialisation.
+        //
+        //  Normal            – inject once kernel is confirmed (pre-existing behaviour)
+        //  WaitForReady      – wait for ps2.phase=ready so init is complete first
+        //  AdversarialDuringInit – start injecting as soon as the first ps2.phase=
+        //                     marker appears to stress the init path deliberately
+        let action_allowed = match config.ps2_input_mode {
+            Ps2InputMode::Normal => tracker.kernel_seen,
+            Ps2InputMode::WaitForReady => tracker.ps2_ready,
+            Ps2InputMode::AdversarialDuringInit => tracker.ps2_init_seen,
+        };
+        if action_allowed && Instant::now() >= next_action {
             write_hunter_event(&mut log_file, format_args!("running random action"))?;
             if let Err(err) = run_random_action(&mut world, rng).await {
                 eprintln!("[hunter] action failed: {err}");
@@ -680,6 +767,8 @@ mod tests {
         assert_eq!(tracker.phase, BootPhase::QemuStarted);
         assert!(!tracker.kernel_seen);
         assert!(!tracker.userspace_seen);
+        assert!(!tracker.ps2_init_seen);
+        assert!(!tracker.ps2_ready);
         assert!(!tracker.desktop_seen);
     }
 
@@ -763,7 +852,65 @@ mod tests {
         assert_eq!(BootPhase::QemuStarted.to_string(), "qemu_started");
         assert_eq!(BootPhase::KernelSeen.to_string(), "kernel_seen");
         assert_eq!(BootPhase::UserspaceSeen.to_string(), "userspace_seen");
+        assert_eq!(BootPhase::Ps2InitSeen.to_string(), "ps2_init_seen");
+        assert_eq!(BootPhase::Ps2Ready.to_string(), "ps2_ready");
         assert_eq!(BootPhase::DesktopSeen.to_string(), "desktop_seen");
         assert_eq!(BootPhase::StalledAfterKernel.to_string(), "stalled_after_kernel");
+    }
+
+    #[test]
+    fn ps2_init_marker_advances_phase() {
+        let mut tracker = BootPhaseTracker::new();
+        let changed = tracker.update("ps2.phase=aux_enable_begin");
+        assert!(changed);
+        assert_eq!(tracker.phase, BootPhase::Ps2InitSeen);
+        assert!(tracker.ps2_init_seen);
+        assert!(!tracker.ps2_ready);
+    }
+
+    #[test]
+    fn ps2_ready_marker_advances_phase() {
+        let mut tracker = BootPhaseTracker::new();
+        tracker.update("ps2.phase=aux_enable_begin");
+        let changed = tracker.update("ps2.phase=aux_enable_begin\nps2.phase=ready");
+        assert!(changed);
+        assert_eq!(tracker.phase, BootPhase::Ps2Ready);
+        assert!(tracker.ps2_init_seen);
+        assert!(tracker.ps2_ready);
+    }
+
+    #[test]
+    fn ps2_ready_detected_without_prior_init_marker() {
+        // ps2.phase=ready by itself should set both flags.
+        let mut tracker = BootPhaseTracker::new();
+        let changed = tracker.update("ps2.phase=ready");
+        assert!(changed);
+        assert!(tracker.ps2_init_seen);
+        assert!(tracker.ps2_ready);
+        assert_eq!(tracker.phase, BootPhase::Ps2Ready);
+    }
+
+    #[test]
+    fn desktop_seen_supersedes_ps2_ready_in_phase() {
+        let mut tracker = BootPhaseTracker::new();
+        tracker.update("thing-os kernel v1.0\nps2.phase=ready");
+        let changed = tracker.update("thing-os kernel v1.0\nps2.phase=ready\nFirst frame rendered");
+        assert!(changed);
+        assert_eq!(tracker.phase, BootPhase::DesktopSeen);
+    }
+
+    #[test]
+    fn ps2_input_mode_display_and_parse() {
+        assert_eq!(Ps2InputMode::Normal.to_string(), "normal");
+        assert_eq!(Ps2InputMode::WaitForReady.to_string(), "wait_for_ready");
+        assert_eq!(Ps2InputMode::AdversarialDuringInit.to_string(), "adversarial_during_init");
+
+        assert_eq!("normal".parse::<Ps2InputMode>().unwrap(), Ps2InputMode::Normal);
+        assert_eq!("wait_for_ready".parse::<Ps2InputMode>().unwrap(), Ps2InputMode::WaitForReady);
+        assert_eq!(
+            "adversarial_during_init".parse::<Ps2InputMode>().unwrap(),
+            Ps2InputMode::AdversarialDuringInit
+        );
+        assert!("unknown".parse::<Ps2InputMode>().is_err());
     }
 }

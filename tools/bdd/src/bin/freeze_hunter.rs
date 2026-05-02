@@ -1,7 +1,7 @@
 use std::path::PathBuf;
 use std::time::Duration;
 
-use bdd::hunter::{FreezeHunterConfig, run};
+use bdd::hunter::{FreezeHunterConfig, Ps2InputMode, run};
 use clap::Parser;
 
 #[derive(Debug, Parser)]
@@ -24,11 +24,22 @@ struct Args {
     seed: Option<u64>,
     #[arg(long, default_value = "freeze_logs")]
     log_dir: PathBuf,
+    /// PS/2 input injection mode.
+    ///
+    /// normal               – inject as soon as the kernel is seen (default)
+    /// wait_for_ready       – wait for ps2.phase=ready before injecting input
+    /// adversarial_during_init – inject during PS/2 init to stress the i8042 path
+    #[arg(long, default_value = "normal")]
+    ps2_input_mode: String,
 }
 
 #[tokio::main]
 async fn main() {
     let args = Args::parse();
+    let ps2_input_mode = args.ps2_input_mode.parse::<Ps2InputMode>().unwrap_or_else(|e| {
+        eprintln!("[freeze_hunter] invalid --ps2-input-mode: {e}; using 'normal'");
+        Ps2InputMode::Normal
+    });
     let config = FreezeHunterConfig {
         arch: args.arch,
         timeout: Duration::from_secs(args.timeout_secs),
@@ -38,6 +49,7 @@ async fn main() {
         sessions: args.sessions,
         seed: args.seed,
         log_dir: args.log_dir,
+        ps2_input_mode,
     };
 
     if let Err(err) = run(config).await {
