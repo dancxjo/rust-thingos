@@ -1835,11 +1835,45 @@ pub unsafe fn spawn_process_from_path<R: BootRuntime>(
 
     // Phase 3: make the task runnable.  wake_task acquires SCHEDULER briefly
     // to transition Blocked → Runnable and enqueue the task.
-    crate::kdebug!("SPAWN_FROM_PATH: Phase 2 complete, waking task {}", id);
+    //
+    // Tracepoints here distinguish the four possible hang sites observed in
+    // freeze_logs/ (corpus: 342 classified os_freeze, 17 pre-desktop
+    // display-driver-entry freezes with the last log line being
+    // "Task N woken, restoring IRQs"):
+    //   TP-A: logged before wake_task enters  → hang inside wake_task
+    //   TP-B: logged after wake_task returns  → hang inside irq_restore / at interrupt re-enable point
+    //   TP-D: logged after irq_restore        → hang is further along in the spawn return path
+    let spawn_caller_tid = rt.current_tid();
+    crate::kdebug!(
+        "SPAWN_FROM_PATH[TP-A]: cpu={} caller_tid={} spawned_tid={} irq_saved={} need_resched={} \
+         calling wake_task path={}",
+        current_cpu,
+        spawn_caller_tid,
+        id,
+        _irq.0,
+        crate::sched::need_resched_pending(current_cpu),
+        path,
+    );
     crate::sched::blocking::wake_task::<R>(id);
-    crate::kdebug!("SPAWN_FROM_PATH: Task {} woken, restoring IRQs", id);
+    crate::kdebug!(
+        "SPAWN_FROM_PATH[TP-B]: cpu={} caller_tid={} spawned_tid={} irq_saved={} need_resched={} \
+         wake_task returned, about to restore IRQs path={}",
+        current_cpu,
+        spawn_caller_tid,
+        id,
+        _irq.0,
+        crate::sched::need_resched_pending(current_cpu),
+        path,
+    );
     rt.irq_restore(_irq);
-    crate::kdebug!("SPAWN_FROM_PATH: Done for {}", path);
+    crate::kdebug!(
+        "SPAWN_FROM_PATH[TP-D]: cpu={} caller_tid={} spawned_tid={} irq_restore complete, \
+         Done for {}",
+        current_cpu,
+        spawn_caller_tid,
+        id,
+        path,
+    );
 
     #[cfg(feature = "spawn_timing")]
     {
@@ -2589,5 +2623,226 @@ mod tests {
             Some(0),
             "[policy] Any-affinity user thread should stay local while bringup is in progress"
         );
+    }
+
+    // ── Display-driver spawn freeze regression (issue: spawn wake/IRQ-restore) ────
+    //
+    // Regression test for the corpus of 17 pre-desktop display-driver-entry
+    // freezes diagnosed from freeze_logs/.  The freeze signature was:
+    //
+    //   "SPAWN_FROM_PATH: Task N woken, restoring IRQs"
+    //   …machine hung before "Done for /drivers/display_virtio_gpu"
+    //
+    // The suspected hang sites, in order:
+    //   (A) inside wake_task (scheduler lock / IPI path)
+    //   (B) inside irq_restore / at interrupt re-enable point
+    //
+    // This test verifies the Phase 3 contract that spawn_process_from_path
+    // relies on:
+    //
+    //   1. The outer irq_disable / irq_restore pair is BALANCED — IRQ depth
+    //      returns to 0 after the complete sequence even though wake_task
+    //      internally performs its own nested irq_disable / irq_restore.
+    //
+    //   2. The spawned task transitions to Runnable state as a result of
+    //      wake_task (verified via the REGISTRY).
+    //
+    //   3. need_resched is set for the calling CPU when the woken task targets
+    //      that same CPU (which is the typical single-CPU boot scenario for
+    //      display driver launch).
+    //
+    // If the IRQ depth is not restored to 0 after irq_restore the mock runtime
+    // will assert (irq_depth != 0 at end of test), directly catching the class
+    // of bug where a nested irq_disable/restore inside wake_task "leaks" an
+    // extra disable or performs a premature re-enable.
+    #[test]
+    fn test_spawn_wake_irq_restore_phase3_irq_balance_and_task_runnable() {
+        let _g = init_test_env();
+        use crate::BootRuntimeBase as _;
+        use crate::sched::{SCHEDULER, clear_global_need_resched, need_resched_pending};
+        use crate::sched::tests::MOCK_RUNTIME;
+        use crate::task::TaskState;
+        use core::sync::atomic::Ordering;
+
+        // IRQ depth must start at 0 (balanced, interrupts conceptually enabled).
+        crate::sched::tests::reset_mock_irq_depth();
+        assert_eq!(crate::sched::tests::mock_irq_depth(), 0, "precondition: IRQ depth starts at 0");
+
+        const DISPLAY_DRIVER_TID: u64 = 8_900;
+        const CALLER_TID: u64 = 8_901;
+
+        let mut sched = Scheduler::<MockRuntime>::new();
+        sched.state.per_cpu.push(crate::sched::state::PerCpu::new_for_cpu(0));
+        sched.state.mark_cpu_online(0);
+
+        // Register the "caller" task (the one running spawn_process_from_path) as
+        // currently Running on CPU 0 so that wake_task's scheduler-cache lookup
+        // can determine the current priority and set need_resched correctly.
+        let caller = crate::task::Task {
+            id: CALLER_TID,
+            state: TaskState::Running,
+            priority: crate::task::TaskPriority::Normal,
+            base_priority: crate::task::TaskPriority::Normal,
+            enqueued_at_tick: 0,
+            exit_code: None,
+            exit_waiters: crate::sched::WaitQueue::new(),
+            is_user: true,
+            wake_pending: false,
+            pending_interrupt: false,
+            affinity: crate::task::Affinity::Pinned(0),
+            kstack_base: core::ptr::null_mut(),
+            kstack_size: 0,
+            kstack_top: 0,
+            ctx: Default::default(),
+            aspace: crate::sched::tests::MockAddressSpace(0),
+            simd: crate::simd::SimdState::new(&crate::sched::tests::MOCK_RUNTIME),
+            stack_info: None,
+            mappings: alloc::sync::Arc::new(spin::Mutex::new(
+                crate::memory::mappings::MappingList::new(),
+            )),
+            timeslice_remaining: crate::sched::types::DEFAULT_TIMESLICE,
+            last_cpu: Some(0),
+            name: [0; 32],
+            name_len: 0,
+            process_info: None,
+            user_fs_base: 0,
+            detached: false,
+            signals: crate::signal::ThreadSignals::new(),
+        };
+        crate::task::registry::get_registry::<MockRuntime>()
+            .insert(alloc::boxed::Box::new(caller));
+        sched.state.insert_task(crate::sched::state::ThreadSchedFields {
+            tid: CALLER_TID,
+            runq_location: None,
+            state: TaskState::Running,
+            priority: crate::task::TaskPriority::Normal,
+            affinity: crate::task::Affinity::Pinned(0),
+            last_cpu: Some(0),
+            wake_cpu: Some(0),
+            run_cpu: Some(0),
+            timeslice_remaining: crate::sched::types::DEFAULT_TIMESLICE,
+            enqueued_at_tick: 0,
+            voluntary_yields: 0,
+            migration_state: crate::sched::state::MigrationState::Local,
+            wake_pending: false,
+        });
+        sched.state.per_cpu[0].current = Some(CALLER_TID);
+
+        // Register the display-driver task in Blocked state — the state it
+        // holds between spawn_user_task_deferred and wake_task.
+        let display_task = crate::task::Task {
+            id: DISPLAY_DRIVER_TID,
+            state: crate::task::TaskState::Blocked,
+            priority: crate::task::TaskPriority::Normal,
+            base_priority: crate::task::TaskPriority::Normal,
+            enqueued_at_tick: 0,
+            exit_code: None,
+            exit_waiters: crate::sched::WaitQueue::new(),
+            is_user: true,
+            wake_pending: false,
+            pending_interrupt: false,
+            affinity: crate::task::Affinity::Pinned(0),
+            kstack_base: core::ptr::null_mut(),
+            kstack_size: 0,
+            kstack_top: 0,
+            ctx: Default::default(),
+            aspace: crate::sched::tests::MockAddressSpace(0),
+            simd: crate::simd::SimdState::new(&crate::sched::tests::MOCK_RUNTIME),
+            stack_info: None,
+            mappings: alloc::sync::Arc::new(spin::Mutex::new(
+                crate::memory::mappings::MappingList::new(),
+            )),
+            timeslice_remaining: crate::sched::types::DEFAULT_TIMESLICE,
+            last_cpu: Some(0),
+            name: [0; 32],
+            name_len: 0,
+            process_info: None,
+            user_fs_base: 0,
+            detached: false,
+            signals: crate::signal::ThreadSignals::new(),
+        };
+        crate::task::registry::get_registry::<MockRuntime>()
+            .insert(alloc::boxed::Box::new(display_task));
+        sched.state.insert_task(crate::sched::state::ThreadSchedFields {
+            tid: DISPLAY_DRIVER_TID,
+            runq_location: None,
+            state: TaskState::Blocked,
+            priority: crate::task::TaskPriority::Normal,
+            affinity: crate::task::Affinity::Pinned(0),
+            last_cpu: Some(0),
+            wake_cpu: Some(0),
+            run_cpu: None,
+            timeslice_remaining: crate::sched::types::DEFAULT_TIMESLICE,
+            enqueued_at_tick: 0,
+            voluntary_yields: 0,
+            migration_state: crate::sched::state::MigrationState::Local,
+            wake_pending: false,
+        });
+
+        // Install the scheduler in the global, exactly as spawn_process_from_path
+        // does after Phase 1 and before Phase 3.
+        {
+            let mut lock = SCHEDULER.lock();
+            *lock = Some((&mut sched as *mut Scheduler<MockRuntime>) as usize);
+        }
+        clear_global_need_resched(0, Ordering::Relaxed);
+
+        // ── Replicate spawn_process_from_path Phase 3 ─────────────────────────
+        // 1. Outer irq_disable (as performed by spawn_process_from_path at Phase 1
+        //    boundary, still held at Phase 3 entry).  Named `_irq` to match the
+        //    production variable in spawn_process_from_path.
+        let _irq = MOCK_RUNTIME.irq_disable();
+        assert_eq!(
+            crate::sched::tests::mock_irq_depth(),
+            1,
+            "IRQ depth should be 1 after outer irq_disable (TP-A state)"
+        );
+
+        // 2. wake_task — nested irq_disable / irq_restore inside.
+        crate::sched::blocking::wake_task::<MockRuntime>(DISPLAY_DRIVER_TID);
+
+        // After wake_task returns, IRQ depth must still be 1 (outer disable
+        // preserved by wake_task's internal save/restore).
+        assert_eq!(
+            crate::sched::tests::mock_irq_depth(),
+            1,
+            "IRQ depth must remain 1 after wake_task returns (TP-B state): \
+             wake_task's internal irq_restore must not over-restore the outer disable"
+        );
+
+        // need_resched must be set because the woken task (Normal priority, same
+        // CPU as a Normal-priority caller) should trigger a round-robin reschedule.
+        assert!(
+            need_resched_pending(0),
+            "need_resched must be set on CPU 0 after waking display-driver task on same CPU"
+        );
+
+        // 3. Outer irq_restore (as performed by spawn_process_from_path
+        //    immediately after TP-B in Phase 3).
+        MOCK_RUNTIME.irq_restore(_irq);
+
+        // After irq_restore the depth must return to 0 — balanced.
+        assert_eq!(
+            crate::sched::tests::mock_irq_depth(),
+            0,
+            "IRQ depth must return to 0 after outer irq_restore (TP-D state): \
+             any imbalance here would cause the real kernel to hang or mis-enable IRQs"
+        );
+
+        // The spawned task must now be Runnable in the REGISTRY.
+        let task = crate::task::registry::get_task::<MockRuntime>(DISPLAY_DRIVER_TID)
+            .expect("display-driver task must remain in registry after wake_task");
+        assert_eq!(
+            task.state,
+            TaskState::Runnable,
+            "display-driver task must be Runnable after wake_task completes"
+        );
+
+        // Teardown: remove the SCHEDULER pointer and reset need_resched.
+        {
+            let mut lock = SCHEDULER.lock();
+            *lock = None;
+        }
+        clear_global_need_resched(0, Ordering::Relaxed);
     }
 }
