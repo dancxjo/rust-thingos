@@ -1,0 +1,256 @@
+[2J[01;01H[=3h[2J[01;01H[2J[01;01H[8;042;160t0[2J[01;01H[2J[01;01H[8;056;240t0[2J[01;01HBdsDxe: loading Boot0002 "UEFI QEMU DVD-ROM QM00005 " from PciRoot(0x0)/Pci(0x1F,0x2)/Sata(0x2,0xFFFF,0x0)
+BdsDxe: starting Boot0002 "UEFI QEMU DVD-ROM QM00005 " from PciRoot(0x0)/Pci(0x1F,0x2)/Sata(0x2,0xFFFF,0x0)
+[2J[01;01H[01;01H[2J[01;01H[01;01H[32505220473] [[32mINFO [0m] [kernel::boot_progress] [CPU0] boot_progress: milestone="Framebuffer Initialized"
+[32843746551] [[32mINFO [0m] [kernel::boot_progress] [CPU0] boot_progress: milestone="Memory Map OK"
+[32869029732] [[32mINFO [0m] [kernel] [CPU0] Initializing global allocator...
+[32905156152] [[32mINFO [0m] [kernel::boot_progress] [CPU0] boot_progress: milestone="Global Allocator"
+[32941967421] [[32mINFO [0m] [kernel::boot_progress] [CPU0] boot_progress: milestone="Display Registry"
+[32966738211] [[32mINFO [0m] [kernel] [CPU0] Initializing SIMD...
+[32968755996] [[32mINFO [0m] [kernel::boot_progress] [CPU0] boot_progress: milestone="SIMD Ready"
+[33011600985] [[33mWARN [0m] [kernel::entropy] [CPU0] ENTROPY: no hardware RNG available, using timer fallback (weak entropy)
+[33013540593] [[32mINFO [0m] [kernel::boot_progress] [CPU0] boot_progress: milestone="SIMD Ready"
+[33039114900] [[32mINFO [0m] [kernel] [CPU0] Initializing tasking...
+[33054552069] [[32mINFO [0m] [kernel::sched] [CPU0] SCHED: 1 per-CPU scheduler(s) allocated
+[33055489863] [[32mINFO [0m] [kernel::sched] [CPU0] SCHED: per-CPU preemption initialized (1 independent preemption domains, no global preemption lock)
+[33092136957] [[32mINFO [0m] [kernel::sched] [CPU0] Scheduler initialized
+[33093471840] [[32mINFO [0m] [kernel::boot_progress] [CPU0] boot_progress: milestone="Tasking Initialized"
+[33185825475] [[32mINFO [0m] [kernel::boot_progress] [CPU0] boot_progress: milestone="VFS Root Ready"
+[33270789453] [[32mINFO [0m] [kernel::boot_progress] [CPU0] boot_progress: milestone="PCI Bus Scanned"
+[33298313730] [[32mINFO [0m] [kernel::boot_progress] [CPU0] boot_progress: milestone="Legacy Devices"
+[33375584385] [[32mINFO [0m] [kernel::boot_progress] [CPU0] boot_progress: milestone="BSP Timer OK"
+[33485618727] [[32mINFO [0m] [kernel::boot_progress] [CPU0] boot_progress: milestone="SMP Bring-up"
+[33517763631] [[32mINFO [0m] [kernel::boot_progress] [CPU0] boot_progress: milestone="Boot Info OK"
+[33546395685] [[32mINFO [0m] [kernel::boot_progress] [CPU0] boot_progress: milestone="Modules Scanned"
+[33660001287] [[32mINFO [0m] [kernel::boot_progress] [CPU0] boot_progress: hint="Press F12 for a terminal"
+[33745385487] [[32mINFO [0m] [kernel::boot_progress] [CPU0] boot_progress: milestone="Spawning Sprout"
+[33885956379] [[32mINFO [0m] [kernel::boot_progress] [CPU0] boot_progress: milestone="Entering Scheduler"
+[34148696406] [[32mINFO [0m] [kernel] [CPU0] [kernel:start] scheduler-entry total elapsed_ticks=1029621483 elapsed_us=514810
+[34150126131] [[32mINFO [0m] [kernel] [CPU0] Entering scheduler loop.
+[34212377001] [[32mINFO [0m] [kernel::sched] [CPU0] HEARTBEAT: mono_ns=17104693006 last_timer_ns=17103589981 cpus_online=4
+[34223465628] [[32mINFO [0m] [kernel::sched] [CPU0] HEARTBEAT: cpu=0 curr=Some(5) last_switch_ns=17079924955 runq=1 ctxsw/s=1 tick/s=1 wake/s=0 ipi=0 lock_miss=0 lock_blocked=0
+[34225927725] [[32mINFO [0m] [kernel::sched] [CPU0] HEARTBEAT: cpu=1 curr=Some(2) last_switch_ns=0 runq=0 ctxsw/s=0 tick/s=20 wake/s=0 ipi=0 lock_miss=0 lock_blocked=0
+[34226976927] [[32mINFO [0m] [kernel::sched] [CPU0] HEARTBEAT: cpu=2 curr=Some(3) last_switch_ns=0 runq=0 ctxsw/s=0 tick/s=19 wake/s=0 ipi=0 lock_miss=0 lock_blocked=0
+[34228036128] [[32mINFO [0m] [kernel::sched] [CPU0] HEARTBEAT: cpu=3 curr=Some(4) last_switch_ns=0 runq=0 ctxsw/s=0 tick/s=19 wake/s=0 ipi=0 lock_miss=0 lock_blocked=0
+[34252818699] [[32mINFO [0m] [sprout] [CPU0] SPROUT: ENTERING MAIN (arg0=6291456)
+[34255750452] [[32mINFO [0m] [sprout] [CPU0] SPROUT: v0.4.1 [REBUILT] starting (Supervisor Mode)...
+[34294797438] [[32mINFO [0m] [sprout::supervisor] [CPU0] SPROUT: Initializing Supervisor...
+[34352395869] [[32mINFO [0m] [sprout::supervisor] [CPU0] SPROUT: Supervisor session started (FULL PIPELINE MODE)
+[34361332467] [[32mINFO [0m] [sprout::supervisor] [CPU0] SPROUT: Launching serial shell...
+[34363510764] [[32mINFO [0m] [sprout::pipelines] [CPU0] SPROUT: Setting up serial shell on /dev/console...
+[34490567991] [[32mINFO [0m] [sprout::pipelines] [CPU0] SPROUT: Spawned serial shell '/bin/sh' (PID=6)
+[34494504231] [[32mINFO [0m] [sprout::supervisor] [CPU0] SPROUT: Serial shell launched; yielding 50ms so the prompt can take the foreground
+[34501710903] [[32mINFO [0m] [sh] [CPU3] SH: starting v0.1.0-debug
+[1;32m
+        .-.
+       /   \        [1;36mTHING-OS[1;32m
+      |     |       [0;36m"People, places, things."[1;32m
+       \   /        
+        `-'        
+       /   \        v0.1  •  
+      |     |       2026-04-16
+       \   /
+        `-'
+[0m
+[2m--------------------------------------------------------------[0m
+[1m sprout has taken root. the system is awake.[0m
+
+  try:
+    [36mls /bin[0m       browse available shoots
+    [36mps[0m            observe living processes
+    [36mcat /version[0m  inspect the genome
+
+[2m--------------------------------------------------------------[0m
+[1;95mTHING[0m[1;96m-OS[0m [2;94m[[0m[1;95mBOOT[0m[2;94m][0m [1;93m/[0m [1;96m>[0m [?25h[34661260392] [[32mINFO [0m] [sprout::supervisor] [CPU0] SPROUT: Continuing supervisor startup
+[34664885574] [[32mINFO [0m] [sprout::supervisor] [CPU0] SPROUT: Spawning cambium for driver discovery...
+[34724861094] [[32mINFO [0m] [sprout::supervisor] [CPU0] SPROUT: Spawning iso9660d...
+[34727503140] [[32mINFO [0m] [cambium] [CPU1] CAMBIUM: main started
+[34750787973] [[32mINFO [0m] [cambium] [CPU1] CAMBIUM: starting device discovery manager (daemon mode)
+[34792566864] [[32mINFO [0m] [sprout::pipelines] [CPU0] SPROUT: Skipping early /hosts mount; mesocarp is disabled in init
+[34795548810] [[32mINFO [0m] [sprout::supervisor] [CPU0] SPROUT: Starting full pipeline (graphics + input)
+[34797437961] [[32mINFO [0m] [sprout::supervisor] [CPU0] SPROUT: Entering supervisor service loop (tick=100ms)
+[34818686925] [[32mINFO [0m] [iso9660d] [CPU2] ISO9660D: Starting VFS provider scan for /media/cdrom
+[34852221921] [[32mINFO [0m] [sprout::pipelines] [CPU0] SPROUT: Spawned bristle (PID=9)
+[34857178950] [[32mINFO [0m] [sprout::supervisor] [CPU0] SPROUT: Starting display pipeline setup
+[34859123772] [[32mINFO [0m] [sprout::pipelines] [CPU0] SPROUT: Probing /dev/fb0 for boot framebuffer metadata
+[34866744858] [[32mINFO [0m] [sprout::pipelines] [CPU0] SPROUT: /dev/fb0 ready width=1280 height=800 stride=5120 format=2
+[34870565697] [[32mINFO [0m] [sprout::pipelines] [CPU0] SPROUT: Selected display driver '/drivers/display_virtio_gpu'
+[34872563418] [[32mINFO [0m] [sprout::pipelines] [CPU0] SPROUT: Creating display request port
+[34909945125] [[32mINFO [0m] [sprout::pipelines] [CPU0] SPROUT: Creating display response port
+[34913923308] [[32mINFO [0m] [sprout::pipelines] [CPU0] SPROUT: Creating display bootstrap memfd
+[34919424573] [[32mINFO [0m] [sprout::pipelines] [CPU0] SPROUT: Mapping display bootstrap memfd
+[34924941744] [[32mINFO [0m] [sprout::pipelines] [CPU0] SPROUT: Launching display driver '/drivers/display_virtio_gpu' (boot_fd=3, bind_id=322371585)
+[34925304216] [[32mINFO [0m] [bristle] [CPU3] bristle: published pid 9 to /run/bristle/pid
+[34937564211] [[32mINFO [0m] [bristle] [CPU3] bristle: published device handles kbd_in=1 mouse_in=3
+[34947510444] [[32mINFO [0m] [bristle] [CPU3] bristle: online (kbd_tok=Some(WaitToken(2)), mouse_tok=Some(WaitToken(3)))
+[35054464500] [[32mINFO [0m] [sprout::supervisor] [CPU0] SPROUT: Display pipeline initialized (backend=virtio_gpu)
+[35073794547] [[32mINFO [0m] [display_virtio_gpu] [CPU1] display_virtio_gpu: starting v0.4.1 (boot_arg=3)
+[35166747132] [[32mINFO [0m] [virtio_gpu] [CPU1] virtio_gpu: caps from sysfs - common BAR2 off=0x1000, notify BAR2 off=0x3000 mult=4
+[35178159819] [[32mINFO [0m] [virtio_gpu] [CPU1] virtio_gpu: device features=0x30000002 virgl=false
+[35192159310] [[32mINFO [0m] [virtio_gpu] [CPU1] virtio_gpu: cursor queue (queue 1) configured
+[35193654342] [[32mINFO [0m] [display_virtio_gpu] [CPU1] display_virtio_gpu: GPU initialized successfully
+[35194533990] [[32mINFO [0m] [display_virtio_gpu] [CPU1] display_virtio_gpu: composition paths: gpu_opaque_copy=enabled cpu_alpha_blend=enabled
+[35203948329] [[32mINFO [0m] [display_virtio_gpu] [CPU1] display_virtio_gpu: host scanout 1280x800 enabled=true (bootfb was 1280x800)
+[35473836915] [[32mINFO [0m] [display_virtio_gpu] [CPU1] display_virtio_gpu: cursor DMA buffer ready (16 pages at phys=0x278f000)
+[35534694723] [[32mINFO [0m] [cambium::catalog] [CPU1] DEVD CATALOG: registered driver '/drivers/ahci_disk' name='ahci_disk' class=Block kind='dev.storage.Ahci' start='thingos_driver_start_safe'
+[35552668404] [[32mINFO [0m] [sprout::supervisor] [CPU0] SPROUT: Mounted /dev/display/card0 successfully
+[35726860092] [[32mINFO [0m] [cambium::catalog] [CPU1] DEVD CATALOG: registered driver '/drivers/ata_disk' name='ata_disk' class=Block kind='dev.storage.Ide' start='thingos_driver_start_safe'
+[35904522588] [[32mINFO [0m] [cambium::catalog] [CPU1] DEVD CATALOG: registered driver '/drivers/chime' name='chime' class=Audio kind='dev.sound.Chime' start='thingos_driver_start_safe'
+[36034866351] [[32mINFO [0m] [display_virtio_gpu] [CPU1] display_virtio_gpu: Sovereign registration COMPLETE. Assigned: /dev/display/card0
+[36041067381] [[32mINFO [0m] [display_virtio_gpu] [CPU1] display_virtio_gpu: VFS provider loop online
+[36043149252] [[32mINFO [0m] [sprout::supervisor] [CPU0] SPROUT: Display service is ready at /dev/display/card0
+[36119253852] [[32mINFO [0m] [cambium::catalog] [CPU1] DEVD CATALOG: registered driver '/drivers/display_bootfb' name='display_bootfb' class=Display kind='dev.display.Gpu' start='thingos_driver_start_safe'
+[36217362654] [[32mINFO [0m] [kernel::sched] [CPU0] HEARTBEAT: mono_ns=18106736587 last_timer_ns=18106215187 cpus_online=4
+[36219367041] [[32mINFO [0m] [kernel::sched] [CPU0] HEARTBEAT: cpu=0 curr=Some(0) last_switch_ns=18023642208 runq=0 ctxsw/s=15 tick/s=47 wake/s=7 ipi=2 lock_miss=0 lock_blocked=0
+[36221196627] [[32mINFO [0m] [kernel::sched] [CPU0] HEARTBEAT: cpu=1 curr=Some(7) last_switch_ns=18022708308 runq=1 ctxsw/s=5 tick/s=34 wake/s=4 ipi=2 lock_miss=0 lock_blocked=0
+[36222443730] [[32mINFO [0m] [kernel::sched] [CPU0] HEARTBEAT: cpu=2 curr=Some(3) last_switch_ns=17416112208 runq=0 ctxsw/s=2 tick/s=54 wake/s=2 ipi=1 lock_miss=0 lock_blocked=0
+[36223816893] [[32mINFO [0m] [kernel::sched] [CPU0] HEARTBEAT: cpu=3 curr=Some(4) last_switch_ns=17480447374 runq=0 ctxsw/s=4 tick/s=53 wake/s=4 ipi=2 lock_miss=0 lock_blocked=0
+[36358338126] [[32mINFO [0m] [cambium::catalog] [CPU1] DEVD CATALOG: registered driver '/drivers/display_virtio_gpu' name='display_virtio_gpu' class=Display kind='dev.display.Gpu' start='thingos_driver_start_safe'
+[36549072153] [[32mINFO [0m] [cambium::catalog] [CPU1] DEVD CATALOG: registered driver '/drivers/hdaudio' name='hdaudio' class=Audio kind='dev.sound.Hda' start='thingos_driver_start_safe'
+[36563796819] [[32mINFO [0m] [sprout::supervisor] [CPU0] SPROUT: Spawned bloom (PID=11)
+[36571626894] [[32mINFO [0m] [bloom] [CPU2] bloom: ENTERING MAIN
+[36573296364] [[32mINFO [0m] [bloom] [CPU2] bloom: compositor service starting
+[36574546998] [[32mINFO [0m] [bloom] [CPU2] bloom.phase=start
+[36578655300] [[32mINFO [0m] [bloom] [CPU2] bloom.phase=open_display
+[36758550774] [[32mINFO [0m] [bloom] [CPU2] bloom: connected to /dev/display/card0 on try 0
+[36759731481] [[32mINFO [0m] [bloom] [CPU2] bloom.phase=get_info
+[36762260568] [[32mINFO [0m] [cambium::catalog] [CPU1] DEVD CATALOG: registered driver '/drivers/hwrng' name='hwrng' class=Other kind='dev.rng.HwRng' start='_RNvCs7wlZbVUrQWf_5hwrng20thingos_driver_start'
+[36778174554] [[32mINFO [0m] [bloom] [CPU2] bloom: output0 1280x800 @ 60000mHz
+[36779220786] [[32mINFO [0m] [bloom] [CPU2] bloom: display driver does not support VBLANK
+[36780031629] [[32mINFO [0m] [bloom] [CPU2] bloom: display driver supports linear dmabuf import
+[36780953616] [[32mINFO [0m] [bloom] [CPU2] bloom: display driver supports GPU blit (hardware transfer/flush)
+[36781817061] [[32mINFO [0m] [bloom] [CPU2] bloom: display driver supports direct scanout (zero-copy path to display)
+[36782782674] [[32mINFO [0m] [bloom] [CPU2] bloom: display driver supports partial flush (damage regions)
+[36783686907] [[32mINFO [0m] [bloom] [CPU2] bloom: display driver supports resource cache (pre-allocated buffer pool)
+[36784646184] [[32mINFO [0m] [bloom] [CPU2] bloom: creating service port...
+[36947855208] [[32mINFO [0m] [cambium::catalog] [CPU1] DEVD CATALOG: registered driver '/drivers/pci_stubd' name='pci_stubd' class=Other kind='drv.PciStubd' start='thingos_driver_start_safe'
+[37159644225] [[32mINFO [0m] [cambium::catalog] [CPU1] DEVD CATALOG: registered driver '/drivers/ps2_kbd' name='ps2_kbd' class=Input kind='drv.Ps2Keyboard' start='thingos_driver_start_safe'
+[37358728836] [[32mINFO [0m] [bloom::render] [CPU2] bloom: pistil background renderer loaded from /lib/libpistil.so
+[37360116387] [[32mINFO [0m] [bloom::render] [CPU2] bloom: pistil font text renderer loaded with default /share/fonts/Inter-Regular.ttf
+[37361210700] [[32mINFO [0m] [bloom::render] [CPU2] bloom: pistil symbol renderer loaded with /share/fonts/NotoSansSymbol2-Regular.ttf
+[37362440610] [[32mINFO [0m] [bloom] [CPU2] bloom.phase=import_primary_buffer
+[37366588875] [[32mINFO [0m] [cambium::catalog] [CPU1] DEVD CATALOG: registered driver '/drivers/ps2_mouse' name='ps2_mouse' class=Input kind='drv.Ps2Mouse' start='thingos_driver_start_safe'
+[37370444067] [[32mINFO [0m] [bloom] [CPU2] bloom: initial theme configured Facet Frame
+[37531737309] [[32mINFO [0m] [cambium::catalog] [CPU1] DEVD CATALOG: registered driver '/drivers/rtc_cmos' name='rtc_cmos' class=Other kind='dev.rtc.Cmos' start='thingos_driver_start_safe'
+[37700489442] [[32mINFO [0m] [cambium::catalog] [CPU1] DEVD CATALOG: registered driver '/drivers/rtl8168d' name='rtl8168d' class=Net kind='dev.net.Nic' start='thingos_driver_start_safe'
+[37868357868] [[32mINFO [0m] [bloom] [CPU2] bloom.phase=load_wallpaper
+[37875184215] [[32mINFO [0m] [bloom] [CPU2] bloom: initial wallpaper configured /share/wallpapers/flower.png
+[37876377165] [[32mINFO [0m] [bloom] [CPU2] bloom.phase=init_cursor
+[37952420088] [[32mINFO [0m] [cambium::catalog] [CPU1] DEVD CATALOG: registered driver '/drivers/virtio_netd' name='virtio_netd' class=Net kind='dev.net.Nic' start='thingos_driver_start_safe'
+[38084281587] [[32mINFO [0m] [bloom::render] [CPU2] bloom: cursor ready buffer=2 size=48x48 hotspot=11,6
+[38086265316] [[32mINFO [0m] [bloom] [CPU2] bloom.phase=first_damage width=1280 height=800
+[38095108689] [[32mINFO [0m] [bloom] [CPU2] bloom: watching wallpaper config /session/desktop/wallpaper
+[38097252138] [[32mINFO [0m] [bloom] [CPU2] bloom: watching theme config /session/desktop/theme
+[38133687471] [[32mINFO [0m] [bloom] [CPU2] bloom: Wayland server thread spawned
+[38135031099] [[32mINFO [0m] [bloom::wayland] [CPU3] wayland-server: starting
+[38136612591] [[32mINFO [0m] [bloom::loop_types] [CPU2] bloom: service loop started
+[38138210484] [[32mINFO [0m] [bloom::loop_types] [CPU2] bloom: output0 1280x800 @ 60000mHz ready
+[38144081580] [[32mINFO [0m] [bloom::loop_types] [CPU2] bloom.phase=first_commit_begin
+[38149958385] [[32mINFO [0m] [bloom::wayland] [CPU3] wayland-server: listening on /run/wayland-0
+[38151129984] [[32mINFO [0m] [bloom::wayland] [CPU3] wayland-server: advertising globals wl_compositor wl_shm xdg_wm_base wl_seat wl_output wl_subcompositor wl_data_device_manager zwp_linux_dmabuf_v1
+[38204664531] [[32mINFO [0m] [bloom::loop_types] [CPU2] First frame rendered
+[38205745347] [[32mINFO [0m] [bloom::loop_types] [CPU2] bloom.phase=first_commit_done
+[38206505766] [[32mINFO [0m] [bloom::loop_types] [CPU2] bloom.phase=desktop_ready
+[38209598724] [[32mINFO [0m] [cambium::catalog] [CPU1] DEVD CATALOG: registered driver '/drivers/virtio_sound' name='virtio_sound' class=Audio kind='dev.sound.Virtio' start='thingos_driver_start_safe'
+[38223644184] [[32mINFO [0m] [kernel::sched] [CPU0] HEARTBEAT: mono_ns=19111240450 last_timer_ns=19107473187 cpus_online=4
+[38224579602] [[32mINFO [0m] [kernel::sched] [CPU0] HEARTBEAT: cpu=0 curr=Some(0) last_switch_ns=19111051657 runq=0 ctxsw/s=12 tick/s=50 wake/s=6 ipi=2 lock_miss=0 lock_blocked=0
+[38225745558] [[32mINFO [0m] [kernel::sched] [CPU0] HEARTBEAT: cpu=1 curr=Some(7) last_switch_ns=19103743807 runq=0 ctxsw/s=28 tick/s=26 wake/s=25 ipi=11 lock_miss=0 lock_blocked=0
+[38229462843] [[32mINFO [0m] [kernel::sched] [CPU0] HEARTBEAT: cpu=2 curr=Some(3) last_switch_ns=19104592815 runq=0 ctxsw/s=14 tick/s=39 wake/s=14 ipi=8 lock_miss=0 lock_blocked=0
+[38231306025] [[32mINFO [0m] [kernel::sched] [CPU0] HEARTBEAT: cpu=3 curr=Some(4) last_switch_ns=19109683444 runq=0 ctxsw/s=6 tick/s=54 wake/s=5 ipi=5 lock_miss=0 lock_blocked=0
+[38405914602] [[32mINFO [0m] [cambium::catalog] [CPU1] DEVD CATALOG: registered driver '/drivers/xhci' name='xhci' class=Block kind='dev.usb.Xhci' start='thingos_driver_start_safe'
+[38407932189] [[32mINFO [0m] [cambium::catalog] [CPU1] DEVD CATALOG: 15 driver(s) found
+[38490216336] [[32mINFO [0m] [ahci_disk] [CPU1] AHCI: Starting AHCI VFS driver
+[38514624489] [[32mINFO [0m] [ahci_disk] [CPU1] AHCI: Claimed device /sys/devices/pci-0000:00:1f.2
+[38530214415] [[32mINFO [0m] [ahci_disk] [CPU1] AHCI: Mounted atapi2 at /dev/storage/atapi2
+[38531226096] [[32mINFO [0m] [ahci_disk] [CPU1] AHCI: Provider loop online at /dev/storage/atapi2
+[38622835548] [[32mINFO [0m] [rtc_cmos] [CPU2] RTC: claimed /sys/devices/isa-0070 (handle=2)
+[38643534666] [[32mINFO [0m] [rtc_cmos] [CPU2] RTC: 2026-05-02 05:48:44 = 1777700924 unix_secs
+[38644940829] [[32mINFO [0m] [kernel::time] [CPU2] System clock anchored: unix_secs=1777700924, mono_ns=19322291719, offset=1777700904677708281ns
+[38645953929] [[32mINFO [0m] [rtc_cmos] [CPU2] RTC: System clock anchored to 1777700924 unix_secs
+[38651505288] [[32mINFO [0m] [kernel::time] [CPU0] System clock tick: utc=2026-05-02 05:48:44.002701034 unix_secs=1777700924.002701034
+[38659652097] [[32mINFO [0m] [ps2_kbd] [CPU3] ps2_kbd: bristle pid=9
+[38682750018] [[32mINFO [0m] [ps2_kbd] [CPU3] ps2_kbd: irq_wait entry vector=0x21 wakes=0 timeouts=0 input_total=0 dropped=0
+[38714941287] [[32mINFO [0m] [ps2_mouse] [CPU1] ps2_mouse: bristle pid=9
+[38716137702] [[32mINFO [0m] [ps2_mouse] [CPU1] ps2.phase=aux_enable_begin
+[38724267417] [[32mINFO [0m] [ps2_kbd] [CPU3] ps2_kbd: irq_wait entry vector=0x21 wakes=0 timeouts=1 input_total=0 dropped=0
+[38755675827] [[32mINFO [0m] [ps2_kbd] [CPU3] ps2_kbd: irq_wait entry vector=0x21 wakes=0 timeouts=2 input_total=0 dropped=0
+[38790798222] [[32mINFO [0m] [ps2_kbd] [CPU3] ps2_kbd: irq_wait entry vector=0x21 wakes=0 timeouts=3 input_total=0 dropped=0
+[38805249087] [[32mINFO [0m] [kernel::irq::ps2] [CPU1] PS/2 take_scancode entry: depth=0 pushed=0 popped=0 overwritten=0
+[38806742172] [[32mINFO [0m] [kernel::irq::ps2] [CPU1] PS/2 take_scancode exit: byte=0x47 is_aux=false depth=0 popped=1
+[38808735471] [[32mINFO [0m] [ps2_mouse] [CPU1] ps2.phase=aux_enable_done
+[38809658481] [[32mINFO [0m] [ps2_mouse] [CPU1] ps2.phase=mouse_reset_begin
+[38813430381] [[32mINFO [0m] [ps2_kbd] [CPU3] ps2_kbd: irq_wait entry vector=0x21 wakes=1 timeouts=3 input_total=0 dropped=0
+[38816880102] [[32mINFO [0m] [kernel::irq::ps2] [CPU1] PS/2 take_scancode entry: depth=3 pushed=4 popped=1 overwritten=0
+[38817745098] [[32mINFO [0m] [kernel::irq::ps2] [CPU1] PS/2 take_scancode exit: byte=0xfa is_aux=true depth=2 popped=2
+[38819757735] [[32mINFO [0m] [kernel::irq::ps2] [CPU1] PS/2 take_scancode entry: depth=2 pushed=4 popped=2 overwritten=0
+[38820573693] [[32mINFO [0m] [kernel::irq::ps2] [CPU1] PS/2 take_scancode exit: byte=0x00 is_aux=true depth=1 popped=3
+[38822238972] [[32mINFO [0m] [kernel::irq::ps2] [CPU1] PS/2 take_scancode entry: depth=1 pushed=4 popped=3 overwritten=0
+[38823091362] [[32mINFO [0m] [kernel::irq::ps2] [CPU1] PS/2 take_scancode exit: byte=0xaa is_aux=true depth=0 popped=4
+[38824972659] [[32mINFO [0m] [ps2_mouse] [CPU1] ps2.phase=mouse_reset_done
+[38825706381] [[32mINFO [0m] [ps2_mouse] [CPU1] ps2.phase=mouse_sample_rate_begin
+[38829377730] [[32mINFO [0m] [ps2_kbd] [CPU3] ps2_kbd: irq_wait entry vector=0x21 wakes=2 timeouts=3 input_total=0 dropped=0
+[38838085605] [[32mINFO [0m] [kernel::irq::ps2] [CPU1] PS/2 take_scancode entry: depth=1 pushed=5 popped=4 overwritten=0
+[38838969180] [[32mINFO [0m] [kernel::irq::ps2] [CPU1] PS/2 take_scancode exit: byte=0xfa is_aux=true depth=0 popped=5
+[38843106027] [[32mINFO [0m] [kernel::irq::ps2] [CPU1] PS/2 take_scancode entry: depth=1 pushed=6 popped=5 overwritten=0
+[38843913603] [[32mINFO [0m] [kernel::irq::ps2] [CPU1] PS/2 take_scancode exit: byte=0xfa is_aux=true depth=0 popped=6
+[38845077117] [[32mINFO [0m] [ps2_mouse] [CPU1] ps2_mouse: sample rate set to 60 Hz
+[38845873704] [[32mINFO [0m] [ps2_mouse] [CPU1] ps2.phase=mouse_sample_rate_done
+[38857169868] [[32mINFO [0m] [ps2_kbd] [CPU3] ps2_kbd: irq_wait entry vector=0x21 wakes=2 timeouts=4 input_total=0 dropped=0
+[38857744134] [[32mINFO [0m] [kernel::irq::ps2] [CPU1] PS/2 take_scancode entry: depth=1 pushed=7 popped=6 overwritten=0
+[38858451456] [[32mINFO [0m] [kernel::irq::ps2] [CPU1] PS/2 take_scancode exit: byte=0xfa is_aux=true depth=0 popped=7
+[38862905004] [[32mINFO [0m] [kernel::irq::ps2] [CPU1] PS/2 take_scancode entry: depth=1 pushed=8 popped=7 overwritten=0
+[38863722744] [[32mINFO [0m] [kernel::irq::ps2] [CPU1] PS/2 take_scancode exit: byte=0xfa is_aux=true depth=0 popped=8
+[38865087096] [[32mINFO [0m] [bloom::services::input_service] [CPU2] bloom: registered bristle pointer sink
+[38868050430] [[32mINFO [0m] [kernel::irq::ps2] [CPU1] PS/2 take_scancode entry: depth=4 pushed=12 popped=8 overwritten=0
+[38868912918] [[32mINFO [0m] [kernel::irq::ps2] [CPU1] PS/2 take_scancode exit: byte=0xfa is_aux=true depth=3 popped=9
+[38870811606] [[32mINFO [0m] [kernel::irq::ps2] [CPU1] PS/2 take_scancode entry: depth=3 pushed=12 popped=9 overwritten=0
+[38871638091] [[32mINFO [0m] [kernel::irq::ps2] [CPU1] PS/2 take_scancode exit: byte=0x00 is_aux=true depth=2 popped=10
+[38872072800] [[32mINFO [0m] [bristle] [CPU3] bristle: bloom sink registered (handle=5 mask=0x03)
+[38873450649] [[32mINFO [0m] [kernel::irq::ps2] [CPU1] PS/2 take_scancode entry: depth=2 pushed=12 popped=10 overwritten=0
+[38874118173] [[32mINFO [0m] [kernel::irq::ps2] [CPU1] PS/2 take_scancode exit: byte=0x03 is_aux=true depth=1 popped=11
+[38875830543] [[32mINFO [0m] [kernel::irq::ps2] [CPU1] PS/2 take_scancode entry: depth=1 pushed=12 popped=11 overwritten=0
+[38876656566] [[32mINFO [0m] [kernel::irq::ps2] [CPU1] PS/2 take_scancode exit: byte=0x3c is_aux=true depth=0 popped=12
+[38878233108] [[32mINFO [0m] [ps2_mouse] [CPU1] ps2.phase=irq_enable_begin
+[38882523834] [[32mINFO [0m] [kernel::irq::ps2] [CPU1] PS/2 take_scancode entry: depth=1 pushed=13 popped=12 overwritten=0
+[38883383220] [[32mINFO [0m] [kernel::irq::ps2] [CPU1] PS/2 take_scancode exit: byte=0xfa is_aux=true depth=0 popped=13
+[38885493867] [[32mINFO [0m] [ps2_mouse] [CPU1] ps2.phase=irq_enable_done
+[38888610024] [[32mINFO [0m] [ps2_kbd] [CPU3] ps2_kbd: irq_wait entry vector=0x21 wakes=2 timeouts=5 input_total=0 dropped=0
+[38922358464] [[32mINFO [0m] [ps2_kbd] [CPU3] ps2_kbd: irq_wait entry vector=0x21 wakes=2 timeouts=6 input_total=0 dropped=0
+[38966955357] [[32mINFO [0m] [ps2_kbd] [CPU3] ps2_kbd: irq_wait entry vector=0x21 wakes=2 timeouts=7 input_total=0 dropped=0
+[39000731946] [[32mINFO [0m] [ps2_kbd] [CPU3] ps2_kbd: irq_wait entry vector=0x21 wakes=2 timeouts=8 input_total=0 dropped=0
+[39035607534] [[32mINFO [0m] [ps2_kbd] [CPU3] ps2_kbd: irq_wait entry vector=0x21 wakes=2 timeouts=9 input_total=0 dropped=0
+[39059093337] [[32mINFO [0m] [ps2_kbd] [CPU3] ps2_kbd: irq_wait entry vector=0x21 wakes=2 timeouts=10 input_total=0 dropped=0
+[39090971271] [[32mINFO [0m] [sprout::supervisor] [CPU0] SPROUT: Spawned wayland_hello (PID=17)
+[39097124946] [[32mINFO [0m] [ps2_kbd] [CPU3] ps2_kbd: irq_wait entry vector=0x21 wakes=2 timeouts=11 input_total=0 dropped=0
+[39104462232] [[32mINFO [0m] [wayland_hello] [CPU2] wayland_hello: connected to /run/wayland-0
+[39143747148] [[32mINFO [0m] [sprout::supervisor] [CPU0] SPROUT: Spawned clock (PID=18)
+[39163728417] [[32mINFO [0m] [ps2_kbd] [CPU3] ps2_kbd: irq_wait entry vector=0x21 wakes=2 timeouts=12 input_total=0 dropped=0
+[39168261858] [[32mINFO [0m] [clock] [CPU3] clock: running at low scheduler priority tid=18
+[39171858957] [[32mINFO [0m] [clock] [CPU3] clock: connected to /run/wayland-0
+[39195846360] [[32mINFO [0m] [sprout::supervisor] [CPU0] SPROUT: Spawned leaf (PID=19)
+[39199638984] [[32mINFO [0m] [leaf::thingos_app] [CPU1] leaf: starting
+[39244446186] [[32mINFO [0m] [ps2_kbd] [CPU3] ps2_kbd: irq_wait entry vector=0x21 wakes=2 timeouts=13 input_total=0 dropped=0
+[39798296571] [[32mINFO [0m] [bloom::services::wallpaper] [CPU2] bloom: preparing background /share/wallpapers/flower.png
+[39861692079] [[32mINFO [0m] [ps2_kbd] [CPU3] ps2_kbd: irq_wait entry vector=0x21 wakes=2 timeouts=14 input_total=0 dropped=0
+[39905317650] [[32mINFO [0m] [ps2_kbd] [CPU3] ps2_kbd: irq_wait entry vector=0x21 wakes=2 timeouts=15 input_total=0 dropped=0
+[39922506723] [[32mINFO [0m] [ps2_kbd] [CPU3] ps2_kbd: irq_wait entry vector=0x21 wakes=2 timeouts=16 input_total=0 dropped=0
+[39930861564] [[32mINFO [0m] [clock] [CPU3] clock: pistil DSEG7 text renderer loaded with /share/fonts/DSEG7Classic-Regular.ttf
+[39932099361] [[32mINFO [0m] [clock] [CPU3] clock: pistil generic text renderer loaded with /share/fonts/Inter-Regular.ttf
+[39958362246] [[32mINFO [0m] [ps2_kbd] [CPU3] ps2_kbd: irq_wait entry vector=0x21 wakes=2 timeouts=17 input_total=0 dropped=0
+[39990508866] [[32mINFO [0m] [ps2_kbd] [CPU3] ps2_kbd: irq_wait entry vector=0x21 wakes=2 timeouts=18 input_total=0 dropped=0
+[40023918957] [[32mINFO [0m] [ps2_kbd] [CPU3] ps2_kbd: irq_wait entry vector=0x21 wakes=2 timeouts=19 input_total=0 dropped=0
+[40057589979] [[32mINFO [0m] [wayland_hello] [CPU2] wayland_hello: pistil text renderer loaded with default /share/fonts/Inter-Regular.ttf
+[40099791270] [[32mINFO [0m] [ps2_kbd] [CPU3] ps2_kbd: irq_wait entry vector=0x21 wakes=2 timeouts=20 input_total=0 dropped=0
+[40099840011] [[32mINFO [0m] [iso9660d] [CPU2] iso9660d: probing device atapi2
+[40100950032] [[32mINFO [0m] [iso9660d] [CPU2] iso9660d: found ISO9660 on device atapi2
+[40107679161] [[32mINFO [0m] [iso9660d] [CPU2] iso9660d: mounted at /media/cdrom
+[40117720533] [[32mINFO [0m] [wayland_hello] [CPU2] wayland_hello: using zwp_linux_dmabuf_v1 buffers
+[40119291366] [[32mINFO [0m] [wayland_hello] [CPU2] wayland_hello: bound wp_presentation
+[40124936742] [[32mINFO [0m] [wayland_hello] [CPU2] wayland_hello: wl_region smoke test: create+add+set_opaque+destroy
+[40128012012] [[32mINFO [0m] [wayland_hello] [CPU2] wayland_hello: wl_region smoke test: create+add+set_input+destroy
+[40151879328] [[32mINFO [0m] [ps2_kbd] [CPU3] ps2_kbd: irq_wait entry vector=0x21 wakes=2 timeouts=21 input_total=0 dropped=0
+[40254109203] [[32mINFO [0m] [kernel::sched] [CPU0] HEARTBEAT: mono_ns=20125698153 last_timer_ns=20125589385 cpus_online=4
+[40256392803] [[32mINFO [0m] [kernel::sched] [CPU0] HEARTBEAT: cpu=0 curr=Some(0) last_switch_ns=20096312197 runq=0 ctxsw/s=16 tick/s=50 wake/s=12 ipi=6 lock_miss=0 lock_blocked=0
+[40257785931] [[32mINFO [0m] [kernel::sched] [CPU0] HEARTBEAT: cpu=1 curr=Some(19) last_switch_ns=19849604808 runq=1 ctxsw/s=46 tick/s=22 wake/s=41 ipi=27 lock_miss=0 lock_blocked=0
+[40259070951] [[32mINFO [0m] [kernel::sched] [CPU0] HEARTBEAT: cpu=2 curr=Some(8) last_switch_ns=20126205445 runq=2 ctxsw/s=17 tick/s=33 wake/s=17 ipi=15 lock_miss=0 lock_blocked=0
+[40260288090] [[32mINFO [0m] [kernel::sched] [CPU0] HEARTBEAT: cpu=3 curr=Some(4) last_switch_ns=20111270124 runq=0 ctxsw/s=70 tick/s=35 wake/s=75 ipi=24 lock_miss=0 lock_blocked=0
+[40690999965] [[32m

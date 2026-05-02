@@ -10,13 +10,12 @@ use alloc::format;
 use alloc::string::{String, ToString};
 use alloc::sync::Arc;
 use alloc::vec::Vec;
-use core::time::Duration;
 
 use abi::driver_interface::{
     BusKind, DRIVER_DESCRIPTOR_ABI_VERSION, DeviceInfo, DriverClass, DriverDescriptor,
     DriverEntryCtx, ProbeResult, Status,
 };
-use abi::errors::{Errno, SysResult};
+use abi::errors::Errno;
 use abi::vfs_rpc::VfsRpcOp;
 use abi::vm::{VmBacking, VmMapFlags, VmMapReq, VmProt};
 use ipc_helpers::provider::{ProviderLoop, ProviderRequest, ProviderResponse};
@@ -26,7 +25,7 @@ use stem::syscall::vfs::vfs_mount;
 use stem::syscall::{
     device_alloc_dma, device_claim, device_dma_phys, device_map_mmio, port_create,
 };
-use stem::{debug, error, info, trace, warn, yield_now};
+use stem::{error, info, trace, warn, yield_now};
 
 const THINGOS_DRIVER_NAME: &[u8] = b"ahci_disk";
 
@@ -112,6 +111,7 @@ const PORT_TFD: usize = 0x20;
 const PORT_SIG: usize = 0x24;
 const PORT_SSTS: usize = 0x28;
 const PORT_SERR: usize = 0x30;
+const PORT_SACT: usize = 0x34;
 const PORT_CI: usize = 0x38;
 
 const S_IFREG: u32 = 0o100000;
@@ -122,6 +122,8 @@ const SATA_SIG_ATAPI: u32 = 0xEB140101;
 
 const PORT_CMD_ST: u32 = 1 << 0;
 const PORT_CMD_FRE: u32 = 1 << 4;
+const PORT_CMD_FR: u32 = 1 << 14;
+const PORT_CMD_CR: u32 = 1 << 15;
 const FIS_TYPE_REG_H2D: u8 = 0x27;
 const ATA_CMD_PACKET: u8 = 0xA0;
 
@@ -168,6 +170,37 @@ fn port_base(hba_base: u64, port: u32) -> u64 {
     hba_base + HBA_PORT_BASE as u64 + (port as u64 * 0x80)
 }
 
+fn wait_port_cmd_clear(pb: u64, mask: u32, iterations: u32) -> bool {
+    for i in 0..iterations {
+        if mmio_read32(pb, PORT_CMD) & mask == 0 {
+            return true;
+        }
+        if i % 1000 == 0 {
+            yield_now();
+        }
+    }
+    false
+}
+
+fn stop_port_engine(pb: u64) -> bool {
+    let cmd = mmio_read32(pb, PORT_CMD);
+    mmio_write32(pb, PORT_CMD, cmd & !PORT_CMD_ST);
+    if !wait_port_cmd_clear(pb, PORT_CMD_CR, 100000) {
+        return false;
+    }
+
+    let cmd = mmio_read32(pb, PORT_CMD);
+    mmio_write32(pb, PORT_CMD, cmd & !PORT_CMD_FRE);
+    wait_port_cmd_clear(pb, PORT_CMD_FR, 100000)
+}
+
+fn start_port_engine(pb: u64) {
+    let cmd = mmio_read32(pb, PORT_CMD);
+    mmio_write32(pb, PORT_CMD, cmd | PORT_CMD_FRE);
+    let cmd = mmio_read32(pb, PORT_CMD);
+    mmio_write32(pb, PORT_CMD, cmd | PORT_CMD_ST);
+}
+
 struct AhciDevice {
     mmio_base: u64,
     port: u32,
@@ -209,6 +242,8 @@ impl AhciDevice {
     fn read_atapi_sector(&self, lba: u64, buf: &mut [u8]) -> Result<(), BlockError> {
         let pb = port_base(self.mmio_base, self.port);
         mmio_write32(pb, PORT_IS, 0xFFFFFFFF);
+        mmio_write32(pb, PORT_SERR, 0xFFFFFFFF);
+        mmio_write32(pb, PORT_SACT, 0);
 
         let ds = 2048;
         let prdt = PrdtEntry {
@@ -230,7 +265,7 @@ impl AhciDevice {
 
             tbl.acmd.fill(0);
             let lba32 = lba as u32;
-            tbl.acmd[0] = 0x28; // READ10
+            tbl.acmd[0] = 0x28; // READ(10)
             tbl.acmd[2] = (lba32 >> 24) as u8;
             tbl.acmd[3] = (lba32 >> 16) as u8;
             tbl.acmd[4] = (lba32 >> 8) as u8;
@@ -247,20 +282,30 @@ impl AhciDevice {
             hdr.ctbau = ((self.dma_phys as usize + OFFSET_CMD_TABLE) >> 32) as u32;
         }
 
-        let mut timeout = 100000;
-        while (mmio_read32(pb, PORT_TFD) & 0x88) != 0 && timeout > 0 {
+        let mut timeout = 200000;
+        while (mmio_read32(pb, PORT_TFD) & 0x80) != 0 && timeout > 0 {
             timeout -= 1;
             if timeout % 1000 == 0 {
                 yield_now();
             }
         }
         if timeout == 0 {
+            let is = mmio_read32(pb, PORT_IS);
+            let tfd = mmio_read32(pb, PORT_TFD);
+            error!(
+                "AHCI: port {} not ready for ATAPI packet is={:#x} tfd={:#x}",
+                self.port, is, tfd
+            );
             return Err(BlockError::NotReady);
+        }
+
+        if mmio_read32(pb, PORT_CI) & 1 != 0 {
+            mmio_write32(pb, PORT_CI, 0);
         }
 
         trace!("AHCI: sending command for LBA {}", lba);
         mmio_write32(pb, PORT_CI, 1);
-        let mut loop_timeout = 10000000; // Increased timeout
+        let mut loop_timeout = 200000;
         loop {
             let ci = mmio_read32(pb, PORT_CI);
             if ci & 1 == 0 {
@@ -275,7 +320,9 @@ impl AhciDevice {
                 yield_now();
             }
             if loop_timeout == 0 {
-                error!("AHCI: command timeout on port {}", self.port);
+                let is = mmio_read32(pb, PORT_IS);
+                let tfd = mmio_read32(pb, PORT_TFD);
+                error!("AHCI: command timeout on port {} is={:#x} tfd={:#x}", self.port, is, tfd);
                 return Err(BlockError::NotReady);
             }
         }
@@ -302,9 +349,9 @@ impl StorageProvider {
                 ProviderResponse::ok_stat(S_IFREG | 0o444, size, 1)
             }
             VfsRpcOp::Read => {
-                let offset = u64::from_le_bytes(req.payload[0..8].try_into().unwrap());
-                let len = u32::from_le_bytes(req.payload[8..12].try_into().unwrap()) as usize;
-                trace!("AHCI: Read RPC offset={} len={}", offset, len);
+                let offset = u64::from_le_bytes(req.payload[8..16].try_into().unwrap());
+                let len = u32::from_le_bytes(req.payload[16..20].try_into().unwrap()) as usize;
+                info!("AHCI: Read RPC offset={} len={}", offset, len);
                 let sector_size = self.device.sector_size();
                 let start_lba = offset / sector_size;
                 let end_lba = if len > 0 {
@@ -407,6 +454,15 @@ fn main(boot_fd: usize) -> ! {
         };
         let dma_phys = device_dma_phys(dma_virt).expect("AHCI: dma_phys failed");
 
+        if !stop_port_engine(pb) {
+            warn!("AHCI: failed to stop port {} command engine", port_num);
+            continue;
+        }
+
+        unsafe {
+            core::ptr::write_bytes(dma_virt as *mut u8, 0, 4096);
+        }
+
         // Setup Port
         let clb = dma_phys + OFFSET_CMD_LIST as u64;
         let fb = dma_phys + OFFSET_FIS as u64;
@@ -414,7 +470,11 @@ fn main(boot_fd: usize) -> ! {
         mmio_write32(pb, PORT_CLBU, (clb >> 32) as u32);
         mmio_write32(pb, PORT_FB, fb as u32);
         mmio_write32(pb, PORT_FBU, (fb >> 32) as u32);
-        mmio_write32(pb, PORT_CMD, mmio_read32(pb, PORT_CMD) | PORT_CMD_FRE | PORT_CMD_ST);
+        mmio_write32(pb, PORT_SACT, 0);
+        mmio_write32(pb, PORT_CI, 0);
+        mmio_write32(pb, PORT_SERR, 0xFFFFFFFF);
+        mmio_write32(pb, PORT_IS, 0xFFFFFFFF);
+        start_port_engine(pb);
 
         let device =
             Arc::new(AhciDevice { mmio_base: mmio, port: port_num, dma_virt, dma_phys, is_atapi });

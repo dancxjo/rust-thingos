@@ -4,32 +4,93 @@
 //! With optional span correlation for multi-line output.
 
 use core::fmt::{self, Write};
-use core::sync::atomic::{AtomicBool, AtomicU8, AtomicU64, Ordering};
+use core::sync::atomic::{AtomicBool, AtomicU8, AtomicU64, AtomicUsize, Ordering};
 
 // Re-export for macros
 pub use abi::logging::Level;
-use spin::Mutex;
 
 use crate::BootRuntimeBase;
 pub type LogLevel = Level;
 
-static GLOBAL_LOGGER: Mutex<Option<Logger>> = Mutex::new(None);
+static LOGGER_READY: AtomicBool = AtomicBool::new(false);
+static mut LOGGER_RUNTIME: Option<&'static dyn BootRuntimeBase> = None;
 
 const MAX_LOG_BUFFER_SIZE: usize = 128 * 1024; // 128 KB
-static mut LOG_DATA: [u8; MAX_LOG_BUFFER_SIZE] = [0; MAX_LOG_BUFFER_SIZE];
 
-struct LogBufferState {
-    head: usize,
-    len: usize,
+struct LogSlot {
+    seq: AtomicUsize,
+    byte: AtomicU8,
 }
-static LOG_STATE: Mutex<LogBufferState> = Mutex::new(LogBufferState { head: 0, len: 0 });
 
-static IN_GRAPH_LOG: AtomicBool = AtomicBool::new(false);
+impl LogSlot {
+    const fn new() -> Self {
+        Self { seq: AtomicUsize::new(0), byte: AtomicU8::new(0) }
+    }
+}
+
+struct LogRing {
+    slots: [LogSlot; MAX_LOG_BUFFER_SIZE],
+    write: AtomicUsize,
+}
+
+impl LogRing {
+    const fn new() -> Self {
+        Self { slots: [const { LogSlot::new() }; MAX_LOG_BUFFER_SIZE], write: AtomicUsize::new(0) }
+    }
+
+    fn push_slice(&self, data: &[u8]) {
+        if data.is_empty() {
+            return;
+        }
+        let start = self.write.fetch_add(data.len(), Ordering::AcqRel);
+        let keep_from = data.len().saturating_sub(MAX_LOG_BUFFER_SIZE);
+        for (offset, &b) in data.iter().enumerate().skip(keep_from) {
+            let seq = start + offset;
+            let slot = &self.slots[seq % MAX_LOG_BUFFER_SIZE];
+            slot.byte.store(b, Ordering::Relaxed);
+            slot.seq.store(seq.wrapping_add(1), Ordering::Release);
+        }
+    }
+
+    fn len(&self) -> usize {
+        self.write.load(Ordering::Acquire).min(MAX_LOG_BUFFER_SIZE)
+    }
+
+    fn copy_to(&self, buf: &mut [u8]) -> usize {
+        let write = self.write.load(Ordering::Acquire);
+        let n = write.min(MAX_LOG_BUFFER_SIZE).min(buf.len());
+        let start = write.saturating_sub(n);
+        let mut copied = 0;
+        for seq in start..write {
+            if copied >= n {
+                break;
+            }
+            let slot = &self.slots[seq % MAX_LOG_BUFFER_SIZE];
+            if slot.seq.load(Ordering::Acquire) != seq.wrapping_add(1) {
+                break;
+            }
+            let byte = slot.byte.load(Ordering::Relaxed);
+            if slot.seq.load(Ordering::Acquire) != seq.wrapping_add(1) {
+                break;
+            }
+            buf[copied] = byte;
+            copied += 1;
+        }
+        copied
+    }
+
+    #[cfg(test)]
+    fn clear(&self) {
+        self.write.store(0, Ordering::Release);
+    }
+}
+
+static LOG_RING: LogRing = LogRing::new();
+
 static MUTE_SERIAL: AtomicBool = AtomicBool::new(false);
 
-/// Set by `force_unlock()` so any in-flight `write_str` on another CPU
-/// notices it should stop immediately, preventing garbled output after a
-/// panic handler yanks the logger lock away.
+/// Fatal-path marker set by `force_unlock()`.  Normal logging is lock-free, so
+/// this is diagnostic state rather than a lock recovery mechanism.
 static PANIC_ACTIVE: AtomicBool = AtomicBool::new(false);
 
 /// Minimum log level to output (1=Error, 2=Warn, 3=Info, 4=Debug, 5=Trace, 0=Off)
@@ -116,6 +177,11 @@ pub fn clear_span() {
     CURRENT_SPAN.store(0, Ordering::Relaxed);
 }
 
+#[inline]
+fn logger_runtime() -> Option<&'static dyn BootRuntimeBase> {
+    if LOGGER_READY.load(Ordering::Acquire) { unsafe { LOGGER_RUNTIME } } else { None }
+}
+
 /// RAII guard for log transactions (multi-line atomic output)
 pub struct LogTransaction {
     #[allow(dead_code)]
@@ -132,20 +198,12 @@ impl LogTransaction {
         // Emit BEGIN marker (always, like contract)
         let _seq = GLOBAL_SEQ.fetch_add(1, Ordering::Relaxed);
 
-        let rt = if crate::is_runtime_initialized() { Some(crate::runtime_base()) } else { None };
-        let irq_state = if cfg!(test) { None } else { rt.map(|r| r.irq_disable()) };
-
-        let mut lock = GLOBAL_LOGGER.lock();
-        if let Some(writer) = lock.as_mut() {
-            if !MUTE_SERIAL.load(Ordering::Relaxed) {
-                let ts = writer.runtime.mono_ticks();
+        if !MUTE_SERIAL.load(Ordering::Relaxed) {
+            if let Some(runtime) = logger_runtime() {
+                let ts = runtime.mono_ticks();
+                let mut writer = Logger::new(runtime);
                 let _ = writeln!(writer, "[{}] [INFO-] [logging] BEGIN {}", ts, name);
             }
-        }
-        drop(lock);
-
-        if let (Some(r), Some(s)) = (rt, irq_state) {
-            r.irq_restore(s);
         }
 
         Self { span_id, name }
@@ -157,20 +215,12 @@ impl Drop for LogTransaction {
         // Emit END marker (always, like contract)
         let _seq = GLOBAL_SEQ.fetch_add(1, Ordering::Relaxed);
 
-        let rt = if crate::is_runtime_initialized() { Some(crate::runtime_base()) } else { None };
-        let irq_state = if cfg!(test) { None } else { rt.map(|r| r.irq_disable()) };
-
-        let mut lock = GLOBAL_LOGGER.lock();
-        if let Some(writer) = lock.as_mut() {
-            if !MUTE_SERIAL.load(Ordering::Relaxed) {
-                let ts = writer.runtime.mono_ticks();
+        if !MUTE_SERIAL.load(Ordering::Relaxed) {
+            if let Some(runtime) = logger_runtime() {
+                let ts = runtime.mono_ticks();
+                let mut writer = Logger::new(runtime);
                 let _ = writeln!(writer, "[{}] [INFO-] [logging] END {}", ts, self.name);
             }
-        }
-        drop(lock);
-
-        if let (Some(r), Some(s)) = (rt, irq_state) {
-            r.irq_restore(s);
         }
         clear_span();
     }
@@ -233,11 +283,6 @@ unsafe impl Send for Logger {}
 
 impl fmt::Write for Logger {
     fn write_str(&mut self, s: &str) -> fmt::Result {
-        // If a panic handler has seized the logger, abandon this write
-        // immediately so the panic message comes through cleanly.
-        if PANIC_ACTIVE.load(Ordering::Relaxed) {
-            return Err(fmt::Error);
-        }
         write_crlf_translated(s.as_bytes(), |chunk| self.runtime.putbuf(chunk));
         Ok(())
     }
@@ -256,72 +301,34 @@ impl fmt::Write for SyncLogger {
 
 pub unsafe fn init(runtime: &'static dyn BootRuntimeBase) {
     let irq = runtime.irq_disable();
-    *GLOBAL_LOGGER.lock() = Some(Logger::new(runtime));
+    unsafe {
+        LOGGER_RUNTIME = Some(runtime);
+    }
+    LOGGER_READY.store(true, Ordering::Release);
     runtime.irq_restore(irq);
 }
 
 pub unsafe fn force_unlock() {
-    // Signal any in-flight write_str on other CPUs to bail out before we
-    // yank the lock from under them.  The Relaxed store is sufficient
-    // because the subsequent force_unlock provides the necessary fence.
+    // Preserve the fatal-path marker for callers that use it as a diagnostic
+    // transition, but normal logging no longer has global locks to seize.
     PANIC_ACTIVE.store(true, Ordering::Relaxed);
-
-    // SAFETY: Only called from panic handler when logger lock may be poisoned
-    unsafe {
-        GLOBAL_LOGGER.force_unlock();
-        LOG_STATE.force_unlock();
-    }
 }
 
 pub fn copy_log_buffer(buf: &mut [u8]) -> usize {
-    let state = LOG_STATE.lock();
-    let n = state.len.min(buf.len());
-
-    let mut read_idx = if state.len < MAX_LOG_BUFFER_SIZE { 0 } else { state.head };
-
-    for i in 0..n {
-        unsafe {
-            buf[i] = LOG_DATA[read_idx];
-        }
-        read_idx = (read_idx + 1) % MAX_LOG_BUFFER_SIZE;
-    }
-
-    n
+    LOG_RING.copy_to(buf)
 }
 
 pub fn get_log_buffer_len() -> usize {
-    LOG_STATE.lock().len
+    LOG_RING.len()
 }
 
 struct LogBufferWriter;
 
 impl Write for LogBufferWriter {
     fn write_str(&mut self, s: &str) -> fmt::Result {
-        let rt = if crate::is_runtime_initialized() { Some(crate::runtime_base()) } else { None };
-        let irq_state = if cfg!(test) { None } else { rt.map(|r| r.irq_disable()) };
-
-        let mut state = LOG_STATE.lock();
-        for &b in s.as_bytes() {
-            unsafe {
-                LOG_DATA[state.head] = b;
-            }
-            state.head = (state.head + 1) % MAX_LOG_BUFFER_SIZE;
-            if state.len < MAX_LOG_BUFFER_SIZE {
-                state.len += 1;
-            }
-        }
-        drop(state);
-
-        if let (Some(r), Some(s)) = (rt, irq_state) {
-            r.irq_restore(s);
-        }
+        LOG_RING.push_slice(s.as_bytes());
         Ok(())
     }
-}
-
-/// Helper to check if graph logging is safe/ready
-fn can_log_to_graph(_level: Level) -> bool {
-    false
 }
 
 fn level_to_colored_str(level: Level) -> &'static str {
@@ -347,9 +354,8 @@ fn should_log(level: Level) -> bool {
 const LOG_LINE_BUF_SIZE: usize = 1024;
 
 /// Fixed-capacity stack buffer for pre-formatting a log line without heap
-/// allocation.  Used by `_log_event` to assemble the complete message before
-/// acquiring any lock, keeping the `GLOBAL_LOGGER` critical section as short
-/// as possible.
+/// allocation.  Used by `_log_event` to assemble one contiguous reservation
+/// for the deferred output rings.
 struct FixedBuf {
     buf: [u8; LOG_LINE_BUF_SIZE],
     pos: usize,
@@ -392,13 +398,13 @@ pub fn _log_event(
     fields: &[(&'static str, u64)],
     _about: &[u64],
 ) {
-    // Fast path: bail out before any lock or formatting work.
+    // Fast path: bail out before any formatting work.
     if !should_log(meta.level) {
         return;
     }
     let _seq = GLOBAL_SEQ.fetch_add(1, Ordering::Relaxed);
 
-    // Collect timing/CPU info before acquiring any lock.
+    // Collect timing/CPU info before formatting the line.
     let (ts, cpu) = if crate::is_runtime_initialized() {
         let rt = crate::runtime_base();
         (rt.mono_ticks(), rt.current_cpu_index())
@@ -406,10 +412,9 @@ pub fn _log_event(
         (0, 0)
     };
 
-    // 1. Serial Output — pre-format the entire line into a stack buffer so
-    //    that the GLOBAL_LOGGER lock is held only for a single contiguous
-    //    `putbuf` call.  This reduces lock hold time and contention between
-    //    CPUs that log concurrently on the spawn / syscall hot path.
+    // 1. Serial Output — pre-format the line before handing it to the deferred
+    //    output rings. Each emitted chunk uses an atomic reservation, keeping
+    //    producers non-blocking on spawn / syscall hot paths.
     if !MUTE_SERIAL.load(Ordering::Relaxed) {
         // Format: [TIME] [LEVEL] [SOURCE] [CPUx] Message [fields]\n
         let mut linebuf = FixedBuf::new();
@@ -430,17 +435,8 @@ pub fn _log_event(
         let _ = linebuf.write_char('\n');
         let line = linebuf.as_bytes();
 
-        let rt = if crate::is_runtime_initialized() { Some(crate::runtime_base()) } else { None };
-        let irq_state = if cfg!(test) { None } else { rt.map(|r| r.irq_disable()) };
-
-        let mut lock = GLOBAL_LOGGER.lock();
-        if let Some(writer) = lock.as_mut() {
-            write_crlf_translated(line, |chunk| writer.runtime.putbuf(chunk));
-        }
-        drop(lock);
-
-        if let (Some(r), Some(s)) = (rt, irq_state) {
-            r.irq_restore(s);
+        if let Some(runtime) = logger_runtime() {
+            write_crlf_translated(line, |chunk| runtime.putbuf(chunk));
         }
     }
 
@@ -480,17 +476,9 @@ pub fn _log_contract(source: &'static str, args: fmt::Arguments) {
 /// Log a raw string without any formatting (for kprint! compatibility)
 pub fn _log_raw(args: fmt::Arguments) {
     if !MUTE_SERIAL.load(Ordering::Relaxed) {
-        let rt = if crate::is_runtime_initialized() { Some(crate::runtime_base()) } else { None };
-        let irq_state = if cfg!(test) { None } else { rt.map(|r| r.irq_disable()) };
-
-        let mut lock = GLOBAL_LOGGER.lock();
-        if let Some(writer) = lock.as_mut() {
+        if let Some(runtime) = logger_runtime() {
+            let mut writer = Logger::new(runtime);
             let _ = writer.write_fmt(args);
-        }
-        drop(lock);
-
-        if let (Some(r), Some(s)) = (rt, irq_state) {
-            r.irq_restore(s);
         }
     }
 }
@@ -501,69 +489,41 @@ pub fn _log_raw(args: fmt::Arguments) {
 #[doc(hidden)]
 pub fn _log_raw_sync(args: fmt::Arguments) {
     if !MUTE_SERIAL.load(Ordering::Relaxed) {
-        let rt = if crate::is_runtime_initialized() { Some(crate::runtime_base()) } else { None };
-        if let Some(r) = rt {
-            let mut writer = SyncLogger { runtime: r };
+        if let Some(runtime) = logger_runtime() {
+            let mut writer = SyncLogger { runtime };
             let _ = writer.write_fmt(args);
         }
     }
 }
 
-/// Write a raw byte buffer to the serial console under the `GLOBAL_LOGGER`
-/// lock.  Used by the TTY write path so that userspace console output does
-/// not interleave character-by-character with kernel log messages.
+/// Write a raw byte buffer to the serial and framebuffer consoles.
+///
+/// The historical name is kept for callers, but this path now uses the
+/// lock-free deferred output rings.
 pub fn write_bytes_locked(buf: &[u8]) {
     if MUTE_SERIAL.load(Ordering::Relaxed) {
         return;
     }
-    let rt = if crate::is_runtime_initialized() { Some(crate::runtime_base()) } else { None };
-    let irq_state = if cfg!(test) { None } else { rt.map(|r| r.irq_disable()) };
-
-    let mut lock = GLOBAL_LOGGER.lock();
-    if let Some(writer) = lock.as_mut() {
-        write_crlf_translated(buf, |chunk| writer.runtime.putbuf(chunk));
-    }
-    drop(lock);
-
-    if let (Some(r), Some(s)) = (rt, irq_state) {
-        r.irq_restore(s);
+    if let Some(runtime) = logger_runtime() {
+        write_crlf_translated(buf, |chunk| runtime.putbuf(chunk));
     }
 }
 
-/// Write a raw byte buffer to the serial port only (not the FB console),
-/// under the `GLOBAL_LOGGER` lock to prevent interleaving.
+/// Write a raw byte buffer to the serial port only (not the FB console).
 pub fn write_serial_bytes_locked(buf: &[u8]) {
     if MUTE_SERIAL.load(Ordering::Relaxed) {
         return;
     }
-    let rt = if crate::is_runtime_initialized() { Some(crate::runtime_base()) } else { None };
-    let irq_state = if cfg!(test) { None } else { rt.map(|r| r.irq_disable()) };
-
-    let mut lock = GLOBAL_LOGGER.lock();
-    if let Some(writer) = lock.as_mut() {
-        write_crlf_translated(buf, |chunk| writer.runtime.serial_putbuf(chunk));
-    }
-    drop(lock);
-
-    if let (Some(r), Some(s)) = (rt, irq_state) {
-        r.irq_restore(s);
+    if let Some(runtime) = logger_runtime() {
+        write_crlf_translated(buf, |chunk| runtime.serial_putbuf(chunk));
     }
 }
 
 /// Write a raw byte buffer to the framebuffer console only (not the serial
-/// port), under the `GLOBAL_LOGGER` lock to prevent interleaving.
+/// port).
 pub fn write_fb_bytes_locked(buf: &[u8]) {
-    let rt = if crate::is_runtime_initialized() { Some(crate::runtime_base()) } else { None };
-    let irq_state = if cfg!(test) { None } else { rt.map(|r| r.irq_disable()) };
-
-    let mut lock = GLOBAL_LOGGER.lock();
-    if let Some(writer) = lock.as_mut() {
-        write_crlf_translated(buf, |chunk| writer.runtime.fb_putbuf(chunk));
-    }
-    drop(lock);
-
-    if let (Some(r), Some(s)) = (rt, irq_state) {
-        r.irq_restore(s);
+    if let Some(runtime) = logger_runtime() {
+        write_crlf_translated(buf, |chunk| runtime.fb_putbuf(chunk));
     }
 }
 
@@ -715,9 +675,7 @@ mod tests {
     fn reset_test_state(min_level: u8) {
         MUTE_SERIAL.store(true, Ordering::Relaxed);
         set_log_level(min_level);
-        let mut state = LOG_STATE.lock();
-        state.head = 0;
-        state.len = 0;
+        LOG_RING.clear();
     }
 
     #[test]

@@ -1260,6 +1260,9 @@ fn trigger_pause_dump(snapshot: Option<&IrqRegisterSnapshot>) -> ! {
         kernel::kprint!(
             " Scheduler task dump skipped in pause mode to avoid lock wedging.              \n"
         );
+
+        crate::console::flush_sync();
+        crate::console::serial_flush_sync();
     }
 
     loop {

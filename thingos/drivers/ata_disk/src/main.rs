@@ -346,8 +346,8 @@ impl StorageProvider {
                 ProviderResponse::ok_stat(S_IFREG | 0o444, size, 1)
             }
             VfsRpcOp::Read => {
-                let offset = u64::from_le_bytes(req.payload[0..8].try_into().unwrap());
-                let len = u32::from_le_bytes(req.payload[8..12].try_into().unwrap()) as usize;
+                let offset = u64::from_le_bytes(req.payload[8..16].try_into().unwrap());
+                let len = u32::from_le_bytes(req.payload[16..20].try_into().unwrap()) as usize;
 
                 let sector_size = self.device.sector_size();
                 let mut data = Vec::with_capacity(len);

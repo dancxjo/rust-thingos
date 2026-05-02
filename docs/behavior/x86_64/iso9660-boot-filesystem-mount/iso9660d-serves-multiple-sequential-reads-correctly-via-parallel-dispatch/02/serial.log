@@ -1,0 +1,147 @@
+=== Console Readiness ===
+e[36704464929] [INFO ] [cambium::catalog] [CPU1] DEVD CATALOG: registered driver '/drivers/hdaudio' name='hdaudio' class=Audio kind='dev.sound.Hda' start='thingos_driver_start_safe'
+cho [36869481363] [INFO ] [cambium::catalog] [CPU1] DEVD CATALOG: registered driver '/drivers/hwrng' name='hwrng' class=Other kind='dev.rng.HwRng' start='_RNvCs7wlZbVUrQWf_5hwrng20thingos_driver_start'
+BDD_[37042740405] [INFO ] [cambium::catalog] [CPU1] DEVD CATALOG: registered driver '/drivers/pci_stubd' name='pci_stubd' class=Other kind='drv.PciStubd' start='thingos_driver_start_safe'
+CONSOL[37222836354] [INFO ] [display_virtio_gpu] [CPU1] display_virtio_gpu: Sovereign registration COMPLETE. Assigned: /dev/display/card0
+[37227848064] [INFO ] [display_virtio_gpu] [CPU1] display_virtio_gpu: VFS provider loop online
+[37232739918] [INFO ] [sprout::supervisor] [CPU0] SPROUT: Display service is ready at /dev/display/card0
+[37239569466] [INFO ] [cambium::catalog] [CPU1] DEVD CATALOG: registered driver '/drivers/ps2_kbd' name='ps2_kbd' class=Input kind='drv.Ps2Keyboard' start='thingos_driver_start_safe'
+E_REA[37437848646] [INFO ] [cambium::catalog] [CPU1] DEVD CATALOG: registered driver '/drivers/ps2_mouse' name='ps2_mouse' class=Input kind='drv.Ps2Mouse' start='thingos_driver_start_safe'
+DY_1[37605685590] [INFO ] [cambium::catalog] [CPU1] DEVD CATALOG: registered driver '/drivers/rtc_cmos' name='rtc_cmos' class=Other kind='dev.rtc.Cmos' start='thingos_driver_start_safe'
+[37761307254] [INFO ] [bloom] [CPU2] bloom: ENTERING MAIN
+[37762687710] [INFO ] [bloom] [CPU2] bloom: compositor service starting
+[37763726814] [INFO ] [bloom] [CPU2] bloom.phase=start
+[37767845313] [INFO ] [bloom] [CPU2] bloom.phase=open_display
+11070_1[37786653828] [INFO ] [sprout::supervisor] [CPU0] SPROUT: Spawned bloom (PID=11)
+[37793152089] [INFO ] [cambium::catalog] [CPU1] DEVD CATALOG: registered driver '/drivers/rtl8168d' name='rtl8168d' class=Net kind='dev.net.Nic' start='thingos_driver_start_safe'
+77770[37991944452] [INFO ] [cambium::catalog] [CPU1] DEVD CATALOG: registered driver '/drivers/virtio_netd' name='virtio_netd' class=Net kind='dev.net.Nic' start='thingos_driver_start_safe'
+095677[38216712864] [INFO ] [cambium::catalog] [CPU1] DEVD CATALOG: registered driver '/drivers/virtio_sound' name='virtio_sound' class=Audio kind='dev.sound.Virtio' start='thingos_driver_start_safe'
+94205[38400478479] [INFO ] [cambium::catalog] [CPU1] DEVD CATALOG: registered driver '/drivers/xhci' name='xhci' class=Block kind='dev.usb.Xhci' start='thingos_driver_start_safe'
+[38402537580] [INFO ] [cambium::catalog] [CPU1] DEVD CATALOG: 15 driver(s) found
+7[38444543610] [INFO ] [bloom] [CPU2] bloom: connected to /dev/display/card0 on try 0
+[38446212651] [INFO ] [bloom] [CPU2] bloom.phase=get_info
+6[38465465676] [INFO ] [bloom] [CPU2] bloom: output0 1280x800 @ 60000mHz
+[38466496497] [INFO ] [bloom] [CPU2] bloom: display driver does not support VBLANK
+[38467320705] [INFO ] [bloom] [CPU2] bloom: display driver supports linear dmabuf import
+[38468207250] [INFO ] [bloom] [CPU2] bloom: display driver supports GPU blit (hardware transfer/flush)
+[38469090594] [INFO ] [bloom] [CPU2] bloom: display driver supports direct scanout (zero-copy path to display)
+[38469947076] [INFO ] [bloom] [CPU2] bloom: display driver supports partial flush (damage regions)
+[38470786266] [INFO ] [bloom] [CPU2] bloom: display driver supports resource cache (pre-allocated buffer pool)
+[38471677332] [INFO ] [bloom] [CPU2] bloom: creating service port...
+
+[38562831285] [INFO ] [ahci_disk] [CPU3] AHCI: Starting AHCI VFS driver
+[38603765376] [INFO ] [ahci_disk] [CPU3] AHCI: Claimed device /sys/devices/pci-0000:00:1f.2
+BDD_CONSOLE_READY_111070_1777700956779420576
+[38621304480] [INFO ] [ahci_disk] [CPU3] AHCI: Mounted atapi2 at /dev/storage/atapi2
+[38622910194] [INFO ] [ahci_disk] [CPU3] AHCI: Provider loop online at /dev/storage/atapi2
+THING-OS [OK] / > [38706764217] [INFO ] [ps2_kbd] [CPU3] ps2_kbd: bristle pid=9
+[38729143431] [INFO ] [ps2_kbd] [CPU3] ps2_kbd: irq_wait entry vector=0x21 wakes=0 timeouts=0 input_total=0 dropped=0
+[38763907248] [INFO ] [ps2_kbd] [CPU3] ps2_kbd: irq_wait entry vector=0x21 wakes=0 timeouts=1 input_total=0 dropped=0
+[38774337195] [INFO ] [ps2_mouse] [CPU1] ps2_mouse: bristle pid=9
+[38775490677] [INFO ] [ps2_mouse] [CPU1] ps2.phase=aux_enable_begin
+[38802434979] [INFO ] [ps2_kbd] [CPU3] ps2_kbd: irq_wait entry vector=0x21 wakes=0 timeouts=2 input_total=0 dropped=0
+[38829897777] [INFO ] [ps2_kbd] [CPU3] ps2_kbd: irq_wait entry vector=0x21 wakes=0 timeouts=3 input_total=0 dropped=0
+
+=== End Console Readiness ===
+
+=== Serial Log (since step start) ===
+[32mINFO [0m] [sprout::supervisor] [CPU0] SPROUT: Display pipeline initialized (backend=virtio_gpu)
+[35290097601] [[32mINFO [0m] [cambium::catalog] [CPU1] DEVD CATALOG: registered driver '/drivers/ahci_disk' name='ahci_disk' class=Block kind='dev.storage.Ahci' start='thingos_driver_start_safe'
+[35436102174] [[32mINFO [0m] [display_virtio_gpu] [CPU1] display_virtio_gpu: starting v0.4.1 (boot_arg=3)
+[35555031732] [[32mINFO [0m] [cambium::catalog] [CPU1] DEVD CATALOG: registered driver '/drivers/ata_disk' name='ata_disk' class=Block kind='dev.storage.Ide' start='thingos_driver_start_safe'
+[35737583541] [[32mINFO [0m] [cambium::catalog] [CPU1] DEVD CATALOG: registered driver '/drivers/chime' name='chime' class=Audio kind='dev.sound.Chime' start='thingos_driver_start_safe'
+[35978130012] [[32mINFO [0m] [virtio_gpu] [CPU1] virtio_gpu: caps from sysfs - common BAR2 off=0x1000, notify BAR2 off=0x3000 mult=4
+[35988896889] [[32mINFO [0m] [virtio_gpu] [CPU1] virtio_gpu: device features=0x30000002 virgl=false
+[36002820777] [[32mINFO [0m] [virtio_gpu] [CPU1] virtio_gpu: cursor queue (queue 1) configured
+[36004091904] [[32mINFO [0m] [display_virtio_gpu] [CPU1] display_virtio_gpu: GPU initialized successfully
+[36005114310] [[32mINFO [0m] [display_virtio_gpu] [CPU1] display_virtio_gpu: composition paths: gpu_opaque_copy=enabled cpu_alpha_blend=enabled
+[36014411895] [[32mINFO [0m] [display_virtio_gpu] [CPU1] display_virtio_gpu: host scanout 1280x800 enabled=true (bootfb was 1280x800)
+[36259330569] [[32mINFO [0m] [display_virtio_gpu] [CPU1] display_virtio_gpu: cursor DMA buffer ready (16 pages at phys=0x278f000)
+[36302802723] [[32mINFO [0m] [cambium::catalog] [CPU1] DEVD CATALOG: registered driver '/drivers/display_bootfb' name='display_bootfb' class=Display kind='dev.display.Gpu' start='thingos_driver_start_safe'
+[36327076500] [[32mINFO [0m] [sprout::supervisor] [CPU0] SPROUT: Mounted /dev/display/card0 successfully
+[36457789896] [[32mINFO [0m] [kernel::sched] [CPU0] HEARTBEAT: mono_ns=18226516869 last_timer_ns=18225905296 cpus_online=4
+[36461460882] [[32mINFO [0m] [kernel::sched] [CPU0] HEARTBEAT: cpu=0 curr=Some(0) last_switch_ns=18167887188 runq=0 ctxsw/s=15 tick/s=45 wake/s=6 ipi=1 lock_miss=0 lock_blocked=0
+[36464214534] [[32mINFO [0m] [kernel::sched] [CPU0] HEARTBEAT: cpu=1 curr=Some(7) last_switch_ns=18150233128 runq=1 ctxsw/s=5 tick/s=28 wake/s=4 ipi=1 lock_miss=0 lock_blocked=0
+[36465984720] [[32mINFO [0m] [kernel::sched] [CPU0] HEARTBEAT: cpu=2 curr=Some(3) last_switch_ns=17532645883 runq=0 ctxsw/s=2 tick/s=53 wake/s=2 ipi=1 lock_miss=0 lock_blocked=0
+[36467063226] [[32mINFO [0m] [kernel::sched] [CPU0] HEARTBEAT: cpu=3 curr=Some(4) last_switch_ns=17596241470 runq=0 ctxsw/s=4 tick/s=55 wake/s=4 ipi=2 lock_miss=0 lock_blocked=0
+[36532410486] [[32mINFO [0m] [cambium::catalog] [CPU1] DEVD CATALOG: registered driver '/drivers/display_virtio_gpu' name='display_virtio_gpu' class=Display kind='dev.display.Gpu' start='thingos_driver_start_safe'
+e[36704464929] [[32mINFO [0m] [cambium::catalog] [CPU1] DEVD CATALOG: registered driver '/drivers/hdaudio' name='hdaudio' class=Audio kind='dev.sound.Hda' start='thingos_driver_start_safe'
+cho [36869481363] [[32mINFO [0m] [cambium::catalog] [CPU1] DEVD CATALOG: registered driver '/drivers/hwrng' name='hwrng' class=Other kind='dev.rng.HwRng' start='_RNvCs7wlZbVUrQWf_5hwrng20thingos_driver_start'
+BDD_[37042740405] [[32mINFO [0m] [cambium::catalog] [CPU1] DEVD CATALOG: registered driver '/drivers/pci_stubd' name='pci_stubd' class=Other kind='drv.PciStubd' start='thingos_driver_start_safe'
+CONSOL[37222836354] [[32mINFO [0m] [display_virtio_gpu] [CPU1] display_virtio_gpu: Sovereign registration COMPLETE. Assigned: /dev/display/card0
+[37227848064] [[32mINFO [0m] [display_virtio_gpu] [CPU1] display_virtio_gpu: VFS provider loop online
+[37232739918] [[32mINFO [0m] [sprout::supervisor] [CPU0] SPROUT: Display service is ready at /dev/display/card0
+[37239569466] [[32mINFO [0m] [cambium::catalog] [CPU1] DEVD CATALOG: registered driver '/drivers/ps2_kbd' name='ps2_kbd' class=Input kind='drv.Ps2Keyboard' start='thingos_driver_start_safe'
+E_REA[37437848646] [[32mINFO [0m] [cambium::catalog] [CPU1] DEVD CATALOG: registered driver '/drivers/ps2_mouse' name='ps2_mouse' class=Input kind='drv.Ps2Mouse' start='thingos_driver_start_safe'
+DY_1[37605685590] [[32mINFO [0m] [cambium::catalog] [CPU1] DEVD CATALOG: registered driver '/drivers/rtc_cmos' name='rtc_cmos' class=Other kind='dev.rtc.Cmos' start='thingos_driver_start_safe'
+[37761307254] [[32mINFO [0m] [bloom] [CPU2] bloom: ENTERING MAIN
+[37762687710] [[32mINFO [0m] [bloom] [CPU2] bloom: compositor service starting
+[37763726814] [[32mINFO [0m] [bloom] [CPU2] bloom.phase=start
+[37767845313] [[32mINFO [0m] [bloom] [CPU2] bloom.phase=open_display
+11070_1[37786653828] [[32mINFO [0m] [sprout::supervisor] [CPU0] SPROUT: Spawned bloom (PID=11)
+[37793152089] [[32mINFO [0m] [cambium::catalog] [CPU1] DEVD CATALOG: registered driver '/drivers/rtl8168d' name='rtl8168d' class=Net kind='dev.net.Nic' start='thingos_driver_start_safe'
+77770[37991944452] [[32mINFO [0m] [cambium::catalog] [CPU1] DEVD CATALOG: registered driver '/drivers/virtio_netd' name='virtio_netd' class=Net kind='dev.net.Nic' start='thingos_driver_start_safe'
+095677[38216712864] [[32mINFO [0m] [cambium::catalog] [CPU1] DEVD CATALOG: registered driver '/drivers/virtio_sound' name='virtio_sound' class=Audio kind='dev.sound.Virtio' start='thingos_driver_start_safe'
+94205[38400478479] [[32mINFO [0m] [cambium::catalog] [CPU1] DEVD CATALOG: registered driver '/drivers/xhci' name='xhci' class=Block kind='dev.usb.Xhci' start='thingos_driver_start_safe'
+[38402537580] [[32mINFO [0m] [cambium::catalog] [CPU1] DEVD CATALOG: 15 driver(s) found
+7[38444543610] [[32mINFO [0m] [bloom] [CPU2] bloom: connected to /dev/display/card0 on try 0
+[38446212651] [[32mINFO [0m] [bloom] [CPU2] bloom.phase=get_info
+6[38465465676] [[32mINFO [0m] [bloom] [CPU2] bloom: output0 1280x800 @ 60000mHz
+[38466496497] [[32mINFO [0m] [bloom] [CPU2] bloom: display driver does not support VBLANK
+[38467320705] [[32mINFO [0m] [bloom] [CPU2] bloom: display driver supports linear dmabuf import
+[38468207250] [[32mINFO [0m] [bloom] [CPU2] bloom: display driver supports GPU blit (hardware transfer/flush)
+[38469090594] [[32mINFO [0m] [bloom] [CPU2] bloom: display driver supports direct scanout (zero-copy path to display)
+[38469947076] [[32mINFO [0m] [bloom] [CPU2] bloom: display driver supports partial flush (damage regions)
+[38470786266] [[32mINFO [0m] [bloom] [CPU2] bloom: display driver supports resource cache (pre-allocated buffer pool)
+[38471677332] [[32mINFO [0m] [bloom] [CPU2] bloom: creating service port...
+
+[38562831285] [[32mINFO [0m] [ahci_disk] [CPU3] AHCI: Starting AHCI VFS driver
+[38603765376] [[32mINFO [0m] [ahci_disk] [CPU3] AHCI: Claimed device /sys/devices/pci-0000:00:1f.2
+BDD_CONSOLE_READY_111070_1777700956779420576
+[38621304480] [[32mINFO [0m] [ahci_disk] [CPU3] AHCI: Mounted atapi2 at /dev/storage/atapi2
+[38622910194] [[32mINFO [0m] [ahci_disk] [CPU3] AHCI: Provider loop online at /dev/storage/atapi2
+[?25l[?25h[1;95mTHING[0m[1;96m-OS[0m [2;94m[[0m[1;92mOK[0m[2;94m][0m [1;93m/[0m [1;96m>[0m [?25h[38706764217] [[32mINFO [0m] [ps2_kbd] [CPU3] ps2_kbd: bristle pid=9
+[38729143431] [[32mINFO [0m] [ps2_kbd] [CPU3] ps2_kbd: irq_wait entry vector=0x21 wakes=0 timeouts=0 input_total=0 dropped=0
+[38763907248] [[32mINFO [0m] [ps2_kbd] [CPU3] ps2_kbd: irq_wait entry vector=0x21 wakes=0 timeouts=1 input_total=0 dropped=0
+[38774337195] [[32mINFO [0m] [ps2_mouse] [CPU1] ps2_mouse: bristle pid=9
+[38775490677] [[32mINFO [0m] [ps2_mouse] [CPU1] ps2.phase=aux_enable_begin
+[38802434979] [[32mINFO [0m] [ps2_kbd] [CPU3] ps2_kbd: irq_wait entry vector=0x21 wakes=0 timeouts=2 input_total=0 dropped=0
+[38829897777] [[32mINFO [0m] [ps2_kbd] [CPU3] ps2_kbd: irq_wait entry vector=0x21 wakes=0 timeouts=3 input_total=0 dropped=0
+[38897156364] [[32mINFO [0m] [kernel::irq::ps2] [CPU3] PS/2 take_scancode entry: depth=1 pushed=1 popped=0 overwritten=0
+[38900159100] [[32mINFO [0m] [kernel::irq::ps2] [CPU3] PS/2 take_scancode exit: byte=0x47 is_aux=false depth=0 popped=1
+[38909533212] [[32mINFO [0m] [ps2_kbd] [CPU3] ps2_kbd: irq_wait entry vector=0x21 wakes=0 timeouts=4 input_total=1 dropped=0
+[38914956036] [[32mINFO [0m] [ps2_kbd] [CPU3] ps2_kbd: irq_wait entry vector=0x21 wakes=1 timeouts=4 input_total=1 dropped=0
+[38923543098] [[32mINFO [0m] [bristle] [CPU3] bristle: dispatch entry source=inbox event=1 type=1 payload_len=4 accum_depth=24 input_len=24
+[38925642624] [[32mINFO [0m] [bristle] [CPU3] bristle: KeyDown received: Unknown
+[38927321103] [[32mINFO [0m] [bristle] [CPU3] bristle: dispatch exit source=inbox event=1 class=1 accum_depth=24 drops=0
+[38940020658] [[32mINFO [0m] [ps2_kbd] [CPU3] ps2_kbd: irq_wait entry vector=0x21 wakes=1 timeouts=5 input_total=1 dropped=0
+[38943197304] [[32mINFO [0m] [bristle] [CPU3] bristle: input_rate source=inbox bytes=24 events=1 total_events=1 entry_depth=0 exit_depth=0 elapsed_ns=3099805 drops=0
+[38959752843] [[32mINFO [0m] [ps2_kbd] [CPU3] ps2_kbd: irq_wait entry vector=0x21 wakes=1 timeouts=6 input_total=1 dropped=0
+[39000171903] [[32mINFO [0m] [ps2_kbd] [CPU3] ps2_kbd: irq_wait entry vector=0x21 wakes=1 timeouts=7 input_total=1 dropped=0
+[39032161707] [[32mINFO [0m] [ps2_kbd] [CPU3] ps2_kbd: irq_wait entry vector=0x21 wakes=1 timeouts=8 input_total=1 dropped=0
+[39057598899] [[32mINFO [0m] [ps2_kbd] [CPU3] ps2_kbd: irq_wait entry vector=0x21 wakes=1 timeouts=9 input_total=1 dropped=0
+[39091916655] [[32mINFO [0m] [ps2_kbd] [CPU3] ps2_kbd: irq_wait entry vector=0x21 wakes=1 timeouts=10 input_total=1 dropped=0
+[39128565300] [[32mINFO [0m] [ps2_kbd] [CPU3] ps2_kbd: irq_wait entry vector=0x21 wakes=1 timeouts=11 input_total=1 dropped=0
+[39158228967] [[32mINFO [0m] [ps2_kbd] [CPU3] ps2_kbd: irq_wait entry vector=0x21 wakes=1 timeouts=12 input_total=1 dropped=0
+[39169096824] [[32mINFO [0m] [iso9660d] [CPU2] iso9660d: probing device atapi2
+[39170340165] [[32mINFO [0m] [iso9660d] [CPU2] iso9660d: found ISO9660 on device atapi2
+[39175115496] [[32mINFO [0m] [iso9660d] [CPU2] iso9660d: mounted at /media/cdrom
+[39182496870] [[32mINFO [0m] [rtc_cmos] [CPU2] RTC: claimed /sys/devices/isa-0070 (handle=2)
+[39192673080] [[32mINFO [0m] [ps2_kbd] [CPU3] ps2_kbd: irq_wait entry vector=0x21 wakes=1 timeouts=13 input_total=1 dropped=0
+[39207524367] [[32mINFO [0m] [rtc_cmos] [CPU2] RTC: 2026-05-02 05:49:16 = 1777700956 unix_secs
+[39209090712] [[32mINFO [0m] [kernel::time] [CPU2] System clock anchored: unix_secs=1777700956, mono_ns=19604315197, offset=1777700936395684803ns
+[39210339828] [[32mINFO [0m] [rtc_cmos] [CPU2] RTC: System clock anchored to 1777700956 unix_secs
+[39217400343] [[32mINFO [0m] [kernel::time] [CPU0] System clock tick: utc=2026-05-02 05:49:16.003641402 unix_secs=1777700956.003641402
+[39227092971] [[32mINFO [0m] [ps2_kbd] [CPU3] ps2_kbd: irq_wait entry vector=0x21 wakes=1 timeouts=14 input_total=1 dropped=0
+[39272957229] [[32mINFO [0m] [ps2_kbd] [CPU3] ps2_kbd: irq_wait entry vector=0x21 wakes=1 timeouts=15 input_total=1 dropped=0
+[39288246987] [[32mINFO [0m] [ps2_kbd] [CPU3] ps2_kbd: irq_wait entry vector=0x21 wakes=1 timeouts=16 input_total=1 dropped=0
+[39291709908] [[32mINFO [0m] [bloom::render] [CPU2] bloom: pistil background renderer loaded from /lib/libpistil.so
+[39292897776] [[32mINFO [0m] [bloom::render] [CPU2] bloom: pistil font text renderer loaded with default /share/fonts/Inter-Regular.ttf
+[39294102606] [[32mINFO [0m] [bloom::render] [CPU2] bloom: pistil symbol renderer loaded with /share/fonts/NotoSansSymbol2-Regular.ttf
+[39295354131] [[32mINFO [0m] [bloom] [CPU2] bloom.phase=import_primary_buffer
+[39304147674] [[32mINFO [0m] [bloom] [CPU2] bloom: initial theme configured Facet Frame
+[39320771028] [[32mINFO [0m] [ps2_kbd] [CPU3] ps2_kbd: irq_wait entry vector=0x21 wakes=1 timeouts=17 input_total=1 dropped=0
+[39353118849] [[32mINFO [0m] [ps2_kbd] [CPU3] ps2_kbd: irq_wait entry vector=0x21 wakes=1 timeouts=18 input_total=1 dropped=0
+[39414921777] [[32mINFO [0m] [ps2_kbd] [CPU3] ps2_kbd: irq_wait entry vector=0x21 wakes=1 timeouts=19 input_total=1 dropped=0
+[39483387900] [
+=== End Serial Log ===

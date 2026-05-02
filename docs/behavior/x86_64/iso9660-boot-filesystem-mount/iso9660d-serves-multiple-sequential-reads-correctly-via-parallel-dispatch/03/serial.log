@@ -1,0 +1,19 @@
+=== Command Output ===
+thingos
+=== End Command Output ===
+
+=== Serial Log (since step start) ===
+[32mINFO [0m] [ps2_kbd] [CPU3] ps2_kbd: irq_wait entry vector=0x21 wakes=1 timeouts=22 input_total=1 dropped=0
+[39792037395] [[32mINFO [0m] [display_virtio_gpu] [CPU1] display_virtio_gpu: rpc.latency corr=2 op=IMPORT_BUFFER duration_ms=67 status=0 provider_tid=10 req_id=3 resp_port=7
+[39800571063] [[32mINFO [0m] [bloom] [CPU2] bloom.phase=load_wallpaper
+[39807845319] [[32mINFO [0m] [bloom] [CPU2] bloom: initial wallpaper configured /share/wallpapers/flower.png
+[39809012892] [[32mINFO [0m] [bloom] [CPU2] bloom.phase=init_cursor
+[39853842600] [[32mINFO [0m] [sprout::supervisor] [CPU0] SPROUT: Spawned wayland_hello (PID=17)
+[39891751878] [[32mINFO [0m] [sprout::supervisor] [CPU0] SPROUT: Spawned clock (PID=18)
+[39900861396] [[32mINFO [0m] [clock] [CPU3] clock: running at low scheduler priority tid=18
+[39946391331] [[32mINFO [0m] [sprout::supervisor] [CPU0] SPROUT: Spawned leaf (PID=19)
+[39950867418] [[32mINFO [0m] [leaf::thingos_app] [CPU1] leaf: starting
+at /media/c[40751378613] [[32mINFO [0m] [ps2_kbd] [CPU3] ps2_kbd: input_rate bytes_per_sec=1 total=1 irq_wakes=1 dropped=0
+drom/etc/hostname
+
+=== End Serial Log ===

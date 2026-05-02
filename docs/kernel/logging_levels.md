@@ -342,12 +342,11 @@ the level filter still incurs:
 2. A timestamp read (`mono_ticks()`).
 3. Stack allocation of a 1 KiB formatting buffer.
 4. String formatting (several `write_str` calls).
-5. Spin-lock acquisition on `GLOBAL_LOGGER` (IRQs disabled).
-6. A `serial_put_buf` call that locks the 64 KiB `SERIAL_DEFERRED` ring.
-7. A second spin-lock on `LOG_STATE` (the in-memory log ring).
+5. Atomic reservation in the deferred serial/framebuffer rings.
+6. Atomic writes into the in-memory `/dev/kmsg` ring.
 
 With the default set to Info, `kdebug!` calls on the spawn path return after
-step 1 (a single atomic load + compare), eliminating items 2–7 entirely.
+step 1 (a single atomic load + compare), eliminating items 2–6 entirely.
 
 ### Enabling verbose logging for diagnostics
 

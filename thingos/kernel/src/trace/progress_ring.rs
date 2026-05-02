@@ -54,8 +54,7 @@ pub struct ProgressEntry {
 }
 
 impl ProgressEntry {
-    const EMPTY: Self =
-        Self { tag: ProgressTag::Empty, cpu: 0, mono_ns: 0, data: 0 };
+    const EMPTY: Self = Self { tag: ProgressTag::Empty, cpu: 0, mono_ns: 0, data: 0 };
 }
 
 struct ProgressRing {

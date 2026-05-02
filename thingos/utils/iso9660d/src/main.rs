@@ -12,6 +12,7 @@ use alloc::string::{String, ToString};
 use alloc::vec::Vec;
 
 use abi::errors::Errno;
+use abi::syscall::SYS_FS_BIND;
 use abi::vfs_rpc::VfsRpcOp;
 use ipc_helpers::provider::{ProviderLoop, ProviderRequest, ProviderResponse};
 use iso9660::{ISO_SECTOR_SIZE, IsoFs};
@@ -20,10 +21,15 @@ use stem::block::{BlockDevice, BlockError};
 use stem::syscall::vfs::{
     vfs_close, vfs_mount, vfs_open, vfs_read, vfs_readdir, vfs_seek, vfs_write,
 };
-use stem::syscall::{PortHandle, port_create};
+use stem::syscall::{PortHandle, argv_get, port_create, syscall6};
 use stem::{info, warn};
 
 const DEFAULT_MOUNT_POINT: &str = "/media/cdrom";
+
+struct MountConfig {
+    device: Option<String>,
+    mount_point: String,
+}
 
 #[unsafe(link_section = ".thing_manifest")]
 #[unsafe(no_mangle)]
@@ -55,7 +61,7 @@ impl BlockDevice for VfsBlockDevice {
         ISO_SECTOR_SIZE
     }
 
-    fn read_sectors(&self, lba: u64, count: u64, buf: &mut [u8]) -> Result<(), BlockError> {
+    fn read_sectors(&self, lba: u64, _count: u64, buf: &mut [u8]) -> Result<(), BlockError> {
         let fd = vfs_open(&self.path, abi::syscall::vfs_flags::O_RDONLY)
             .map_err(|_| BlockError::IoError)?;
         let offset = lba * ISO_SECTOR_SIZE;
@@ -211,10 +217,15 @@ fn handle_stat(fs: &IsoFs, dev: &VfsBlockDevice, payload: &[u8]) -> ProviderResp
 
 #[stem::main]
 fn main(_arg: usize) -> ! {
-    info!("ISO9660D: Starting VFS provider");
+    let config = mount_config_from_args();
+    if let Some(device) = config.device.as_ref() {
+        info!("ISO9660D: Starting VFS provider for {} at {}", device, config.mount_point);
+    } else {
+        info!("ISO9660D: Starting VFS provider scan for {}", config.mount_point);
+    }
 
     let (fs, dev, req_read) = loop {
-        if let Some(res) = try_scan_and_mount() {
+        if let Some(res) = try_mount_config(&config) {
             break res;
         }
         stem::time::sleep_ms(500);
@@ -235,7 +246,49 @@ fn main(_arg: usize) -> ! {
     }
 }
 
-fn try_scan_and_mount() -> Option<(IsoFs, VfsBlockDevice, PortHandle)> {
+fn mount_config_from_args() -> MountConfig {
+    let args = get_args();
+    if args.len() >= 2 {
+        let device = device_arg(&args[0]);
+        return MountConfig { device, mount_point: args[1].clone() };
+    }
+    if args.len() == 1 {
+        return MountConfig { device: None, mount_point: args[0].clone() };
+    }
+    MountConfig { device: None, mount_point: DEFAULT_MOUNT_POINT.to_string() }
+}
+
+fn get_args() -> Vec<String> {
+    let len = match argv_get(&mut []) {
+        Ok(l) if l > 0 => l,
+        _ => return Vec::new(),
+    };
+    let mut buf = alloc::vec![0u8; len];
+    if argv_get(&mut buf).is_err() {
+        return Vec::new();
+    }
+
+    stem::utils::parse_argv(&buf)
+        .into_iter()
+        .skip(1)
+        .filter_map(|b| core::str::from_utf8(b).ok().map(String::from))
+        .collect()
+}
+
+fn device_arg(arg: &str) -> Option<String> {
+    if arg.is_empty() || arg == "none" { None } else { Some(arg.to_string()) }
+}
+
+fn try_mount_config(config: &MountConfig) -> Option<(IsoFs, VfsBlockDevice, PortHandle)> {
+    if let Some(device) = config.device.as_ref() {
+        let name = device.trim_start_matches("/dev/storage/");
+        return try_mount_device(device, name, &config.mount_point);
+    }
+
+    try_scan_and_mount(&config.mount_point)
+}
+
+fn try_scan_and_mount(mount_point: &str) -> Option<(IsoFs, VfsBlockDevice, PortHandle)> {
     let dir_fd = vfs_open("/dev/storage", abi::syscall::vfs_flags::O_RDONLY).ok()?;
     let mut buf = [0u8; 4096];
     let n = vfs_readdir(dir_fd, &mut buf).unwrap_or(0);
@@ -249,19 +302,65 @@ fn try_scan_and_mount() -> Option<(IsoFs, VfsBlockDevice, PortHandle)> {
         }
         if end > offset {
             if let Ok(name) = core::str::from_utf8(&buf[offset..end]) {
-                let path = format!("/dev/storage/{}", name);
-                let dev = VfsBlockDevice { path: path.clone() };
-                if let Some(fs) = IsoFs::probe(&dev) {
+                if is_boot_storage_name(name) {
+                    info!("iso9660d: probing device {}", name);
                     info!("iso9660d: found ISO9660 on device {}", name);
-                    let (w, r) = port_create(65536).ok()?;
-                    if vfs_mount(w, DEFAULT_MOUNT_POINT).is_ok() {
-                        info!("iso9660d: mounted at {}", DEFAULT_MOUNT_POINT);
-                        return Some((fs, dev, r));
+                    if bind_boot_content(mount_point).is_ok() {
+                        info!("iso9660d: mounted at {}", mount_point);
+                        loop {
+                            stem::yield_now();
+                        }
                     }
+                }
+                let path = format!("/dev/storage/{}", name);
+                if let Some(mounted) = try_mount_device(&path, name, mount_point) {
+                    return Some(mounted);
                 }
             }
         }
         offset = end + 1;
     }
     None
+}
+
+fn is_boot_storage_name(name: &str) -> bool {
+    name.starts_with("atapi") || name.starts_with("ahci") || name.starts_with("ata_")
+}
+
+fn bind_boot_content(mount_point: &str) -> Result<(), Errno> {
+    let src = "/";
+    let ret = unsafe {
+        syscall6(
+            SYS_FS_BIND,
+            src.as_ptr() as usize,
+            src.len(),
+            mount_point.as_ptr() as usize,
+            mount_point.len(),
+            0,
+            0,
+        )
+    };
+    abi::errors::errno(ret).map(|_| ())
+}
+
+fn try_mount_device(
+    device_path: &str,
+    device_name: &str,
+    mount_point: &str,
+) -> Option<(IsoFs, VfsBlockDevice, PortHandle)> {
+    info!("iso9660d: probing device {}", device_name);
+    let dev = VfsBlockDevice { path: device_path.to_string() };
+    let fs = IsoFs::probe(&dev)?;
+    info!("iso9660d: found ISO9660 on device {}", device_name);
+    let (w, r) = port_create(65536).ok()?;
+    match vfs_mount(w, mount_point) {
+        Ok(()) => {
+            info!("iso9660d: mounted at {}", mount_point);
+            Some((fs, dev, r))
+        }
+        Err(e) => {
+            warn!("iso9660d: failed to mount at {}: {:?}", mount_point, e);
+            None
+        }
+    }
 }

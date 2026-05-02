@@ -135,6 +135,11 @@ fn mount_all_from_fstab(path: &str) -> i32 {
 }
 
 fn mount_one(fs_type: &str, device: &str, target: &str) -> Result<(), Errno> {
+    if mount_table_contains(target) {
+        out(&alloc::format!("mounted type={} device={} target={}\n", fs_type, device, target));
+        return Ok(());
+    }
+
     let provider_path = resolve_provider_binary(fs_type).ok_or(Errno::ENOENT)?;
     let argv = [provider_path.as_bytes(), device.as_bytes(), target.as_bytes()];
     let _resp = spawn_driver_ex(&provider_path, &argv, &BTreeMap::new(), 0, &[], None)?;
@@ -146,13 +151,30 @@ fn mount_one(fs_type: &str, device: &str, target: &str) -> Result<(), Errno> {
 
 fn wait_for_mount(target: &str, attempts: usize, delay_ms: u64) -> Result<(), Errno> {
     for _ in 0..attempts {
-        if let Ok(fd) = vfs_open(target, abi::syscall::vfs_flags::O_RDONLY) {
-            let _ = vfs_close(fd);
+        if mount_table_contains(target) {
             return Ok(());
         }
         stem::time::sleep_ms(delay_ms);
     }
     Err(Errno::ETIMEDOUT)
+}
+
+fn mount_table_contains(target: &str) -> bool {
+    let Some(data) = read_file("/proc/mounts", 64 * 1024) else {
+        return false;
+    };
+    let Ok(text) = core::str::from_utf8(&data) else {
+        return false;
+    };
+    let target = normalize_mount_path(target);
+    text.lines()
+        .filter_map(|line| line.split_whitespace().next())
+        .any(|path| normalize_mount_path(path) == target)
+}
+
+fn normalize_mount_path(path: &str) -> String {
+    let trimmed = path.trim_end_matches('/');
+    if trimmed.is_empty() { "/".to_string() } else { trimmed.to_string() }
 }
 
 fn resolve_provider_binary(fs_type: &str) -> Option<String> {

@@ -827,11 +827,8 @@ impl VfsNode for ProviderNode {
 
         // For Display device calls, emit entry/exit tracing and per-RPC watchdog.
         let is_display = call.kind == DeviceKind::Display;
-        let caller_tid = if is_display {
-            unsafe { crate::sched::current_tid_current() }
-        } else {
-            0
-        };
+        let caller_tid =
+            if is_display { unsafe { crate::sched::current_tid_current() } } else { 0 };
         let provider_pid = if is_display { self.rpc.provider_pid() } else { 0 };
         let enter_ns = if is_display { crate::time::monotonic_now_ns() } else { 0 };
         if is_display {
@@ -846,8 +843,7 @@ impl VfsNode for ProviderNode {
         let resp = self.rpc.rpc(VfsRpcOp::DeviceCall, &payload)?;
 
         if is_display {
-            let duration_ms =
-                crate::time::monotonic_now_ns().saturating_sub(enter_ns) / 1_000_000;
+            let duration_ms = crate::time::monotonic_now_ns().saturating_sub(enter_ns) / 1_000_000;
             crate::kdebug!(
                 "VFS_RPC: display device_call.exit op={} caller_tid={} provider_pid={} duration_ms={}",
                 display_op_name(call.op),

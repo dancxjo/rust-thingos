@@ -225,9 +225,11 @@ impl Supervisor {
         stem::info!("SPROUT: Spawning cambium for driver discovery...");
         self.spawn_cambium();
 
-        // Stage 3: Mount iso9660d (ISO9660 VFS provider).
-        // stem::info!("SPROUT: Spawning iso9660d...");
-        // self.spawn_iso9660d();
+        // Stage 3: Mount iso9660d (ISO9660 VFS provider).  The daemon scans
+        // `/dev/storage` until ATA/AHCI publishes the boot CD-ROM, then mounts
+        // the first ISO9660 volume at `/media/cdrom`.
+        stem::info!("SPROUT: Spawning iso9660d...");
+        self.spawn_iso9660d();
 
         // Stage 4: Mount local hostname cache before netd. Mesocarp can serve
         // self entries from VFS state and attach its UDP socket later.

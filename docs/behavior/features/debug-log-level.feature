@@ -72,6 +72,15 @@ Feature: Debug-level log output during boot
     Then the latest serial output should not contain "SYSCALL SPAWN_PROCESS_EX:"
 
   @smoke
+  @kmsg
+  @timeout-30s
+  Scenario: Kernel message ring remains readable after boot
+    Given the machine is started
+    When I wait for the system to boot
+    And the shell command "cat /dev/kmsg" succeeds
+    Then the latest serial output should contain "Entering scheduler loop."
+
+  @smoke
   @timeout-30s
   Scenario: F11 cycles the kernel log level from the low-level keyboard path
     Given the machine is started

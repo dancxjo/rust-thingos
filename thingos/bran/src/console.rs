@@ -1,5 +1,5 @@
 use alloc::collections::BTreeMap;
-use core::sync::atomic::{AtomicBool, Ordering};
+use core::sync::atomic::{AtomicBool, AtomicU8, AtomicUsize, Ordering};
 
 use kernel::{BootRuntime, BootRuntimeBase};
 use spin::Mutex;
@@ -27,13 +27,14 @@ pub static CONSOLE: Mutex<Option<FbConsole>> = Mutex::new(None);
 pub static CONSOLE_DISABLED: AtomicBool = AtomicBool::new(false);
 
 /// Lock to ensure only one CPU flushes the serial ring buffer at a time.
-/// This prevents chunk-level reordering of logs from different CPUs.
-static SERIAL_FLUSH_LOCK: Mutex<()> = Mutex::new(());
+/// This prevents chunk-level reordering of logs from different CPUs without
+/// blocking producers or IRQ handlers.
+static SERIAL_FLUSH_ACTIVE: AtomicBool = AtomicBool::new(false);
 
 /// Lock to ensure only one CPU flushes the framebuffer ring buffer at a time.
 /// Rendering uses the console lock, but draining happens first; this keeps
 /// dequeued chunks from being rendered out of order by competing CPUs.
-static FB_FLUSH_LOCK: Mutex<()> = Mutex::new(());
+static FB_FLUSH_ACTIVE: AtomicBool = AtomicBool::new(false);
 
 // ---------------------------------------------------------------------------
 // Deferred output ring buffer
@@ -46,77 +47,148 @@ static FB_FLUSH_LOCK: Mutex<()> = Mutex::new(());
 const DEFERRED_CAP: usize = 8192;
 const SERIAL_DEFERRED_CAP: usize = 65536; // 64 KiB — sized for heavy multi-CPU logging
 
+struct RingSlot {
+    seq: AtomicUsize,
+    byte: AtomicU8,
+}
+
+impl RingSlot {
+    const fn new() -> Self {
+        Self { seq: AtomicUsize::new(0), byte: AtomicU8::new(0) }
+    }
+}
+
 struct DeferredRing<const CAP: usize> {
-    buf: [u8; CAP],
-    head: usize,
-    len: usize,
+    slots: [RingSlot; CAP],
+    write: AtomicUsize,
+    read: AtomicUsize,
 }
 
 impl<const CAP: usize> DeferredRing<CAP> {
     const fn new() -> Self {
-        Self { buf: [0; CAP], head: 0, len: 0 }
-    }
-
-    fn push(&mut self, b: u8) {
-        let tail = (self.head + self.len) % CAP;
-        self.buf[tail] = b;
-        if self.len < CAP {
-            self.len += 1;
-        } else {
-            // Overwrite oldest byte.
-            self.head = (self.head + 1) % CAP;
+        Self {
+            slots: [const { RingSlot::new() }; CAP],
+            write: AtomicUsize::new(0),
+            read: AtomicUsize::new(0),
         }
     }
 
-    fn push_slice(&mut self, data: &[u8]) {
-        for &b in data {
-            self.push(b);
+    #[inline]
+    fn publish_drop_floor(&self, floor: usize) {
+        let mut current = self.read.load(Ordering::Acquire);
+        while current < floor {
+            match self.read.compare_exchange_weak(
+                current,
+                floor,
+                Ordering::AcqRel,
+                Ordering::Acquire,
+            ) {
+                Ok(_) => break,
+                Err(actual) => current = actual,
+            }
         }
     }
 
-    /// Drain up to `out.len()` bytes. Returns count drained.
-    fn drain(&mut self, out: &mut [u8]) -> usize {
-        let n = self.len.min(out.len());
-        for i in 0..n {
-            out[i] = self.buf[self.head];
-            self.head = (self.head + 1) % CAP;
+    fn push(&self, b: u8) {
+        let seq = self.write.fetch_add(1, Ordering::AcqRel);
+        if seq >= CAP {
+            self.publish_drop_floor(seq - CAP + 1);
         }
-        self.len -= n;
+        let slot = &self.slots[seq % CAP];
+        slot.byte.store(b, Ordering::Relaxed);
+        slot.seq.store(seq.wrapping_add(1), Ordering::Release);
+    }
+
+    fn push_slice(&self, data: &[u8]) {
+        if data.is_empty() {
+            return;
+        }
+        let start = self.write.fetch_add(data.len(), Ordering::AcqRel);
+        let end = start + data.len();
+        if end > CAP {
+            self.publish_drop_floor(end - CAP);
+        }
+
+        let keep_from = data.len().saturating_sub(CAP);
+        for (offset, &b) in data.iter().enumerate().skip(keep_from) {
+            let seq = start + offset;
+            let slot = &self.slots[seq % CAP];
+            slot.byte.store(b, Ordering::Relaxed);
+            slot.seq.store(seq.wrapping_add(1), Ordering::Release);
+        }
+    }
+
+    /// Drain up to `out.len()` committed bytes. Returns count drained.
+    fn drain(&self, out: &mut [u8]) -> usize {
+        let mut n = 0;
+        while n < out.len() {
+            let write = self.write.load(Ordering::Acquire);
+            let mut read = self.read.load(Ordering::Acquire);
+            if read >= write {
+                break;
+            }
+
+            if write - read > CAP {
+                self.publish_drop_floor(write - CAP);
+                continue;
+            }
+
+            let slot = &self.slots[read % CAP];
+            if slot.seq.load(Ordering::Acquire) != read.wrapping_add(1) {
+                break;
+            }
+            let byte = slot.byte.load(Ordering::Relaxed);
+            if slot.seq.load(Ordering::Acquire) != read.wrapping_add(1) {
+                continue;
+            }
+
+            match self.read.compare_exchange_weak(
+                read,
+                read + 1,
+                Ordering::AcqRel,
+                Ordering::Acquire,
+            ) {
+                Ok(_) => {
+                    out[n] = byte;
+                    n += 1;
+                }
+                Err(actual) => read = actual,
+            }
+            let _ = read;
+        }
         n
     }
 
     fn is_empty(&self) -> bool {
-        self.len == 0
-    }
-
-    /// Prepend bytes at the *front* of the ring so they are drained first.
-    ///
-    /// This is used when bytes were drained for rendering but could not be
-    /// rendered (because the console lock was busy).  Putting them back at the
-    /// front preserves the original output order: the re-enqueued bytes will be
-    /// consumed before any bytes that were pushed while the lock was contended.
-    ///
-    /// If there is not enough free space for all of `data`, the oldest (leading)
-    /// bytes are silently discarded.
-    fn push_front_slice(&mut self, data: &[u8]) {
-        let space = CAP - self.len;
-        let n = data.len().min(space);
-        if n == 0 {
-            return;
-        }
-        // If we must truncate, skip the leading (earliest-enqueued) bytes in
-        // `data` so we keep the bytes that are closest to the current ring head.
-        let skip = data.len() - n;
-        self.head = (self.head + CAP - n) % CAP;
-        for (i, &b) in data[skip..].iter().enumerate() {
-            self.buf[(self.head + i) % CAP] = b;
-        }
-        self.len += n;
+        self.read.load(Ordering::Acquire) >= self.write.load(Ordering::Acquire)
     }
 }
 
-static DEFERRED: Mutex<DeferredRing<DEFERRED_CAP>> = Mutex::new(DeferredRing::new());
-static SERIAL_DEFERRED: Mutex<DeferredRing<SERIAL_DEFERRED_CAP>> = Mutex::new(DeferredRing::new());
+struct FlushGuard(&'static AtomicBool);
+
+impl FlushGuard {
+    fn try_enter(flag: &'static AtomicBool) -> Option<Self> {
+        flag.compare_exchange(false, true, Ordering::Acquire, Ordering::Relaxed)
+            .ok()
+            .map(|_| Self(flag))
+    }
+}
+
+impl Drop for FlushGuard {
+    fn drop(&mut self) {
+        self.0.store(false, Ordering::Release);
+    }
+}
+
+static DEFERRED: DeferredRing<DEFERRED_CAP> = DeferredRing::new();
+static SERIAL_DEFERRED: DeferredRing<SERIAL_DEFERRED_CAP> = DeferredRing::new();
+
+fn disarm_serial_tx_if_idle() {
+    crate::RUNTIME.arch.disarm_serial_tx_irq();
+    if !SERIAL_DEFERRED.is_empty() {
+        crate::RUNTIME.arch.arm_serial_tx_irq();
+    }
+}
 
 const GLYPH_TABLE_LEN: usize = 256;
 
@@ -739,14 +811,14 @@ pub fn put_char(c: u8) {
     if CONSOLE_DISABLED.load(Ordering::Relaxed) {
         return;
     }
-    DEFERRED.lock().push(c);
+    DEFERRED.push(c);
 }
 
 pub fn serial_put_char(c: u8) {
     if CONSOLE_DISABLED.load(Ordering::Relaxed) {
         return;
     }
-    SERIAL_DEFERRED.lock().push(c);
+    SERIAL_DEFERRED.push(c);
     // Kick-start: arm the TX interrupt so the serial IRQ handler drains
     // the ring asynchronously.  This is a no-op if already armed.
     crate::RUNTIME.arch.arm_serial_tx_irq();
@@ -758,14 +830,14 @@ pub fn put_buf(buf: &[u8]) {
     if CONSOLE_DISABLED.load(Ordering::Relaxed) {
         return;
     }
-    DEFERRED.lock().push_slice(buf);
+    DEFERRED.push_slice(buf);
 }
 
 pub fn serial_put_buf(buf: &[u8]) {
     if CONSOLE_DISABLED.load(Ordering::Relaxed) {
         return;
     }
-    SERIAL_DEFERRED.lock().push_slice(buf);
+    SERIAL_DEFERRED.push_slice(buf);
     // Kick-start TX interrupt for async drain.
     crate::RUNTIME.arch.arm_serial_tx_irq();
     serial_flush_deferred();
@@ -787,8 +859,8 @@ pub fn blink_cursor() {
 /// Drain the deferred ring buffer and render to the framebuffer console.
 ///
 /// Called from the timer tick (and optionally from idle or explicit flush
-/// points).  Uses `try_lock` on both the ring buffer and the console so it
-/// never blocks an IRQ handler.
+/// points).  Producers reserve ring slots atomically; rendering uses
+/// `try_lock` on the console so it never blocks an IRQ handler.
 ///
 /// Processes up to `FLUSH_BATCH` bytes per call so a burst of log output
 /// doesn't monopolise the timer ISR.  Remaining bytes will be rendered on
@@ -804,45 +876,24 @@ pub fn flush_deferred() {
         return;
     }
 
-    let _flush_guard = match FB_FLUSH_LOCK.try_lock() {
+    let _flush_guard = match FlushGuard::try_enter(&FB_FLUSH_ACTIVE) {
         Some(g) => g,
         None => return,
     };
 
     let mut local = [0u8; FLUSH_BATCH];
 
-    // Drain from the ring buffer (very short lock).
-    let n = {
-        let mut ring = match DEFERRED.try_lock() {
-            Some(r) => r,
-            None => return,
-        };
-        if ring.is_empty() {
-            return;
-        }
-        ring.drain(&mut local)
-    };
-
-    if n == 0 {
-        return;
-    }
-
-    // Render under the CONSOLE lock.
+    // Try the framebuffer console first. If it is busy, leave bytes queued.
     if let Some(ref mut guard) = CONSOLE.try_lock() {
         if let Some(ref mut console) = **guard {
+            let n = DEFERRED.drain(&mut local);
+            if n == 0 {
+                return;
+            }
             for &b in &local[..n] {
                 console.put_char(b);
             }
         }
-    } else {
-        // Console is busy — re-enqueue bytes at the *front* of the ring so
-        // they are rendered before any bytes that arrived in the meantime,
-        // preserving output order.
-        if let Some(mut ring) = DEFERRED.try_lock() {
-            ring.push_front_slice(&local[..n]);
-        }
-        // If we can't re-lock the ring either, the bytes are lost — acceptable
-        // for a debug console under extreme contention.
     }
 }
 
@@ -856,37 +907,22 @@ pub fn flush_deferred_idle() {
         return;
     }
 
-    let _flush_guard = match FB_FLUSH_LOCK.try_lock() {
+    let _flush_guard = match FlushGuard::try_enter(&FB_FLUSH_ACTIVE) {
         Some(g) => g,
         None => return,
     };
 
     let mut local = [0u8; FLUSH_BATCH_IDLE];
 
-    let n = {
-        let mut ring = match DEFERRED.try_lock() {
-            Some(r) => r,
-            None => return,
-        };
-        if ring.is_empty() {
-            return;
-        }
-        ring.drain(&mut local)
-    };
-
-    if n == 0 {
-        return;
-    }
-
     if let Some(ref mut guard) = CONSOLE.try_lock() {
         if let Some(ref mut console) = **guard {
+            let n = DEFERRED.drain(&mut local);
+            if n == 0 {
+                return;
+            }
             for &b in &local[..n] {
                 console.put_char(b);
             }
-        }
-    } else {
-        if let Some(mut ring) = DEFERRED.try_lock() {
-            ring.push_front_slice(&local[..n]);
         }
     }
 }
@@ -897,14 +933,19 @@ pub fn flush_deferred_idle() {
 pub fn flush_sync() {
     let mut local = [0u8; FLUSH_BATCH];
     loop {
-        let n = DEFERRED.lock().drain(&mut local);
+        let n = DEFERRED.drain(&mut local);
         if n == 0 {
             break;
         }
-        if let Some(ref mut console) = *CONSOLE.lock() {
+        if let Some(ref mut guard) = CONSOLE.try_lock() {
+            let Some(ref mut console) = **guard else {
+                break;
+            };
             for &b in &local[..n] {
                 console.put_char(b);
             }
+        } else {
+            break;
         }
     }
 }
@@ -920,7 +961,7 @@ pub fn serial_flush_deferred() {
     }
 
     // Ensure only one CPU flushes at a time to prevent reordering.
-    let _flush_guard = match SERIAL_FLUSH_LOCK.try_lock() {
+    let _flush_guard = match FlushGuard::try_enter(&SERIAL_FLUSH_ACTIVE) {
         Some(g) => g,
         None => return,
     };
@@ -931,18 +972,12 @@ pub fn serial_flush_deferred() {
     }
 
     let mut local = [0u8; 16]; // One FIFO burst
-    let n = {
-        let mut ring = match SERIAL_DEFERRED.try_lock() {
-            Some(r) => r,
-            None => return,
-        };
-        if ring.is_empty() {
-            // Nothing to send — disarm the TX interrupt to avoid spurious IRQs.
-            crate::RUNTIME.arch.disarm_serial_tx_irq();
-            return;
-        }
-        ring.drain(&mut local)
-    };
+    if SERIAL_DEFERRED.is_empty() {
+        // Nothing to send — disarm the TX interrupt to avoid spurious IRQs.
+        disarm_serial_tx_if_idle();
+        return;
+    }
+    let n = SERIAL_DEFERRED.drain(&mut local);
 
     if n > 0 {
         crate::RUNTIME.arch.write_serial_fifo_burst(&local[..n]);
@@ -952,9 +987,9 @@ pub fn serial_flush_deferred() {
 /// Drain one FIFO burst from the serial ring buffer, called from the
 /// serial IRQ handler (vector 0x24) when a THRE interrupt fires.
 ///
-/// Uses `try_lock` on the ring so it never blocks the IRQ handler.  If the
-/// ring is empty after draining, disarms the TX interrupt to stop spurious
-/// IRQs until new data is pushed.
+/// Producers reserve ring slots atomically, so the IRQ handler never blocks
+/// on the ring. If the ring is empty after draining, disarms the TX interrupt
+/// to stop spurious IRQs until new data is pushed.
 pub fn serial_drain_irq() {
     if CONSOLE_DISABLED.load(Ordering::Relaxed) {
         return;
@@ -963,7 +998,7 @@ pub fn serial_drain_irq() {
     // Share the same drain gate as timer/idle flushes.  Without this, two CPUs
     // can dequeue different FIFO-sized chunks and write them to the UART in the
     // opposite order.
-    let _flush_guard = match SERIAL_FLUSH_LOCK.try_lock() {
+    let _flush_guard = match FlushGuard::try_enter(&SERIAL_FLUSH_ACTIVE) {
         Some(g) => g,
         None => return,
     };
@@ -974,25 +1009,14 @@ pub fn serial_drain_irq() {
     }
 
     let mut local = [0u8; 16]; // One FIFO burst
-    let n = {
-        let mut ring = match SERIAL_DEFERRED.try_lock() {
-            Some(r) => r,
-            None => return,
-        };
-        ring.drain(&mut local)
-    };
+    let n = SERIAL_DEFERRED.drain(&mut local);
 
     if n > 0 {
         crate::RUNTIME.arch.write_serial_fifo_burst(&local[..n]);
     }
 
-    if let Some(ring) = SERIAL_DEFERRED.try_lock() {
-        if ring.is_empty() {
-            // Disarm while holding the ring lock.  Otherwise a producer can see
-            // the IRQ as armed, enqueue bytes, and then lose the race to this
-            // disarm, leaving serial output stuck until some unrelated flush.
-            crate::RUNTIME.arch.disarm_serial_tx_irq();
-        }
+    if SERIAL_DEFERRED.is_empty() {
+        disarm_serial_tx_if_idle();
     }
 }
 
@@ -1002,7 +1026,7 @@ pub fn serial_flush_deferred_idle() {
     }
 
     // Ensure only one CPU flushes at a time to prevent reordering.
-    let _flush_guard = match SERIAL_FLUSH_LOCK.try_lock() {
+    let _flush_guard = match FlushGuard::try_enter(&SERIAL_FLUSH_ACTIVE) {
         Some(g) => g,
         None => return,
     };
@@ -1015,17 +1039,11 @@ pub fn serial_flush_deferred_idle() {
             return;
         }
 
-        let n = {
-            let mut ring = match SERIAL_DEFERRED.try_lock() {
-                Some(r) => r,
-                None => return,
-            };
-            if ring.is_empty() {
-                crate::RUNTIME.arch.disarm_serial_tx_irq();
-                return;
-            }
-            ring.drain(&mut local)
-        };
+        if SERIAL_DEFERRED.is_empty() {
+            disarm_serial_tx_if_idle();
+            return;
+        }
+        let n = SERIAL_DEFERRED.drain(&mut local);
 
         if n > 0 {
             crate::RUNTIME.arch.write_serial_fifo_burst(&local[..n]);
@@ -1038,7 +1056,7 @@ pub fn serial_flush_deferred_idle() {
 pub fn serial_flush_sync() {
     let mut local = [0u8; FLUSH_BATCH];
     loop {
-        let n = SERIAL_DEFERRED.lock().drain(&mut local);
+        let n = SERIAL_DEFERRED.drain(&mut local);
         if n == 0 {
             break;
         }
@@ -1049,11 +1067,9 @@ pub fn serial_flush_sync() {
 pub unsafe fn force_unlock() {
     unsafe {
         CONSOLE.force_unlock();
-        DEFERRED.force_unlock();
-        SERIAL_DEFERRED.force_unlock();
-        SERIAL_FLUSH_LOCK.force_unlock();
-        FB_FLUSH_LOCK.force_unlock();
     }
+    SERIAL_FLUSH_ACTIVE.store(false, Ordering::Release);
+    FB_FLUSH_ACTIVE.store(false, Ordering::Release);
 }
 
 #[cfg(test)]
@@ -1061,77 +1077,63 @@ mod tests {
     use super::{DEFERRED_CAP, DeferredRing};
     type TestRing = DeferredRing<DEFERRED_CAP>;
 
-    fn drain_all(ring: &mut TestRing, out: &mut [u8]) -> usize {
+    fn drain_all(ring: &TestRing, out: &mut [u8]) -> usize {
         ring.drain(out)
     }
 
     #[test]
-    fn push_front_slice_preserves_order() {
-        let mut ring = TestRing::new();
-        // Simulate: "line1\n" was drained but could not be rendered.
-        // Meanwhile "line2\n" was pushed.
+    fn push_slice_preserves_contiguous_order() {
+        let ring = TestRing::new();
+        ring.push_slice(b"line1\n");
         ring.push_slice(b"line2\n");
-        // Re-enqueue "line1\n" at the front.
-        ring.push_front_slice(b"line1\n");
-        // Drain should give line1 before line2.
         let mut out = [0u8; 12];
-        let n = drain_all(&mut ring, &mut out);
+        let n = drain_all(&ring, &mut out);
         assert_eq!(&out[..n], b"line1\nline2\n");
     }
 
     #[test]
-    fn push_front_slice_wraps_correctly() {
-        // Fill the ring almost full so the head wraps around the array boundary.
-        let mut ring = TestRing::new();
-        // Advance head to near the end of the buffer.
+    fn drain_wraps_correctly() {
+        let ring = TestRing::new();
         let filler = [b'x'; DEFERRED_CAP - 4];
         ring.push_slice(&filler);
-        let mut discard = [0u8; DEFERRED_CAP];
-        ring.drain(&mut discard[..DEFERRED_CAP - 4]);
-        // Ring is now empty but head is at DEFERRED_CAP - 4.
-        ring.push_slice(b"new ");
-        ring.push_front_slice(b"old ");
+        let mut discard = [0u8; DEFERRED_CAP - 4];
+        ring.drain(&mut discard);
+        ring.push_slice(b"old new ");
         let mut out = [0u8; 8];
-        let n = drain_all(&mut ring, &mut out);
+        let n = drain_all(&ring, &mut out);
         assert_eq!(&out[..n], b"old new ");
     }
 
     #[test]
-    fn push_front_slice_truncates_to_free_space() {
-        // Fill all but 3 bytes.
-        let mut ring = TestRing::new();
-        let filler = [b'y'; DEFERRED_CAP - 3];
+    fn overwrite_discards_oldest_bytes() {
+        let ring = TestRing::new();
+        let filler = [b'y'; DEFERRED_CAP];
         ring.push_slice(&filler);
-        // Try to prepend 6 bytes — only 3 should fit (oldest 3 are dropped).
-        ring.push_front_slice(b"abcdef");
-        // The ring should be full.
-        assert_eq!(ring.len, DEFERRED_CAP);
-        // Drain first 3 bytes — should be "def" (last 3 of "abcdef").
-        let mut head = [0u8; 3];
-        ring.drain(&mut head);
-        assert_eq!(&head, b"def");
+        ring.push_slice(b"abcdef");
+        let mut out = [0u8; DEFERRED_CAP];
+        let n = drain_all(&ring, &mut out);
+        assert_eq!(n, DEFERRED_CAP);
+        assert_eq!(&out[n - 6..n], b"abcdef");
     }
 
     #[test]
-    fn push_front_slice_empty_data_is_noop() {
-        let mut ring = TestRing::new();
+    fn empty_data_is_noop() {
+        let ring = TestRing::new();
         ring.push_slice(b"hello");
-        ring.push_front_slice(b"");
+        ring.push_slice(b"");
         let mut out = [0u8; 5];
-        let n = drain_all(&mut ring, &mut out);
+        let n = drain_all(&ring, &mut out);
         assert_eq!(&out[..n], b"hello");
     }
 
     #[test]
-    fn push_front_slice_full_ring_drops_all() {
-        let mut ring = TestRing::new();
-        let filler = [b'z'; DEFERRED_CAP];
-        ring.push_slice(&filler);
-        // Ring is full — push_front_slice must not corrupt it.
-        ring.push_front_slice(b"ignored");
-        assert_eq!(ring.len, DEFERRED_CAP);
+    fn oversized_slice_keeps_tail() {
+        let ring = TestRing::new();
+        let oversized = [b'z'; DEFERRED_CAP + 8];
+        ring.push_slice(&oversized);
         let mut out = [0u8; DEFERRED_CAP];
-        let n = drain_all(&mut ring, &mut out);
+        let n = drain_all(&ring, &mut out);
+        assert_eq!(n, DEFERRED_CAP);
         assert!(out[..n].iter().all(|&b| b == b'z'));
     }
 }

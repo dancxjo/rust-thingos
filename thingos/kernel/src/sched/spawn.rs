@@ -2658,11 +2658,12 @@ mod tests {
     #[test]
     fn test_spawn_wake_irq_restore_phase3_irq_balance_and_task_runnable() {
         let _g = init_test_env();
-        use crate::BootRuntimeBase as _;
-        use crate::sched::{SCHEDULER, clear_global_need_resched, need_resched_pending};
-        use crate::sched::tests::MOCK_RUNTIME;
-        use crate::task::TaskState;
         use core::sync::atomic::Ordering;
+
+        use crate::BootRuntimeBase as _;
+        use crate::sched::tests::MOCK_RUNTIME;
+        use crate::sched::{SCHEDULER, clear_global_need_resched, need_resched_pending};
+        use crate::task::TaskState;
 
         // IRQ depth must start at 0 (balanced, interrupts conceptually enabled).
         crate::sched::tests::reset_mock_irq_depth();
@@ -2709,8 +2710,7 @@ mod tests {
             detached: false,
             signals: crate::signal::ThreadSignals::new(),
         };
-        crate::task::registry::get_registry::<MockRuntime>()
-            .insert(alloc::boxed::Box::new(caller));
+        crate::task::registry::get_registry::<MockRuntime>().insert(alloc::boxed::Box::new(caller));
         sched.state.insert_task(crate::sched::state::ThreadSchedFields {
             tid: CALLER_TID,
             runq_location: None,
