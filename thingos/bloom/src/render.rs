@@ -55,6 +55,8 @@ const BUSY_SPINNER_DOT_OFFSETS: [(i32, i32); 12] = [
     (-7, -12),
 ];
 const BUSY_SPINNER_ALPHA: [u8; 12] = [238, 208, 174, 140, 112, 88, 68, 52, 40, 32, 26, 22];
+const BUSY_SPINNER_SAMPLE_OFFSETS: [i32; 4] = [-3, -1, 1, 3];
+const BUSY_SPINNER_BAYER_4X4: [u8; 16] = [0, 8, 2, 10, 12, 4, 14, 6, 3, 11, 1, 9, 15, 7, 13, 5];
 const POINTER_OVERLAY_MAX_W: u32 = 460;
 const POINTER_OVERLAY_MAX_H: u32 = 144;
 const POINTER_OVERLAY_MARGIN: u32 = 12;
@@ -1010,20 +1012,40 @@ fn draw_builtin_busy_spinner(dst: &mut [u32], stride: u32, height: u32, frame: u
 }
 
 fn draw_spinner_dot(dst: &mut [u32], stride: u32, cx: i32, cy: i32, radius: i32, color: u32) {
-    let radius_sq = radius * radius;
-    for y in cy - radius..=cy + radius {
+    let sample_center_x = cx * 8 + 4;
+    let sample_center_y = cy * 8 + 4;
+    let sample_radius = radius * 8;
+    let sample_radius_sq = sample_radius * sample_radius;
+    let outer = radius + 1;
+    let base_alpha = color >> 24;
+    let rgb = color & 0x00FFFFFF;
+
+    for y in cy - outer..=cy + outer {
         if y < 0 || y >= CURSOR_SIZE as i32 {
             continue;
         }
         let row = y as usize * stride as usize;
-        for x in cx - radius..=cx + radius {
+        for x in cx - outer..=cx + outer {
             if x < 0 || x >= CURSOR_SIZE as i32 {
                 continue;
             }
-            let dx = x - cx;
-            let dy = y - cy;
-            if dx * dx + dy * dy <= radius_sq {
-                dst[row + x as usize] = color;
+            let mut coverage = 0u32;
+            for sy in BUSY_SPINNER_SAMPLE_OFFSETS {
+                for sx in BUSY_SPINNER_SAMPLE_OFFSETS {
+                    let sample_x = x * 8 + 4 + sx;
+                    let sample_y = y * 8 + 4 + sy;
+                    let dx = sample_x - sample_center_x;
+                    let dy = sample_y - sample_center_y;
+                    if dx * dx + dy * dy <= sample_radius_sq {
+                        coverage += 1;
+                    }
+                }
+            }
+            if coverage > 0 {
+                let bayer =
+                    BUSY_SPINNER_BAYER_4X4[((y as usize & 3) << 2) | (x as usize & 3)] as u32;
+                let alpha = (base_alpha * (coverage * 16 + bayer) / 256).min(base_alpha);
+                dst[row + x as usize] = (alpha << 24) | rgb;
             }
         }
     }
