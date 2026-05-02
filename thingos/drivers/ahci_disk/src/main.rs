@@ -307,6 +307,7 @@ impl AhciDevice {
             tbl.cfis[0] = FIS_TYPE_REG_H2D;
             tbl.cfis[1] = 0x80;
             tbl.cfis[2] = ATA_CMD_PACKET;
+            tbl.cfis[3] = 1; // DMA transfer for AHCI PRDT-backed ATAPI data.
             tbl.cfis[5] = (ds as u32 & 0xFF) as u8;
             tbl.cfis[6] = ((ds as u32 >> 8) & 0xFF) as u8;
 
@@ -364,7 +365,7 @@ impl AhciDevice {
             mmio_read32(pb, PORT_CI),
             mmio_read32(pb, PORT_IS)
         );
-        let mut loop_timeout = 16;
+        let mut loop_timeout = 100000;
         loop {
             let ci = mmio_read32(pb, PORT_CI);
             if ci & slot_bit == 0 {
@@ -444,7 +445,7 @@ impl StorageProvider {
                 match self.device.read_sectors(start_lba, count, &mut bounce) {
                     Ok(_) => {
                         let inner_off = (offset % sector_size) as usize;
-                        ProviderResponse::ok_bytes(&bounce[inner_off..inner_off + len])
+                        ProviderResponse::ok_read(&bounce[inner_off..inner_off + len])
                     }
                     Err(_) => ProviderResponse::err(Errno::EIO),
                 }

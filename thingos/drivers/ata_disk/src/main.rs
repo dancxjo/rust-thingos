@@ -364,7 +364,7 @@ impl StorageProvider {
                 match self.device.read_sectors(lba, count, &mut bounce) {
                     Ok(_) => {
                         let inner_off = (offset % sector_size) as usize;
-                        ProviderResponse::ok_bytes(&bounce[inner_off..inner_off + len])
+                        ProviderResponse::ok_read(&bounce[inner_off..inner_off + len])
                     }
                     Err(_) => ProviderResponse::err(Errno::EIO),
                 }
