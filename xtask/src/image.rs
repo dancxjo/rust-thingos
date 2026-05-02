@@ -1303,7 +1303,10 @@ fn is_bin_program(name: &str) -> bool {
 }
 
 fn is_service_program(name: &str) -> bool {
-    matches!(name, "bloom" | "bristle" | "cambium" | "fatd" | "iso9660d" | "mesocarp" | "netd")
+    matches!(
+        name,
+        "bloom" | "bristle" | "cambium" | "fatd" | "httpsd" | "iso9660d" | "mesocarp" | "netd"
+    )
 }
 
 fn executable_subdir(name: &str) -> &'static str {
@@ -1324,7 +1327,7 @@ fn is_bootstrap_boot_module(name: &str) -> bool {
         || is_service_program(name)
         || matches!(
             name,
-            "sprout" | "terminal" | "wayland_hello" | "clock" | "leaf" | "fetchd" | "httpsd"
+            "sprout" | "terminal" | "wayland_hello" | "clock" | "leaf" | "fetchd"
         )
 }
 
