@@ -11,7 +11,9 @@ use abi::driver_interface::{
 use stem::abi::module_manifest::{MANIFEST_MAGIC, ManifestHeader, ModuleKind, device_kind_bytes};
 use stem::syscall::message::msg_send;
 use stem::syscall::vfs::{vfs_close, vfs_open, vfs_read};
-use stem::syscall::{ioport_read, irq_subscribe, irq_wait};
+use stem::syscall::{ioport_read, irq_subscribe};
+use stem::time::Duration;
+use stem::wait_set::WaitSet;
 use stem::{debug, error, info, warn};
 const THINGOS_DRIVER_NAME: &[u8] = b"ps2_kbd";
 
@@ -107,6 +109,7 @@ const KBD_VECTOR: u8 = 0x21;
 /// subscription fails.  25 ms is sufficient to catch any stray scancodes that
 /// arrive without an interrupt and low enough to avoid noticeable latency.
 const POLLING_INTERVAL_MS: u64 = 25;
+const IRQ_ASSIST_POLL_MS: u64 = 4;
 const INPUT_TRACE_INITIAL: u64 = 24;
 const INPUT_TRACE_INTERVAL: u64 = 128;
 
@@ -261,37 +264,65 @@ fn send_key_event(bristle_pid: u32, edge: KeyEdge, drop_counter: &mut u32) {
     }
 }
 
-/// Interrupt-driven service loop (primary path).
+/// IRQ-assisted service loop (primary path).
 ///
-/// Blocks on `irq_wait` until IRQ1 fires, then drains all pending scancodes.
-/// This avoids runnable-task churn during idle/low-input periods because the
-/// task is only scheduled when the hardware actually signals new data.
+/// Waits briefly for IRQ1, then drains all pending scancodes even if the wait
+/// timed out. The timeout is a safety net for the kernel IRQ path: if an input
+/// interrupt arrives while the scheduler lock is held, the IRQ handler records
+/// the pending count but deliberately skips the blocking wake.
 fn interrupt_loop(bristle_pid: u32) -> ! {
-    stem::debug!("ps2_kbd: using interrupt-driven loop (IRQ vector 0x{:02x})", KBD_VECTOR);
+    stem::debug!(
+        "ps2_kbd: using IRQ-assisted loop (IRQ vector 0x{:02x}, poll={}ms)",
+        KBD_VECTOR,
+        IRQ_ASSIST_POLL_MS
+    );
+    let mut waitset = WaitSet::new();
+    let irq_token = match waitset.add_irq(KBD_VECTOR as u64) {
+        Ok(token) => token,
+        Err(e) => {
+            warn!("ps2_kbd: failed to add IRQ wait source ({:?}), switching to polling", e);
+            polling_loop(bristle_pid);
+        }
+    };
+
     let mut state = KeyboardState::new();
     let mut drop_counter = 0u32;
     let mut irq_wake_count = 0u64;
+    let mut timeout_count = 0u64;
     let mut input_count = 0u64;
     let mut rate_window_start_ns = stem::monotonic_ns();
     let mut rate_window_input = 0u64;
     loop {
-        if should_log_input(irq_wake_count + 1) {
+        if should_log_input(irq_wake_count + timeout_count + 1) {
             stem::info!(
-                "ps2_kbd: irq_wait entry vector=0x{:02x} wakes={} input_total={} dropped={}",
+                "ps2_kbd: irq_wait entry vector=0x{:02x} wakes={} timeouts={} input_total={} dropped={}",
                 KBD_VECTOR,
                 irq_wake_count,
+                timeout_count,
                 input_count,
                 drop_counter
             );
         }
-        match irq_wait(KBD_VECTOR) {
-            Ok(pending) => {
-                irq_wake_count = irq_wake_count.wrapping_add(1);
-                if should_log_input(irq_wake_count) {
+        match waitset.wait(Some(Duration::from_millis(IRQ_ASSIST_POLL_MS))) {
+            Ok(events) => {
+                let mut saw_irq = false;
+                let mut pending = 0i64;
+                for event in events {
+                    if event.token() == irq_token && event.is_irq() {
+                        irq_wake_count = irq_wake_count.wrapping_add(1);
+                        pending = event.value();
+                        saw_irq = true;
+                    }
+                }
+                if !saw_irq {
+                    timeout_count = timeout_count.wrapping_add(1);
+                }
+                if saw_irq && should_log_input(irq_wake_count) {
                     stem::info!(
-                        "ps2_kbd: irq_wait exit vector=0x{:02x} wakes={} pending={}",
+                        "ps2_kbd: irq_wait exit vector=0x{:02x} wakes={} timeouts={} pending={}",
                         KBD_VECTOR,
                         irq_wake_count,
+                        timeout_count,
                         pending
                     );
                 }
@@ -313,9 +344,10 @@ fn interrupt_loop(bristle_pid: u32) -> ! {
                 }
             }
             Err(e) => {
-                // irq_wait should not fail once subscribed; if it does, fall
-                // back to polling so the driver keeps functioning.
-                warn!("ps2_kbd: irq_wait error ({:?}), switching to polling fallback", e);
+                warn!(
+                    "ps2_kbd: IRQ wait error ({:?}) after {} wakes, switching to polling fallback",
+                    e, irq_wake_count
+                );
                 break;
             }
         }

@@ -10,6 +10,8 @@ pub(crate) static BLOCK_CURRENT_HOOK: core::sync::atomic::AtomicPtr<()> =
     core::sync::atomic::AtomicPtr::new(core::ptr::null_mut());
 pub(crate) static WAKE_TASK_HOOK: core::sync::atomic::AtomicPtr<()> =
     core::sync::atomic::AtomicPtr::new(core::ptr::null_mut());
+pub(crate) static TRY_WAKE_TASK_FROM_IRQ_HOOK: core::sync::atomic::AtomicPtr<()> =
+    core::sync::atomic::AtomicPtr::new(core::ptr::null_mut());
 
 /// Deferred writes to the canonical REGISTRY that must be applied **after**
 /// releasing the SCHEDULER lock.
@@ -576,6 +578,59 @@ pub fn wake_task<R: BootRuntime>(id: u64) {
     rt.irq_restore(_irq);
 }
 
+/// Best-effort wake path for IRQ context.
+///
+/// This must never block on the global scheduler lock.  If the lock is
+/// currently held, the IRQ pending count remains recorded and the userspace IRQ
+/// waiter is expected to observe it on its next timed poll.
+pub fn try_wake_task_from_irq<R: BootRuntime>(id: u64) -> bool {
+    let rt = crate::runtime::<R>();
+
+    let (ipi_cpu, woke) = {
+        let Some(lock_sched) = SCHEDULER.try_lock() else {
+            return false;
+        };
+        super::set_sched_lock_tracking::<R>(rt.current_cpu_index());
+        let lock_start = rt.mono_ticks();
+
+        let result = if let Some(ptr) = *lock_sched {
+            let sched = unsafe { &mut *(ptr as *mut Scheduler<R>) };
+            let (ipi_cpu, deferred) = wake_task_locked::<R>(sched, id);
+            if let Some(update) = deferred {
+                if update.new_state.is_some() || update.new_enqueued_at_tick.is_some() {
+                    sched.pending_registry_syncs.push(crate::sched::types::DeferredRegistrySync {
+                        tid: update.tid,
+                        new_state: update.new_state,
+                        new_enqueued_at_tick: update.new_enqueued_at_tick,
+                        new_last_cpu: None,
+                    });
+                }
+            }
+            (ipi_cpu, true)
+        } else {
+            (None, false)
+        };
+
+        super::record_sched_lock_hold::<R>(
+            &super::PROF_SCHED_LOCK_WAKE_TASK_CALLS,
+            &super::PROF_SCHED_LOCK_WAKE_TASK_US_TOTAL,
+            &super::PROF_SCHED_LOCK_WAKE_TASK_US_MAX,
+            &super::PROF_SCHED_LOCK_WAKE_TASK_HOLD_HIST,
+            lock_start,
+        );
+        super::clear_sched_lock_tracking::<R>();
+        result
+    };
+
+    if let Some(cpu) = ipi_cpu {
+        super::DIAG_IPI_SENT.fetch_add(1, core::sync::atomic::Ordering::Relaxed);
+        super::DIAG_IPI_SENT_WAKE_TASK.fetch_add(1, core::sync::atomic::Ordering::Relaxed);
+        rt.send_ipi(cpu, 0x30);
+    }
+
+    woke
+}
+
 /// Type-erased block for use from IRQ module
 pub unsafe fn block_current_erased() {
     let ptr = BLOCK_CURRENT_HOOK.load(core::sync::atomic::Ordering::SeqCst);
@@ -594,7 +649,20 @@ pub unsafe fn wake_task_erased(id: u64) {
     }
 }
 
+/// Type-erased best-effort wake for use from IRQ context.
+pub unsafe fn try_wake_task_from_irq_erased(id: u64) -> bool {
+    let ptr = TRY_WAKE_TASK_FROM_IRQ_HOOK.load(core::sync::atomic::Ordering::SeqCst);
+    if !ptr.is_null() {
+        let hook: fn(u64) -> bool = unsafe { core::mem::transmute(ptr) };
+        hook(id)
+    } else {
+        false
+    }
+}
+
 pub fn init_blocking_hooks<R: BootRuntime>() {
     BLOCK_CURRENT_HOOK.store(block_current::<R> as *mut (), core::sync::atomic::Ordering::SeqCst);
     WAKE_TASK_HOOK.store(wake_task::<R> as *mut (), core::sync::atomic::Ordering::SeqCst);
+    TRY_WAKE_TASK_FROM_IRQ_HOOK
+        .store(try_wake_task_from_irq::<R> as *mut (), core::sync::atomic::Ordering::SeqCst);
 }

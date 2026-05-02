@@ -700,3 +700,15 @@ pub unsafe fn block_current_erased() {
 pub unsafe fn wake_task_erased(tid: u64) {
     unsafe { super::wake_task_erased(tid) }
 }
+
+/// Best-effort wake from IRQ context.
+///
+/// Returns `false` instead of blocking when the scheduler lock is contended.
+///
+/// # Safety
+///
+/// Must be called from kernel IRQ context or another context that can tolerate
+/// a skipped wake and later retry/poll.
+pub unsafe fn try_wake_task_from_irq_erased(tid: u64) -> bool {
+    unsafe { super::try_wake_task_from_irq_erased(tid) }
+}

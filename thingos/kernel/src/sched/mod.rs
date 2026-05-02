@@ -75,7 +75,8 @@ use core::marker::PhantomData;
 use core::sync::atomic::{AtomicBool, AtomicIsize, AtomicU8, AtomicU64, AtomicUsize, Ordering};
 
 pub use blocking::{
-    block_current, block_current_erased, init_blocking_hooks, wake_task, wake_task_erased,
+    block_current, block_current_erased, init_blocking_hooks, try_wake_task_from_irq,
+    try_wake_task_from_irq_erased, wake_task, wake_task_erased,
 };
 pub use hooks::{
     CpuSchedDiag, ProcessSnapshot, SchedDiag, add_user_mapping_current, alloc_user_stack_current,
