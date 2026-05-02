@@ -11,3 +11,9 @@ Feature: Entropy and Random Number Generation
     Given a machine without RDRAND support
     When the entropy subsystem initializes
     Then the serial output should contain "ENTROPY: no hardware RNG available, using timer fallback"
+
+  Scenario: HWRNG driver seeds the kernel without a stack alignment trap
+    Given the machine is booted
+    Then the serial output should contain "hwrng: Kernel entropy pool seeded."
+    And the serial output should not contain "General Protection Fault"
+    And the serial output should not contain "task='hwrng'"

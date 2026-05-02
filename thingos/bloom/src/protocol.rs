@@ -45,6 +45,7 @@ pub const KIND_KEYBOARD_LEAVE: KindId =
     KindId([b'B', b'L', b'O', b'O', b'M', b'I', b'N', b'P', b'U', b'T', 0, 0, 0, 0, 0, 6]);
 pub const KIND_KEYBOARD_KEY: KindId =
     KindId([b'B', b'L', b'O', b'O', b'M', b'I', b'N', b'P', b'U', b'T', 0, 0, 0, 0, 0, 7]);
+pub const KIND_UI_EVENT: KindId = KindId(abi::ui_event::KIND_ID_THINGOS_UI_EVENT);
 
 #[repr(C, packed)]
 #[derive(Clone, Copy, Debug)]

@@ -537,114 +537,129 @@ fn reconcile_devices(
     fallback_bootfb: bool,
 ) {
     let mut seen = BTreeMap::new();
+    for device in &devices {
+        seen.insert(device.slot.clone(), ());
+    }
 
-    for device in devices {
-        stem::debug!(
-            "CAMBIUM: discovered device slot={} kind={} vendor=0x{:04x} device=0x{:04x} class=0x{:06x} present={}",
-            device.slot,
-            device.kind,
-            device.vendor_id,
-            device.device_id,
-            device.class_code,
-            device.present
-        );
-        let is_xhci_pci = device.slot.starts_with("pci-") && device.class_code == 0x0c0330;
-        if is_xhci_pci {
-            stem::info!(
-                "CAMBIUM: discovered xHCI PCI device slot={} vendor=0x{:04x} device=0x{:04x} class=0x{:06x} present={}",
+    for bootfb_pass in [false, true] {
+        for device in &devices {
+            if is_boot_framebuffer_device(device) != bootfb_pass {
+                continue;
+            }
+
+            stem::debug!(
+                "CAMBIUM: discovered device slot={} kind={} vendor=0x{:04x} device=0x{:04x} class=0x{:06x} present={}",
                 device.slot,
+                device.kind,
                 device.vendor_id,
                 device.device_id,
                 device.class_code,
                 device.present
             );
-        }
-        seen.insert(device.slot.clone(), ());
-        if !device.present {
-            continue;
-        }
-
-        // First try the symbol-based catalog (new path).
-        let maybe_entry = if device.kind != "unknown" {
-            catalog.find_for_kind(&device.kind).filter(|entry| {
-                // `display_bootfb` is a bootstrap display path started by sprout with a
-                // dedicated memfd handshake, and must not be auto-bound to PCI display slots.
-                !(device.slot.starts_with("pci-") && entry.path.ends_with("/display_bootfb"))
-            })
-        } else {
-            None
-        };
-
-        if let Some(entry) = maybe_entry.or_else(|| {
-            catalog.find_for_pci(device.vendor_id, device.device_id, device.class_code).filter(
-                |entry| {
-                    !(device.slot.starts_with("pci-") && entry.path.ends_with("/display_bootfb"))
-                },
-            )
-        }) {
+            let is_xhci_pci = device.slot.starts_with("pci-") && device.class_code == 0x0c0330;
             if is_xhci_pci {
                 stem::info!(
-                    "CAMBIUM: matched driver '{}' for xHCI PCI device {} class=0x{:06x}",
-                    entry.path,
-                    device.slot,
-                    device.class_code
-                );
-            }
-            if should_skip_for_display_input_isolation(entry.driver_class, &entry.path) {
-                stem::debug!(
-                    "CAMBIUM: isolation mode skipping driver '{}' class={:?} for {}",
-                    entry.path,
-                    entry.driver_class,
-                    device.slot
-                );
-                continue;
-            }
-            if fallback_bootfb && entry.driver_class == DriverClass::Display {
-                stem::info!(
-                    "CAMBIUM: fallback bootfb mode skipping display driver '{}' for {}",
-                    entry.path,
-                    device.slot
-                );
-                continue;
-            }
-            if entry.driver_class == DriverClass::Audio && path_exists(SPROUT_EARLY_AUDIO_MARKER) {
-                stem::debug!(
-                    "CAMBIUM: skipping audio driver '{}' for {}; Sprout owns early audio",
-                    entry.path,
-                    device.slot
-                );
-                continue;
-            }
-            let managed = drivers.entry(device.slot.clone()).or_insert_with(|| {
-                ManagedDriver::new_from_catalog(
-                    &device,
-                    entry.path.clone(),
-                    entry.start_symbol.clone(),
-                    None,
-                )
-            });
-            managed.ensure_running();
-            continue;
-        }
-
-        // Fall back to the legacy static binding table.
-        let Some(binding) = match_binding(&device) else {
-            if is_xhci_pci {
-                stem::warn!(
-                    "CAMBIUM: no driver matched xHCI PCI device {} vendor=0x{:04x} device=0x{:04x} class=0x{:06x}",
+                    "CAMBIUM: discovered xHCI PCI device slot={} vendor=0x{:04x} device=0x{:04x} class=0x{:06x} present={}",
                     device.slot,
                     device.vendor_id,
                     device.device_id,
-                    device.class_code
+                    device.class_code,
+                    device.present
                 );
             }
-            continue;
-        };
-        let mount_path = mount_hint(binding, &device);
-        let managed = drivers
-            .entry(device.slot.clone())
-            .or_insert_with(|| ManagedDriver::new(&device, binding, mount_path));
-        managed.ensure_running();
+            if !device.present {
+                continue;
+            }
+
+            // First try the symbol-based catalog (new path).
+            let maybe_entry = if device.kind != "unknown" {
+                catalog.find_for_kind(&device.kind).filter(|entry| {
+                    // `display_bootfb` serves the platform framebuffer and must not
+                    // be auto-bound to PCI display slots.
+                    !(device.slot.starts_with("pci-") && entry.path.ends_with("/display_bootfb"))
+                })
+            } else {
+                None
+            };
+
+            if let Some(entry) = maybe_entry.or_else(|| {
+                catalog.find_for_pci(device.vendor_id, device.device_id, device.class_code).filter(
+                    |entry| {
+                        !(device.slot.starts_with("pci-")
+                            && entry.path.ends_with("/display_bootfb"))
+                    },
+                )
+            }) {
+                if is_xhci_pci {
+                    stem::info!(
+                        "CAMBIUM: matched driver '{}' for xHCI PCI device {} class=0x{:06x}",
+                        entry.path,
+                        device.slot,
+                        device.class_code
+                    );
+                }
+                if should_skip_for_display_input_isolation(entry.driver_class, &entry.path) {
+                    stem::debug!(
+                        "CAMBIUM: isolation mode skipping driver '{}' class={:?} for {}",
+                        entry.path,
+                        entry.driver_class,
+                        device.slot
+                    );
+                    continue;
+                }
+                if fallback_bootfb
+                    && entry.driver_class == DriverClass::Display
+                    && !entry.path.ends_with("/display_bootfb")
+                {
+                    stem::info!(
+                        "CAMBIUM: fallback bootfb mode skipping display driver '{}' for {}",
+                        entry.path,
+                        device.slot
+                    );
+                    continue;
+                }
+                if entry.driver_class == DriverClass::Audio
+                    && path_exists(SPROUT_EARLY_AUDIO_MARKER)
+                {
+                    stem::debug!(
+                        "CAMBIUM: skipping audio driver '{}' for {}; Sprout owns early audio",
+                        entry.path,
+                        device.slot
+                    );
+                    continue;
+                }
+                let mount_path = catalog_mount_path(drivers, entry.driver_class);
+                let managed = drivers.entry(device.slot.clone()).or_insert_with(|| {
+                    ManagedDriver::new_from_catalog(
+                        device,
+                        entry.path.clone(),
+                        entry.start_symbol.clone(),
+                        mount_path,
+                    )
+                });
+                managed.ensure_running();
+                continue;
+            }
+
+            // Fall back to the legacy static binding table.
+            let Some(binding) = match_binding(device) else {
+                if is_xhci_pci {
+                    stem::warn!(
+                        "CAMBIUM: no driver matched xHCI PCI device {} vendor=0x{:04x} device=0x{:04x} class=0x{:06x}",
+                        device.slot,
+                        device.vendor_id,
+                        device.device_id,
+                        device.class_code
+                    );
+                }
+                continue;
+            };
+            let mount_path = mount_hint(binding, device);
+            let managed = drivers
+                .entry(device.slot.clone())
+                .or_insert_with(|| ManagedDriver::new(device, binding, mount_path));
+            managed.ensure_running();
+        }
     }
 
     let stale_slots: Vec<_> =
@@ -656,6 +671,35 @@ fn reconcile_devices(
             managed.mark_removed();
         }
     }
+}
+
+fn is_boot_framebuffer_device(device: &SysDevice) -> bool {
+    device.kind == "dev.display.Framebuffer"
+}
+
+fn catalog_mount_path(
+    drivers: &BTreeMap<String, ManagedDriver>,
+    driver_class: DriverClass,
+) -> Option<String> {
+    match driver_class {
+        DriverClass::Display => allocate_indexed_dev_path(drivers, "/dev/display/card"),
+        _ => None,
+    }
+}
+
+fn allocate_indexed_dev_path(
+    drivers: &BTreeMap<String, ManagedDriver>,
+    prefix: &str,
+) -> Option<String> {
+    for index in 0..32u32 {
+        let candidate = alloc::format!("{}{}", prefix, index);
+        let in_use =
+            drivers.values().any(|driver| driver.mount_path.as_deref() == Some(candidate.as_str()));
+        if !in_use {
+            return Some(candidate);
+        }
+    }
+    None
 }
 
 fn should_skip_for_display_input_isolation(driver_class: DriverClass, path: &str) -> bool {

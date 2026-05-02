@@ -1,6 +1,6 @@
 #![no_std]
 #![no_main]
-use alloc::string::ToString;
+use alloc::string::{String, ToString};
 use core::default::Default;
 extern crate alloc;
 
@@ -17,10 +17,11 @@ use ipc_helpers::provider::ProviderLoop;
 use stem::abi::module_manifest::{MANIFEST_MAGIC, ManifestHeader, ModuleKind, device_kind_bytes};
 use stem::syscall::message::{KindId, msg_inbox_open, msg_recv_blocking, msg_sendmsg};
 use stem::syscall::port_create;
-use stem::syscall::vfs::vfs_handle_from_port;
+use stem::syscall::vfs::{vfs_handle_from_port, vfs_mount};
 use stem::{debug, info, warn};
 use vfs_provider::dispatch_vfs_rpc;
 const THINGOS_DRIVER_NAME: &[u8] = b"display_bootfb";
+const DRIVER_DEVPATH_ENV: &[u8] = b"THINGOS_DRIVER_DEVPATH";
 
 #[cfg(target_arch = "x86_64")]
 unsafe extern "C" {
@@ -92,7 +93,7 @@ unsafe extern "C" fn thingos_driver_start_rust(ctx: *const DriverEntryCtx) -> St
 pub static MANIFEST: ManifestHeader = ManifestHeader {
     magic: MANIFEST_MAGIC,
     kind: ModuleKind::Driver,
-    device_kind: device_kind_bytes(b"dev.display.Gpu"),
+    device_kind: device_kind_bytes(b"dev.display.Framebuffer"),
     version: 1,
     _reserved: 0,
 };
@@ -113,6 +114,7 @@ fn main(boot_fd: usize) -> ! {
     let mut drv_resp_write = 0;
     let mut reserved_supervisor_port = 0;
     let mut bind_instance_id = 0u64;
+    let mut cambium_direct_mount = false;
 
     let mut boot_fd = boot_fd;
 
@@ -164,23 +166,47 @@ fn main(boot_fd: usize) -> ! {
         match stem::syscall::vm_map(&req) {
             Ok(resp) => {
                 stem::info!("display_bootfb: vm_map success at 0x{:x}", resp.addr);
-                let slice = unsafe { core::slice::from_raw_parts(resp.addr as *const u32, 1024) };
+                let entry_ctx = unsafe { &*(resp.addr as *const DriverEntryCtx) };
+                if entry_ctx.version == 1 {
+                    let device_path = entry_ctx.device_path_str();
+                    cambium_direct_mount = true;
+                    match port_create(VFS_RPC_MAX_REQ * 8) {
+                        Ok((dummy_write, dummy_read)) => {
+                            drv_req_read = dummy_read;
+                            drv_resp_write = dummy_write;
+                        }
+                        Err(e) => {
+                            stem::error!(
+                                "display_bootfb: failed to create direct-mode protocol ports: {:?}",
+                                e
+                            );
+                            stem::syscall::exit(1);
+                        }
+                    }
+                    stem::info!(
+                        "display_bootfb: recovered Cambium DriverEntryCtx device_path='{}'",
+                        device_path
+                    );
+                } else {
+                    let slice =
+                        unsafe { core::slice::from_raw_parts(resp.addr as *const u32, 1024) };
 
-                drv_req_read = slice[0];
-                drv_resp_write = slice[1];
-                reserved_supervisor_port = slice[2];
+                    drv_req_read = slice[0];
+                    drv_resp_write = slice[1];
+                    reserved_supervisor_port = slice[2];
 
-                let id_low = slice[3] as u64;
-                let id_high = slice[4] as u64;
-                bind_instance_id = id_low | (id_high << 32);
+                    let id_low = slice[3] as u64;
+                    let id_high = slice[4] as u64;
+                    bind_instance_id = id_low | (id_high << 32);
 
-                stem::info!(
-                    "display_bootfb: Recovered handles: req_read={}, resp_write={}, svc={}, id={}",
-                    drv_req_read,
-                    drv_resp_write,
-                    reserved_supervisor_port,
-                    bind_instance_id
-                );
+                    stem::info!(
+                        "display_bootfb: Recovered handles: req_read={}, resp_write={}, svc={}, id={}",
+                        drv_req_read,
+                        drv_resp_write,
+                        reserved_supervisor_port,
+                        bind_instance_id
+                    );
+                }
             }
             Err(e) => {
                 stem::info!(
@@ -195,7 +221,7 @@ fn main(boot_fd: usize) -> ! {
         stem::syscall::exit(1);
     }
 
-    if drv_resp_write == 0 || bind_instance_id == 0 {
+    if drv_resp_write == 0 || (!cambium_direct_mount && bind_instance_id == 0) {
         stem::debug!(
             "display_bootfb: ERROR: Invalid/Missing bootstrap components (req={}, resp={}, reserved={}, id={})",
             drv_req_read,
@@ -231,112 +257,137 @@ fn main(boot_fd: usize) -> ! {
             stem::syscall::exit(1);
         }
     };
-    let vfs_write_fd = match vfs_handle_from_port(vfs_write) {
-        Ok(fd) => fd,
-        Err(e) => {
-            warn!("display_bootfb: failed to project provider write port to fd: {:?}", e);
-            stem::syscall::exit(1);
-        }
-    };
-
-    let sprout_pid = stem::syscall::getppid();
-    let sprout_inbox_fd = match msg_inbox_open(sprout_pid) {
-        Ok(fd) => fd,
-        Err(e) => {
-            warn!("display_bootfb: failed to open sprout inbox for pid {}: {:?}", sprout_pid, e);
-            stem::syscall::exit(1);
-        }
-    };
 
     // Sovereign Handshake
     use abi::display_driver_protocol;
     use abi::supervisor_protocol::{self, classes};
 
-    let ready = supervisor_protocol::BindReadyPayload {
-        bind_instance_id,
-        class_mask: classes::DISPLAY_CARD | classes::FRAMEBUFFER,
-        _reserved: 0,
-    };
-    let mut ready_bytes = [0u8; supervisor_protocol::BIND_READY_PAYLOAD_SIZE];
-    if let Some(len) = supervisor_protocol::encode_bind_ready_le(&ready, &mut ready_bytes) {
-        let mut buf = [0u8; 256];
-        if let Some(total_len) = display_driver_protocol::encode_message(
-            &mut buf,
-            supervisor_protocol::MSG_BIND_READY,
-            &ready_bytes[..len],
-        ) {
-            info!(
-                "display_bootfb: Sending MSG_BIND_READY handshake (class_mask=0x{:x}) to sprout inbox...",
-                ready.class_mask
-            );
-            // Bundle the VFS provider handle and the BIND_READY notification atomically.
-            let res = msg_sendmsg(
-                sprout_inbox_fd,
-                KindId(display_driver_protocol::KIND_ID_DISPLAY_DRIVER_CONTROL),
-                &buf[..total_len],
-                &[vfs_write_fd],
-            );
-            info!(
-                "display_bootfb: Sent MSG_BIND_READY (result={:?}), waiting for MSG_BIND_ASSIGNED...",
-                res
-            );
+    if cambium_direct_mount {
+        let Some(dev_path) = assigned_dev_path() else {
+            stem::error!("display_bootfb: Cambium did not assign a dev path");
+            stem::syscall::exit(1);
+        };
+        match vfs_mount(vfs_write, &dev_path) {
+            Ok(()) => {
+                info!("display_bootfb: mounted VFS provider at {} via cambium", dev_path)
+            }
+            Err(e) => {
+                stem::error!("display_bootfb: vfs_mount({}) failed: {:?}", dev_path, e);
+                stem::syscall::exit(1);
+            }
         }
-    }
+    } else {
+        let vfs_write_fd = match vfs_handle_from_port(vfs_write) {
+            Ok(fd) => fd,
+            Err(e) => {
+                warn!("display_bootfb: failed to project provider write port to fd: {:?}", e);
+                stem::syscall::exit(1);
+            }
+        };
 
-    // Wait for MSG_BIND_ASSIGNED or MSG_BIND_FAILED on our inbox.
-    let mut bind_instance_id_confirmed = bind_instance_id;
-    loop {
-        let msg = msg_recv_blocking(512);
-        if msg.kind.0 != display_driver_protocol::KIND_ID_DISPLAY_DRIVER_CONTROL {
-            continue;
+        let sprout_pid = stem::syscall::getppid();
+        let sprout_inbox_fd = match msg_inbox_open(sprout_pid) {
+            Ok(fd) => fd,
+            Err(e) => {
+                warn!(
+                    "display_bootfb: failed to open sprout inbox for pid {}: {:?}",
+                    sprout_pid, e
+                );
+                stem::syscall::exit(1);
+            }
+        };
+
+        let ready = supervisor_protocol::BindReadyPayload {
+            bind_instance_id,
+            class_mask: classes::DISPLAY_CARD | classes::FRAMEBUFFER,
+            _reserved: 0,
+        };
+        let mut ready_bytes = [0u8; supervisor_protocol::BIND_READY_PAYLOAD_SIZE];
+        if let Some(len) = supervisor_protocol::encode_bind_ready_le(&ready, &mut ready_bytes) {
+            let mut buf = [0u8; 256];
+            if let Some(total_len) = display_driver_protocol::encode_message(
+                &mut buf,
+                supervisor_protocol::MSG_BIND_READY,
+                &ready_bytes[..len],
+            ) {
+                info!(
+                    "display_bootfb: Sending MSG_BIND_READY handshake (class_mask=0x{:x}) to sprout inbox...",
+                    ready.class_mask
+                );
+                // Bundle the VFS provider handle and the BIND_READY notification atomically.
+                let res = msg_sendmsg(
+                    sprout_inbox_fd,
+                    KindId(display_driver_protocol::KIND_ID_DISPLAY_DRIVER_CONTROL),
+                    &buf[..total_len],
+                    &[vfs_write_fd],
+                );
+                info!(
+                    "display_bootfb: Sent MSG_BIND_READY (result={:?}), waiting for MSG_BIND_ASSIGNED...",
+                    res
+                );
+            }
         }
-        if let Some((header, payload)) = display_driver_protocol::parse_message(&msg.payload) {
-            if header.msg_type == supervisor_protocol::MSG_BIND_ASSIGNED {
-                if let Some(assigned) = supervisor_protocol::decode_bind_assigned_le(payload) {
-                    bind_instance_id_confirmed = assigned.bind_instance_id;
-                    let path_len = assigned.primary_path.iter().position(|&b| b == 0).unwrap_or(64);
-                    let path =
-                        core::str::from_utf8(&assigned.primary_path[..path_len]).unwrap_or("?");
-                    debug!("display_bootfb: Sovereign registration COMPLETE. Assigned: {}", path);
-                    break;
-                }
-            } else if header.msg_type == supervisor_protocol::MSG_BIND_FAILED {
-                if let Some(failed) = supervisor_protocol::decode_bind_failed_le(payload) {
-                    let reason_len = failed.reason.iter().position(|&b| b == 0).unwrap_or(64);
-                    let reason = core::str::from_utf8(&failed.reason[..reason_len]).unwrap_or("?");
-                    warn!(
-                        "display_bootfb: Registration REJECTED by supervisor (code={}, reason={}). Exiting.",
-                        failed.error_code, reason
-                    );
-                    stem::syscall::exit(1);
+
+        // Wait for MSG_BIND_ASSIGNED or MSG_BIND_FAILED on our inbox.
+        let mut bind_instance_id_confirmed = bind_instance_id;
+        loop {
+            let msg = msg_recv_blocking(512);
+            if msg.kind.0 != display_driver_protocol::KIND_ID_DISPLAY_DRIVER_CONTROL {
+                continue;
+            }
+            if let Some((header, payload)) = display_driver_protocol::parse_message(&msg.payload) {
+                if header.msg_type == supervisor_protocol::MSG_BIND_ASSIGNED {
+                    if let Some(assigned) = supervisor_protocol::decode_bind_assigned_le(payload) {
+                        bind_instance_id_confirmed = assigned.bind_instance_id;
+                        let path_len =
+                            assigned.primary_path.iter().position(|&b| b == 0).unwrap_or(64);
+                        let path =
+                            core::str::from_utf8(&assigned.primary_path[..path_len]).unwrap_or("?");
+                        debug!(
+                            "display_bootfb: Sovereign registration COMPLETE. Assigned: {}",
+                            path
+                        );
+                        break;
+                    }
+                } else if header.msg_type == supervisor_protocol::MSG_BIND_FAILED {
+                    if let Some(failed) = supervisor_protocol::decode_bind_failed_le(payload) {
+                        let reason_len = failed.reason.iter().position(|&b| b == 0).unwrap_or(64);
+                        let reason =
+                            core::str::from_utf8(&failed.reason[..reason_len]).unwrap_or("?");
+                        warn!(
+                            "display_bootfb: Registration REJECTED by supervisor (code={}, reason={}). Exiting.",
+                            failed.error_code, reason
+                        );
+                        stem::syscall::exit(1);
+                    }
                 }
             }
         }
-    }
 
-    // Notify supervisor that this service is now fully operational.
-    {
-        let svc_ready = supervisor_protocol::ServiceReadyPayload {
-            bind_instance_id: bind_instance_id_confirmed,
-            _reserved: 0,
-        };
-        let mut payload_bytes = [0u8; supervisor_protocol::SERVICE_READY_PAYLOAD_SIZE];
-        let mut svc_buf = [0u8; 64];
-        if let Some(p_len) =
-            supervisor_protocol::encode_service_ready_le(&svc_ready, &mut payload_bytes)
+        // Notify supervisor that this service is now fully operational.
         {
-            if let Some(total_len) = display_driver_protocol::encode_message(
-                &mut svc_buf,
-                supervisor_protocol::MSG_SERVICE_READY,
-                &payload_bytes[..p_len],
-            ) {
-                let _ = msg_sendmsg(
-                    sprout_inbox_fd,
-                    KindId(display_driver_protocol::KIND_ID_DISPLAY_DRIVER_CONTROL),
-                    &svc_buf[..total_len],
-                    &[],
-                );
-                debug!("display_bootfb: Sent MSG_SERVICE_READY.");
+            let svc_ready = supervisor_protocol::ServiceReadyPayload {
+                bind_instance_id: bind_instance_id_confirmed,
+                _reserved: 0,
+            };
+            let mut payload_bytes = [0u8; supervisor_protocol::SERVICE_READY_PAYLOAD_SIZE];
+            let mut svc_buf = [0u8; 64];
+            if let Some(p_len) =
+                supervisor_protocol::encode_service_ready_le(&svc_ready, &mut payload_bytes)
+            {
+                if let Some(total_len) = display_driver_protocol::encode_message(
+                    &mut svc_buf,
+                    supervisor_protocol::MSG_SERVICE_READY,
+                    &payload_bytes[..p_len],
+                ) {
+                    let _ = msg_sendmsg(
+                        sprout_inbox_fd,
+                        KindId(display_driver_protocol::KIND_ID_DISPLAY_DRIVER_CONTROL),
+                        &svc_buf[..total_len],
+                        &[],
+                    );
+                    debug!("display_bootfb: Sent MSG_SERVICE_READY.");
+                }
             }
         }
     }
@@ -368,4 +419,14 @@ fn main(boot_fd: usize) -> ! {
 
     info!("display_bootfb: VFS provider port closed — exiting");
     stem::syscall::exit(0);
+}
+
+fn assigned_dev_path() -> Option<String> {
+    let mut buf = [0u8; 128];
+    let len = stem::syscall::env_get(DRIVER_DEVPATH_ENV, &mut buf).ok()?;
+    if len == 0 || len > buf.len() {
+        return None;
+    }
+    let path = core::str::from_utf8(&buf[..len]).ok()?.trim();
+    if path.is_empty() { None } else { Some(path.to_string()) }
 }

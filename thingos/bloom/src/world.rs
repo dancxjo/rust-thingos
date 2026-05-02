@@ -21,7 +21,7 @@ use crate::protocol::{
     to_vec,
 };
 use crate::render::CompositorVisuals;
-use crate::scene::{CommitResult, CompositionEntry, Scene, SurfaceBuffer};
+use crate::scene::{ClosedSurface, CommitResult, CompositionEntry, Scene, SurfaceBuffer};
 use crate::session_fs;
 
 const ENABLE_HARDWARE_CURSOR: bool = false;
@@ -450,7 +450,9 @@ impl BloomWorld {
     /// can be sent, or `None` on failure (damage is restored internally).
     pub fn try_present(&mut self) -> Option<Vec<CompositionEntry>> {
         self.input.flush_pointer_grab(&mut self.scene, &mut self.damage, self.wayland_evt_write);
-        let composition = self.scene.collect_composition();
+        let now_ns = monotonic_ns();
+        self.mark_dramatic_close_damage(now_ns);
+        let composition = self.scene.collect_composition_at(now_ns);
         // Flush coalesced pointer motion: deliver the latest position to
         // clients once per frame rather than per raw sample.
         self.input.flush_pointer_motion(&mut self.scene, self.wayland_evt_write);
@@ -633,6 +635,63 @@ impl BloomWorld {
             self.damage.restore(pending_damage);
             None
         }
+    }
+
+    pub fn start_dramatic_surface_close(&mut self, surface_id: u32) -> bool {
+        let now_ns = monotonic_ns();
+        let Some(rect) = self.scene.start_dramatic_close(surface_id, now_ns) else {
+            return false;
+        };
+        self.damage.mark_rect(rect);
+        stem::info!("bloom: dramatic close started surface={}", surface_id);
+        self.sync_wayland_session_fs(alloc::format!(
+            "surface_dramatic_close_started id={}\n",
+            surface_id
+        ));
+        true
+    }
+
+    pub fn has_dramatic_surface_closes(&self) -> bool {
+        self.scene.has_dramatic_closes()
+    }
+
+    pub fn tick_dramatic_surface_closes(&mut self) -> (bool, Vec<ClosedSurface>) {
+        let now_ns = monotonic_ns();
+        self.mark_dramatic_close_damage(now_ns);
+        let closed = self.scene.take_finished_dramatic_closes(now_ns);
+        for surface in &closed {
+            self.damage.mark_rect(surface.visual_rect);
+            self.remove_wayland_session_surface(
+                surface.surface_id,
+                alloc::format!("surface_destroyed id={}\n", surface.surface_id),
+            );
+            stem::info!("bloom: dramatic close finished surface={}", surface.surface_id);
+        }
+        (self.scene.has_dramatic_closes(), closed)
+    }
+
+    pub fn tick_busy_spinner(&mut self, frame: u32) -> bool {
+        let Some((width, height, hotspot_x, hotspot_y)) =
+            self.visuals.draw_busy_spinner_frame(frame)
+        else {
+            return false;
+        };
+        let (pointer_x, pointer_y) = self.input.visible_pointer_position();
+        self.damage.mark_cursor_rect(abi::display_protocol::Rect {
+            x: pointer_x.saturating_sub(hotspot_x as i32).max(0) as u32,
+            y: pointer_y.saturating_sub(hotspot_y as i32).max(0) as u32,
+            w: width,
+            h: height,
+        });
+        self.hw_cursor_buffer = None;
+        true
+    }
+
+    fn mark_dramatic_close_damage(&mut self, now_ns: u64) {
+        if self.scene.dramatic_close_visual_rects(now_ns).is_empty() {
+            return;
+        }
+        self.damage.mark_full(self.primary.width, self.primary.height);
     }
 }
 

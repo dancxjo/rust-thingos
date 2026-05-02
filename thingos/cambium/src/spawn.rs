@@ -172,11 +172,15 @@ impl ManagedDriver {
         }
 
         let argv: &[&[u8]] = &[driver_path.as_bytes()];
+        let mut env = alloc::collections::BTreeMap::new();
+        if let Some(mount_path) = self.mount_path.as_deref() {
+            env.insert(b"THINGOS_DRIVER_DEVPATH".to_vec(), mount_path.as_bytes().to_vec());
+        }
 
         let spawn_res = stem::syscall::spawn_driver_ex(
             driver_path,
             argv,
-            &alloc::collections::BTreeMap::new(),
+            &env,
             boot_fd as u64,
             &[],
             Some(entry_symbol),

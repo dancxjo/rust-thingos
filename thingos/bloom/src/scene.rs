@@ -6,6 +6,8 @@ use abi::display_protocol::Rect;
 use blossom::Rect as BlossomRect;
 pub use blossom::wm::{ChromeButton, CursorKind, HitTarget, ResizeEdge};
 
+pub const DRAMATIC_CLOSE_DURATION_NS: u64 = 360_000_000;
+
 #[derive(Clone, Copy, Debug, Default, PartialEq, Eq)]
 pub struct SurfaceChrome {
     pub titlebar_height: u32,
@@ -38,6 +40,12 @@ pub struct SurfaceToggle {
     pub new_rect: Rect,
     pub changed: bool,
     pub active: bool,
+}
+
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub struct DramaticClose {
+    pub started_ns: u64,
+    pub duration_ns: u64,
 }
 
 #[derive(Clone, Copy, Debug)]
@@ -98,6 +106,7 @@ pub struct Surface {
     pub frame_serial: u64,
     pub is_fullscreen: bool,
     pub is_shaded: bool,
+    pub dramatic_close: Option<DramaticClose>,
     pub restored_rect: Option<Rect>,
     /// Subsurface relationship (if this surface has been assigned the
     /// `wl_subsurface` role).  `None` for top-level / standalone surfaces.
@@ -228,6 +237,7 @@ impl Scene {
                 frame_serial: 0,
                 is_fullscreen: false,
                 is_shaded: false,
+                dramatic_close: None,
                 restored_rect: None,
                 subsurface: None,
                 subsurface_children: Vec::new(),
@@ -741,11 +751,20 @@ impl Scene {
     }
 
     pub fn collect_composition(&self) -> Vec<CompositionEntry> {
+        self.collect_composition_at(0)
+    }
+
+    pub fn collect_composition_at(&self, now_ns: u64) -> Vec<CompositionEntry> {
         let mut list = Vec::new();
         let active_surface = self.keyboard_focus.or_else(|| {
             self.surfaces
                 .values()
-                .filter(|surface| surface.visible && surface.mapped && surface.focus_eligible)
+                .filter(|surface| {
+                    surface.visible
+                        && surface.mapped
+                        && surface.focus_eligible
+                        && surface.dramatic_close.is_none()
+                })
                 .max_by_key(|surface| surface.current.z_order)
                 .map(|surface| surface.id)
         });
@@ -756,13 +775,18 @@ impl Scene {
             let Some(buf) = surface.current.buffer else {
                 continue;
             };
+            let (dest_rect, alpha) = if let Some(close) = surface.dramatic_close {
+                dramatic_close_geometry(surface.current.dest_rect, close, now_ns)
+            } else {
+                (surface.current.dest_rect, 255)
+            };
             list.push(CompositionEntry {
                 surface_id: surface.id,
                 buffer_id: buf.buffer_id,
                 src_rect: Rect { x: 0, y: 0, w: buf.width, h: buf.height },
-                dest_rect: surface.current.dest_rect,
+                dest_rect,
                 z_order: surface.current.z_order,
-                alpha: 255,
+                alpha,
                 chrome: surface.chrome,
                 active: active_surface == Some(surface.id),
                 title: surface.title.clone(),
@@ -794,7 +818,11 @@ impl Scene {
     pub fn hit_test(&self, x: i32, y: i32) -> Option<HitTarget> {
         let mut best: Option<(u32, i32)> = None;
         for surface in self.surfaces.values() {
-            if !surface.visible || !surface.mapped || !surface.focus_eligible {
+            if !surface.visible
+                || !surface.mapped
+                || !surface.focus_eligible
+                || surface.dramatic_close.is_some()
+            {
                 continue;
             }
             let rect = if surface.chrome.is_empty() {
@@ -887,9 +915,73 @@ impl Scene {
                 buffer_id: surface.current.buffer.map(|buffer| buffer.buffer_id),
                 title: surface.title.clone(),
                 frame_serial: surface.frame_serial,
-                is_window: surface.visible && surface.mapped && surface.current.buffer.is_some(),
+                is_window: surface.visible
+                    && surface.mapped
+                    && surface.current.buffer.is_some()
+                    && surface.dramatic_close.is_none(),
             })
             .collect()
+    }
+
+    pub fn start_dramatic_close(&mut self, surface_id: u32, now_ns: u64) -> Option<Rect> {
+        let surface = self.surfaces.get_mut(&surface_id)?;
+        if !surface.visible || !surface.mapped || surface.current.buffer.is_none() {
+            return None;
+        }
+        if surface.dramatic_close.is_none() {
+            surface.dramatic_close =
+                Some(DramaticClose { started_ns: now_ns, duration_ns: DRAMATIC_CLOSE_DURATION_NS });
+        }
+        surface.focus_eligible = false;
+        if self.pointer_focus == Some(surface_id) {
+            self.pointer_focus = None;
+        }
+        if self.keyboard_focus == Some(surface_id) {
+            self.keyboard_focus = None;
+        }
+        Some(bloom_surface_visual_rect(surface.current.dest_rect, surface.chrome))
+    }
+
+    pub fn has_dramatic_closes(&self) -> bool {
+        self.surfaces.values().any(|surface| surface.dramatic_close.is_some())
+    }
+
+    pub fn dramatic_close_visual_rects(&self, now_ns: u64) -> Vec<Rect> {
+        let mut rects = Vec::new();
+        for surface in self.surfaces.values() {
+            let Some(close) = surface.dramatic_close else {
+                continue;
+            };
+            let (rect, _) = dramatic_close_geometry(surface.current.dest_rect, close, now_ns);
+            rects.push(bloom_surface_visual_rect(rect, surface.chrome));
+        }
+        rects
+    }
+
+    pub fn take_finished_dramatic_closes(&mut self, now_ns: u64) -> Vec<ClosedSurface> {
+        let ids: Vec<u32> = self
+            .surfaces
+            .values()
+            .filter(|surface| {
+                surface.dramatic_close.map(|close| close_finished(close, now_ns)).unwrap_or(false)
+            })
+            .map(|surface| surface.id)
+            .collect();
+
+        let mut closed = Vec::new();
+        for surface_id in ids {
+            let Some(visual_rect) = self.surface_visual_rect(surface_id) else {
+                continue;
+            };
+            let Some(client_id) = self.surfaces.get(&surface_id).map(|surface| surface.client_id)
+            else {
+                continue;
+            };
+            if let Some(released_buffer_ids) = self.destroy_surface(client_id, surface_id) {
+                closed.push(ClosedSurface { surface_id, released_buffer_ids, visual_rect });
+            }
+        }
+        closed
     }
 
     pub fn raise_to_top(&mut self, surface_id: u32) -> bool {
@@ -981,6 +1073,12 @@ pub struct CommitResult {
     pub needs_full_repaint: bool,
 }
 
+pub struct ClosedSurface {
+    pub surface_id: u32,
+    pub released_buffer_ids: Vec<u32>,
+    pub visual_rect: Rect,
+}
+
 #[derive(Clone, Debug)]
 pub struct SurfaceSnapshot {
     pub id: u32,
@@ -1036,6 +1134,47 @@ fn bloom_surface_visual_rect(rect: Rect, chrome: SurfaceChrome) -> Rect {
         to_blossom_rect(rect),
         to_blossom_chrome(chrome),
     ))
+}
+
+fn dramatic_close_geometry(rect: Rect, close: DramaticClose, now_ns: u64) -> (Rect, u8) {
+    let elapsed = now_ns.saturating_sub(close.started_ns);
+    let duration = close.duration_ns.max(1);
+    let progress = elapsed.saturating_mul(1024).saturating_div(duration).min(1024) as u32;
+
+    let pop_px = if progress < 220 {
+        progress.saturating_mul(12) / 220
+    } else if progress < 420 {
+        (420 - progress).saturating_mul(12) / 200
+    } else {
+        0
+    };
+    let collapse = progress.saturating_sub(260);
+    let collapse_range = 1024u32.saturating_sub(260);
+    let inset_x = rect.w.saturating_mul(collapse).saturating_div(collapse_range).saturating_div(5);
+    let inset_y = rect.h.saturating_mul(collapse).saturating_div(collapse_range).saturating_div(5);
+    let drop = progress.saturating_mul(progress).saturating_mul(36).saturating_div(1024 * 1024);
+
+    let x = rect.x.saturating_sub(pop_px).saturating_add(inset_x);
+    let y = rect.y.saturating_sub(pop_px).saturating_add(inset_y).saturating_add(drop);
+    let w =
+        rect.w.saturating_add(pop_px.saturating_mul(2)).saturating_sub(inset_x.saturating_mul(2));
+    let h =
+        rect.h.saturating_add(pop_px.saturating_mul(2)).saturating_sub(inset_y.saturating_mul(2));
+
+    let fade_start = 220u32;
+    let alpha = if progress <= fade_start {
+        255
+    } else {
+        let fade = progress - fade_start;
+        let fade_range = 1024 - fade_start;
+        255u32.saturating_sub(fade.saturating_mul(255).saturating_div(fade_range)) as u8
+    };
+
+    (Rect { x, y, w: w.max(1), h: h.max(1) }, alpha)
+}
+
+fn close_finished(close: DramaticClose, now_ns: u64) -> bool {
+    now_ns.saturating_sub(close.started_ns) >= close.duration_ns
 }
 
 fn bloom_translate_surface_damage(local: Rect, src_w: u32, src_h: u32, dest: Rect) -> Option<Rect> {

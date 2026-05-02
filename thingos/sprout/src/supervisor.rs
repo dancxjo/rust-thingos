@@ -10,7 +10,7 @@ use stem::service_loop::{ServiceEvent, ServiceLoop};
 use stem::syscall::message::{KindId, msg_send};
 use stem::{info, warn};
 
-use crate::pipelines::{spawn_bloom, spawn_bristle, spawn_shell};
+use crate::pipelines::{kernel_terminal_requested, spawn_bloom, spawn_bristle, spawn_shell};
 
 const SHELL_HEADSTART_MS: u64 = 50;
 const INBOX_MAX_PAYLOAD: usize = 256;
@@ -26,23 +26,31 @@ impl Supervisor {
     pub fn run_forever(&mut self) -> ! {
         info!("SPROUT: minimal supervisor online");
 
+        let kernel_terminal = kernel_terminal_requested();
         let shell_pid = spawn_shell();
         stem::sleep_ms(SHELL_HEADSTART_MS);
 
-        // Bristle must come up before Cambium can launch input drivers that
-        // publish through `/run/bristle/*`.
-        if spawn_bristle().is_some() {
-            info!("SPROUT: bristle launched; disabling kernel framebuffer terminal");
-            stem::syscall::console_disable();
-        }
-        let cambium_pid = self.spawn_cambium();
+        let cambium_pid = if kernel_terminal {
+            info!("SPROUT: kernel terminal requested; skipping UI service handoff");
+            None
+        } else {
+            // Bristle must come up before Cambium can launch input drivers that
+            // publish through `/run/bristle/*`.
+            if spawn_bristle().is_some() {
+                info!("SPROUT: bristle launched; disabling kernel framebuffer terminal");
+                stem::syscall::console_disable();
+            }
+            self.spawn_cambium()
+        };
 
         self.activate_boot_roots();
         info!("SPROUT: Continuing supervisor startup");
 
-        // Now that the root filesystem is populated (display drivers, fonts, etc),
-        // we can launch the bloom compositor.
-        let _bloom_pid = spawn_bloom();
+        if !kernel_terminal {
+            // Now that the root filesystem is populated (display drivers, fonts, etc),
+            // we can launch the bloom compositor.
+            let _bloom_pid = spawn_bloom();
+        }
 
         match shell_pid {
             Some(pid) => {

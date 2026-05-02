@@ -1,6 +1,6 @@
 #![no_std]
 #![no_main]
-use alloc::string::ToString;
+use alloc::string::{String, ToString};
 extern crate alloc;
 
 use abi::display::accel2d::{
@@ -31,6 +31,7 @@ use stem::syscall::{PortHandle, port_create, port_send};
 use stem::{debug, error, info, trace, warn};
 use virtio_gpu::{Rect, VirtioGpu};
 const THINGOS_DRIVER_NAME: &[u8] = b"display_virtio_gpu";
+const DRIVER_DEVPATH_ENV: &[u8] = b"THINGOS_DRIVER_DEVPATH";
 const DISPLAY_PROVIDER_POLL_ISOLATION: bool = true;
 const DISPLAY_BPP: u32 = 4;
 const FRAME_POOL_COUNT: usize = 1;
@@ -3475,12 +3476,18 @@ fn main(boot_arg: usize) -> ! {
         alloc::collections::BTreeMap::new();
 
     if cambium_direct_mount {
-        match stem::syscall::vfs::vfs_mount(vfs_write, "/dev/display/card0") {
+        let Some(dev_path) = assigned_dev_path() else {
+            error!("display_virtio_gpu: Cambium did not assign a dev path");
+            loop {
+                stem::yield_now();
+            }
+        };
+        match stem::syscall::vfs::vfs_mount(vfs_write, &dev_path) {
             Ok(()) => {
-                info!("display_virtio_gpu: mounted VFS provider at /dev/display/card0 via cambium")
+                info!("display_virtio_gpu: mounted VFS provider at {} via cambium", dev_path)
             }
             Err(e) => {
-                error!("display_virtio_gpu: vfs_mount(/dev/display/card0) failed: {:?}", e);
+                error!("display_virtio_gpu: vfs_mount({}) failed: {:?}", dev_path, e);
                 loop {
                     stem::yield_now();
                 }
@@ -4245,4 +4252,14 @@ fn main(boot_arg: usize) -> ! {
         }
         maybe_log_display_watchdog(&driver, &mut last_watchdog_ns, vfs_loop.pending_len());
     }
+}
+
+fn assigned_dev_path() -> Option<String> {
+    let mut buf = [0u8; 128];
+    let len = stem::syscall::env_get(DRIVER_DEVPATH_ENV, &mut buf).ok()?;
+    if len == 0 || len > buf.len() {
+        return None;
+    }
+    let path = core::str::from_utf8(&buf[..len]).ok()?.trim();
+    if path.is_empty() { None } else { Some(path.to_string()) }
 }

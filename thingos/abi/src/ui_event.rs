@@ -18,6 +18,9 @@ pub const MAGIC: u32 = 0x5645_4955;
 /// Current wire version.
 pub const VERSION: u16 = 1;
 
+/// Typed inbox message kind for serialized [`UiEvent`] payloads.
+pub const KIND_ID_THINGOS_UI_EVENT: [u8; 16] = *b"thingos.ui.event";
+
 /// Header size in bytes (magic + version + kind + payload_len).
 pub const HEADER_SIZE: usize = 12;
 

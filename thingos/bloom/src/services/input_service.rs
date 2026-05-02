@@ -228,8 +228,10 @@ impl InputService {
 
                 let event_type = header.opcode();
                 let total_len = header.total_len() as usize;
-                
-                if total_len > self.event_accum.len() || total_len < abi::hid::WaylandIpcHeader::SIZE {
+
+                if total_len > self.event_accum.len()
+                    || total_len < abi::hid::WaylandIpcHeader::SIZE
+                {
                     self.resync_accumulator();
                     continue;
                 }

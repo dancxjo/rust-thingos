@@ -412,7 +412,7 @@ impl DisplayBackend {
                         },
                         src_rect: Rect { x: 0, y: 0, w: overlay.width, h: overlay.height },
                         z_order: base_z,
-                        alpha: 255,
+                        alpha: entry.alpha,
                         _reserved: [0; 7],
                     };
                     plane_count += 1;
@@ -457,7 +457,7 @@ impl DisplayBackend {
                         },
                         src_rect: Rect { x: 0, y: 0, w: overlay.width, h: overlay.height },
                         z_order: base_z.saturating_add(2),
-                        alpha: 255,
+                        alpha: entry.alpha,
                         _reserved: [0; 7],
                     };
                     plane_count += 1;
@@ -656,7 +656,17 @@ impl DisplayBackend {
                         h: overlay.height,
                     };
                     let src = Rect { x: 0, y: 0, w: overlay.width, h: overlay.height };
-                    batch.copy_rect(BufferId(overlay.buffer_id), src, BufferId(0), dst);
+                    if entry.alpha == 255 {
+                        batch.copy_rect(BufferId(overlay.buffer_id), src, BufferId(0), dst);
+                    } else {
+                        batch.alpha_blit(
+                            BufferId(overlay.buffer_id),
+                            src,
+                            BufferId(0),
+                            dst,
+                            entry.alpha,
+                        );
+                    }
                 }
             }
 
@@ -717,7 +727,13 @@ impl DisplayBackend {
                     let src = Rect { x: 0, y: 0, w: overlay.width, h: overlay.height };
                     // Chrome typically contains per-pixel alpha (rounded corners,
                     // shadows, buttons) so we always use ALPHA_BLIT.
-                    batch.alpha_blit(BufferId(overlay.buffer_id), src, BufferId(0), dst, 255);
+                    batch.alpha_blit(
+                        BufferId(overlay.buffer_id),
+                        src,
+                        BufferId(0),
+                        dst,
+                        entry.alpha,
+                    );
                 }
             }
         }

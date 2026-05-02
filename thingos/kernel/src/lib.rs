@@ -116,6 +116,40 @@ fn parse_cmdline_serial_loglevel(cmdline: &str) -> Option<u8> {
     parse_cmdline_level_key(cmdline, "serial_loglevel")
 }
 
+fn parse_cmdline_bool_key(cmdline: &str, key: &str) -> bool {
+    let mut parsed = false;
+
+    for token in cmdline.split_ascii_whitespace() {
+        if token.eq_ignore_ascii_case(key) {
+            parsed = true;
+            continue;
+        }
+
+        let Some(rest) = token.strip_prefix(key) else {
+            continue;
+        };
+        let Some(value) = rest.strip_prefix('=') else {
+            continue;
+        };
+
+        if value == "1"
+            || value.eq_ignore_ascii_case("true")
+            || value.eq_ignore_ascii_case("yes")
+            || value.eq_ignore_ascii_case("on")
+        {
+            parsed = true;
+        } else if value == "0"
+            || value.eq_ignore_ascii_case("false")
+            || value.eq_ignore_ascii_case("no")
+            || value.eq_ignore_ascii_case("off")
+        {
+            parsed = false;
+        }
+    }
+
+    parsed
+}
+
 #[unsafe(no_mangle)]
 pub extern "C" fn kernel_handle_page_fault(rip: u64, addr: u64, err: u64) {
     // Decode x86_64 page fault error code bits
@@ -1017,16 +1051,23 @@ pub fn start<R: BootRuntime>(runtime: &'static R) -> ! {
     init_runtime(runtime);
     boot_trace(runtime, b"[kernel:start] init_runtime ok\r\n");
 
+    let kernel_cmdline = runtime.get_kernel_cmdline();
+    let use_kernel_terminal = parse_cmdline_bool_key(kernel_cmdline, "kernel.terminal");
+
     let early_fb = runtime.framebuffer();
     if let Some(fb) = early_fb {
-        crate::boot_progress::init(fb);
-        crate::boot_progress::push(
-            crate::boot_progress::BootPhase::Framebuffer,
-            "Framebuffer Initialized",
-        );
+        if use_kernel_terminal {
+            let _ = fb;
+            runtime.activate_onscreen_terminal();
+        } else {
+            crate::boot_progress::init(fb);
+            crate::boot_progress::push(
+                crate::boot_progress::BootPhase::Framebuffer,
+                "Framebuffer Initialized",
+            );
+        }
     }
 
-    let kernel_cmdline = runtime.get_kernel_cmdline();
     if let Some(level) = parse_cmdline_loglevel(kernel_cmdline) {
         crate::logging::set_log_level(level);
         crate::logging::set_serial_log_level(level);
@@ -1088,7 +1129,7 @@ pub fn start<R: BootRuntime>(runtime: &'static R) -> ! {
             sizes[0] = fb.byte_len as u64;
             boot_trace(runtime, b"[kernel:start] framebuffer/devfs registry register begin\r\n");
             reg.register(crate::device_registry::DeviceEntry::new_mmio(
-                "display_fb",
+                "dev.display.Framebuffer",
                 fb_resource_id,
                 bars,
                 sizes,
@@ -1898,7 +1939,7 @@ pub fn scan_pci() {
 
 #[cfg(test)]
 mod cmdline_loglevel_tests {
-    use super::{parse_cmdline_loglevel, parse_cmdline_serial_loglevel};
+    use super::{parse_cmdline_bool_key, parse_cmdline_loglevel, parse_cmdline_serial_loglevel};
 
     #[test]
     fn parses_numeric_loglevel() {
@@ -1938,6 +1979,17 @@ mod cmdline_loglevel_tests {
     #[test]
     fn parses_serial_loglevel_space_separated_form() {
         assert_eq!(parse_cmdline_serial_loglevel("display=bootfb serial_loglevel off"), Some(0));
+    }
+
+    #[test]
+    fn parses_boolean_cmdline_flags() {
+        assert!(parse_cmdline_bool_key("display=bootfb kernel.terminal=1", "kernel.terminal"));
+        assert!(parse_cmdline_bool_key("kernel.terminal", "kernel.terminal"));
+        assert!(!parse_cmdline_bool_key(
+            "kernel.terminal=1 kernel.terminal=off",
+            "kernel.terminal"
+        ));
+        assert!(!parse_cmdline_bool_key("kernel.terminal.extra=1", "kernel.terminal"));
     }
 }
 

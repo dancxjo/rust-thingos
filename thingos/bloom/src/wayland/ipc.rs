@@ -20,6 +20,7 @@
 //! | `WCMD_SET_LAYER_SURFACE`| Update wlr-layer-shell state for a surface |
 //! | `WCMD_SET_OPAQUE_REGION`| Update the committed opaque region for a surface |
 //! | `WCMD_SET_INPUT_REGION`| Update the committed input region for a surface |
+//! | `WCMD_DRAMATIC_CLOSE_SURFACE`| Crash-close an orphaned surface     |
 //!
 //! # Main → Wayland (events)
 //!
@@ -47,6 +48,7 @@ pub const WCMD_SET_SUBSURFACE: u8 = 8;
 pub const WCMD_SET_LAYER_SURFACE: u8 = 9;
 pub const WCMD_SET_OPAQUE_REGION: u8 = 10;
 pub const WCMD_SET_INPUT_REGION: u8 = 11;
+pub const WCMD_DRAMATIC_CLOSE_SURFACE: u8 = 12;
 pub const MAX_TITLE_BYTES: usize = 64;
 
 pub const WEVT_BUFFER_RELEASE: u8 = 1;
@@ -431,6 +433,17 @@ pub fn encode_create_surface(reply_port: u32) -> [u8; 8] {
 
 pub fn encode_destroy_surface(bloom_surface_id: u32) -> [u8; 8] {
     let msg = WCmdDestroySurface { msg_type: WCMD_DESTROY_SURFACE, _pad: [0; 3], bloom_surface_id };
+    let mut out = [0u8; 8];
+    out.copy_from_slice(as_bytes!(msg, WCmdDestroySurface));
+    out
+}
+
+pub fn encode_dramatic_close_surface(bloom_surface_id: u32) -> [u8; 8] {
+    let msg = WCmdDestroySurface {
+        msg_type: WCMD_DRAMATIC_CLOSE_SURFACE,
+        _pad: [0; 3],
+        bloom_surface_id,
+    };
     let mut out = [0u8; 8];
     out.copy_from_slice(as_bytes!(msg, WCmdDestroySurface));
     out

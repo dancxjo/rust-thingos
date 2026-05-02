@@ -163,6 +163,14 @@ Feature: blossom xdg-shell lifecycle
     Then no error is sent
     And the compositor no longer tracks any state for those objects
 
+  Scenario: crashed clients leave windows that close dramatically
+    Given the client has an xdg_toplevel
+    Then the Wayland hello client should be visible
+    When I type "killall wayland_hello" on the serial console
+    Then the serial output should contain "requested dramatic close" within 30s
+    And the serial output should contain "bloom: dramatic close started surface=" within 30s
+    And the serial output should contain "bloom: dramatic close finished surface=" within 30s
+
   # ── Popup lifecycle ──────────────────────────────────────────────────────────
 
   Scenario: get_popup assigns the popup role and emits configure

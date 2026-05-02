@@ -502,14 +502,17 @@ fn generate_limine_config(
         },
         LimineEntry {
             title: "ThingOS (BootFB Fallback)".to_string(),
-            kernel_cmdline: format!("loglevel={} display=bootfb", default_loglevel),
+            kernel_cmdline: format!(
+                "loglevel={} display=bootfb kernel.terminal=1",
+                default_loglevel
+            ),
             bootfb_only: true,
             safe_shell_only: false,
         },
         LimineEntry {
             title: "ThingOS (Safe Shell)".to_string(),
             kernel_cmdline: format!(
-                "loglevel={} display=bootfb sprout.safe=sh sprout.active_ui=terminal",
+                "loglevel={} display=bootfb kernel.terminal=1 sprout.safe=sh sprout.active_ui=terminal",
                 default_loglevel
             ),
             bootfb_only: true,
@@ -1387,7 +1390,9 @@ mod tests {
         assert!(normal_entry.contains("module_path: boot():/drivers/display_fake"));
         assert!(normal_entry.contains("module_path: boot():/drivers/virtio_gpu"));
 
-        assert!(bootfb_entry.contains("kernel_cmdline: loglevel=info display=bootfb"));
+        assert!(
+            bootfb_entry.contains("kernel_cmdline: loglevel=info display=bootfb kernel.terminal=1")
+        );
         assert!(bootfb_entry.contains("module_path: boot():/drivers/display_bootfb"));
         assert!(!bootfb_entry.contains("module_path: boot():/drivers/display_virtio_gpu"));
         assert!(!bootfb_entry.contains("module_path: boot():/drivers/display_fake"));
@@ -1422,7 +1427,7 @@ mod tests {
         let safe_entry = limine_entry(&conf, "ThingOS (Safe Shell)");
 
         assert!(safe_entry.contains(
-            "kernel_cmdline: loglevel=info display=bootfb sprout.safe=sh sprout.active_ui=terminal"
+            "kernel_cmdline: loglevel=info display=bootfb kernel.terminal=1 sprout.safe=sh sprout.active_ui=terminal"
         ));
         assert!(safe_entry.contains("module_path: boot():/applications/sprout"));
         assert!(safe_entry.contains("module_path: boot():/bin/sh"));

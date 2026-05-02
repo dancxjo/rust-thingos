@@ -1073,7 +1073,9 @@ impl WaylandServer {
         if let Some(client) = self.clients.remove(&token) {
             debug!("wayland-server: client disconnected fd={}", client.fd);
 
-            // Clean up all scene surfaces owned by this client.
+            // Crash-close all scene surfaces owned by this client. Normal
+            // Wayland destruction still removes surfaces immediately; this path
+            // handles clients that disappear with mapped windows still present.
             // Collect unique bloom_surface_ids to avoid redundant destroy commands.
             let mut destroyed = Vec::new();
             for entry in client.objects.values() {
@@ -1090,10 +1092,16 @@ impl WaylandServer {
                     _ => 0,
                 };
                 if bloom_id != 0 && !destroyed.contains(&bloom_id) {
-                    let msg = ipc::encode_destroy_surface(bloom_id);
+                    let msg = ipc::encode_dramatic_close_surface(bloom_id);
                     let _ = stem::syscall::port_send_all(self.cmd_write, &msg);
                     destroyed.push(bloom_id);
                 }
+            }
+            if !destroyed.is_empty() {
+                info!(
+                    "wayland-server: client disconnected with {} orphaned surface(s); requested dramatic close",
+                    destroyed.len()
+                );
             }
 
             let _ = vfs_close(client.fd);

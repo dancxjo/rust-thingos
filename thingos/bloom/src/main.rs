@@ -20,6 +20,8 @@ mod theme;
 mod wayland;
 mod world;
 
+use alloc::string::String;
+
 use abi::syscall::vfs_flags::{O_CREAT, O_RDONLY, O_RDWR, O_TRUNC};
 use damage::DamageTracker;
 use display::DisplayBackend;
@@ -28,6 +30,7 @@ use input::InputState;
 use loop_types::BloomLoop;
 use render::CompositorVisuals;
 use scene::Scene;
+use services::busy_spinner::BusySpinnerService;
 use services::input_service::InputService;
 use services::resources::ResourceRetryService;
 use services::theme_service::{DEFAULT_THEME_CONFIG_PATH, ThemeService, ensure_theme_config};
@@ -63,22 +66,23 @@ fn main(_arg: usize) -> ! {
     let mut display_opt = None;
     for i in 0..50 {
         stem::debug!("bloom: connect try {}...", i);
-        display_opt = DisplayBackend::connect("/dev/display/card0");
-        if display_opt.is_some() {
-            stem::info!("bloom: connected to /dev/display/card0 on try {}", i);
+        display_opt = connect_display_card();
+        if let Some((_, path)) = display_opt.as_ref() {
+            stem::info!("bloom: connected to {} on try {}", path, i);
             break;
         }
         stem::sleep_ms(100);
     }
 
-    let display = if let Some(d) = display_opt {
+    let (display, display_path) = if let Some(d) = display_opt {
         d
     } else {
-        error!("bloom: failed to connect to /dev/display/card0 after retries");
+        error!("bloom: failed to connect to any /dev/display/cardN after retries");
         loop {
             stem::sleep_ms(1000);
         }
     };
+    info!("bloom: using display {}", display_path);
     info!("bloom.phase=get_info");
     let outputs = display.enumerate_outputs();
     if outputs.is_empty() {
@@ -163,7 +167,7 @@ fn main(_arg: usize) -> ! {
 
     info!("bloom.phase=init_cursor");
     if !minimal_mode {
-        visuals.prepare_busy_cursor(&display);
+        visuals.prepare_busy_spinner(&display);
         stem::info!("bloom: cursor init deferred until visual resources are ready");
     } else {
         stem::info!("bloom: skipping cursor init (minimal mode)");
@@ -257,6 +261,9 @@ fn main(_arg: usize) -> ! {
         resource_wallpaper_path,
         !minimal_mode,
     )));
+    if !minimal_mode {
+        bloom_loop.add_service(alloc::boxed::Box::new(BusySpinnerService::new()));
+    }
 
     // Theme watch → ThemeService
     bloom_loop.add_service(alloc::boxed::Box::new(ThemeService::new(theme_watch_fd, THEME_PATH)));
@@ -306,6 +313,16 @@ fn main(_arg: usize) -> ! {
 
     // ── Run forever ───────────────────────────────────────────────────────────
     bloom_loop.run(&mut world)
+}
+
+fn connect_display_card() -> Option<(DisplayBackend, String)> {
+    for card in 0..32u32 {
+        let path = alloc::format!("/dev/display/card{}", card);
+        if let Some(display) = DisplayBackend::connect(&path) {
+            return Some((display, path));
+        }
+    }
+    None
 }
 
 fn publish_service_handle(path: &str, handle: u32) {

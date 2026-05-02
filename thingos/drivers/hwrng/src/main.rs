@@ -15,6 +15,11 @@ use stem::{debug, info};
 const THINGOS_DRIVER_NAME: &[u8] = b"hwrng";
 const SEED_NAME: &[u8] = b"hwrng";
 
+#[cfg(target_arch = "x86_64")]
+unsafe extern "C" {
+    fn thingos_driver_start_safe(ctx: *const DriverEntryCtx) -> Status;
+}
+
 #[unsafe(no_mangle)]
 #[used]
 pub static THINGOS_SEED: Seed = Seed {
@@ -48,8 +53,33 @@ pub static THINGOS_DRIVER: DriverDescriptor = DriverDescriptor {
     driver_class: DriverClass::Other,
     flags: 0,
     probe: thingos_driver_probe,
+    #[cfg(target_arch = "x86_64")]
+    start: thingos_driver_start_safe as unsafe extern "C" fn(ctx: *const DriverEntryCtx) -> Status,
+    #[cfg(not(target_arch = "x86_64"))]
     start: thingos_driver_start,
 };
+
+#[cfg(target_arch = "x86_64")]
+core::arch::global_asm!(
+    r#"
+    .section .text
+    .global thingos_driver_start_safe
+    thingos_driver_start_safe:
+        sub rsp, 8
+        push rdi
+        call thingos_runtime_setup
+        pop rdi
+        add rsp, 8
+        call thingos_driver_start_rust
+        ret
+"#
+);
+
+#[cfg(target_arch = "x86_64")]
+#[unsafe(no_mangle)]
+unsafe extern "C" fn thingos_driver_start_rust(ctx: *const DriverEntryCtx) -> Status {
+    thingos_driver_start(ctx)
+}
 
 unsafe extern "C" fn thingos_driver_probe(
     _dev: *const DeviceInfo,
@@ -153,7 +183,7 @@ fn collect_entropy(buf: &mut [u8; 64], counter: u64) {
             }
         }
     }
-    
+
     // Fallback to jitter if not x86_64 or rdrand is not available
     collect_entropy_jitter(buf, counter);
 }
@@ -182,7 +212,7 @@ fn main(arg: usize) -> ! {
     } else {
         info!("hwrng: RDRAND is not available, falling back to timing jitter.");
     }
-    
+
     #[cfg(not(target_arch = "x86_64"))]
     info!("hwrng: Non-x86_64 architecture, using timing jitter.");
 

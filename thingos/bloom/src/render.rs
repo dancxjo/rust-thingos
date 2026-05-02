@@ -37,27 +37,24 @@ const DEFAULT_FONT_PATH: &str = "/public/fonts/Inter-Regular.ttf";
 const SYMBOL_FONT_PATH: &str = "/public/fonts/NotoSansSymbol2-Regular.ttf";
 const CURSOR_SIZE: u32 = 48;
 const CURSOR_PIXELS: usize = (CURSOR_SIZE * CURSOR_SIZE) as usize;
-const BUSY_CURSOR_MASK_SIZE: u32 = 24;
-const BUSY_CURSOR_MASK_STRIDE: usize = 3;
-const BUSY_CURSOR_SCALE: u32 = CURSOR_SIZE / BUSY_CURSOR_MASK_SIZE;
 const BUSY_CURSOR_HOTSPOT_X: u32 = CURSOR_SIZE / 2;
 const BUSY_CURSOR_HOTSPOT_Y: u32 = CURSOR_SIZE / 2;
-const BUSY_CURSOR_FRAME: u32 = 0xFF15171F;
-const BUSY_CURSOR_FRAME_LIGHT: u32 = 0xFFFFFFFF;
-const BUSY_CURSOR_SAND: u32 = 0xFFD99A2B;
-const BUSY_CURSOR_SAND_DARK: u32 = 0xFF7A4C15;
-const BUSY_CURSOR_SHADOW: u32 = 0x88000000;
-const BUSY_CURSOR_MASK: [u8; (BUSY_CURSOR_MASK_SIZE as usize) * BUSY_CURSOR_MASK_STRIDE] = [
-    0b11111111, 0b11111111, 0b11111111, 0b10000000, 0b00000000, 0b00000001, 0b01000000, 0b00000000,
-    0b00000010, 0b00111111, 0b11111111, 0b11111100, 0b00010000, 0b00000000, 0b00001000, 0b00001000,
-    0b00000000, 0b00010000, 0b00000100, 0b00000000, 0b00100000, 0b00000010, 0b00000000, 0b01000000,
-    0b00000001, 0b00000000, 0b10000000, 0b00000000, 0b10000001, 0b00000000, 0b00000000, 0b01000010,
-    0b00000000, 0b00000000, 0b00100100, 0b00000000, 0b00000000, 0b00100100, 0b00000000, 0b00000000,
-    0b01000010, 0b00000000, 0b00000000, 0b10000001, 0b00000000, 0b00000001, 0b00000000, 0b10000000,
-    0b00000010, 0b00000000, 0b01000000, 0b00000100, 0b00000000, 0b00100000, 0b00001000, 0b00000000,
-    0b00010000, 0b00010000, 0b00000000, 0b00001000, 0b00111111, 0b11111111, 0b11111100, 0b01000000,
-    0b00000000, 0b00000010, 0b10000000, 0b00000000, 0b00000001, 0b11111111, 0b11111111, 0b11111111,
+const BUSY_SPINNER_RGB: u32 = 0x00EAF2FF;
+const BUSY_SPINNER_DOT_OFFSETS: [(i32, i32); 12] = [
+    (0, -14),
+    (7, -12),
+    (12, -7),
+    (14, 0),
+    (12, 7),
+    (7, 12),
+    (0, 14),
+    (-7, 12),
+    (-12, 7),
+    (-14, 0),
+    (-12, -7),
+    (-7, -12),
 ];
+const BUSY_SPINNER_ALPHA: [u8; 12] = [238, 208, 174, 140, 112, 88, 68, 52, 40, 32, 26, 22];
 const POINTER_OVERLAY_MAX_W: u32 = 460;
 const POINTER_OVERLAY_MAX_H: u32 = 144;
 const POINTER_OVERLAY_MARGIN: u32 = 12;
@@ -424,7 +421,7 @@ impl CompositorVisuals {
         self.background.as_ref().map(|b| b.buffer_id)
     }
 
-    pub fn prepare_busy_cursor(&mut self, display: &DisplayBackend) {
+    pub fn prepare_busy_spinner(&mut self, display: &DisplayBackend) {
         if self.cursor.is_some() {
             return;
         }
@@ -433,13 +430,13 @@ impl CompositorVisuals {
             match Texture::new("bloom.compositor.cursor.busy", CURSOR_SIZE, CURSOR_SIZE, 4) {
                 Some(t) => t,
                 None => {
-                    stem::warn!("bloom: failed to allocate built-in busy cursor texture");
+                    stem::warn!("bloom: failed to allocate built-in busy spinner texture");
                     return;
                 }
             };
         let stride_pixels = texture.stride / 4;
         let height = texture.height;
-        draw_builtin_busy_cursor(texture.as_slice_mut(), stride_pixels, height);
+        draw_builtin_busy_spinner(texture.as_slice_mut(), stride_pixels, height, 0);
 
         let Some(buffer_id) = display.import_buffer(
             texture.fd,
@@ -450,7 +447,7 @@ impl CompositorVisuals {
             0,
             0,
         ) else {
-            stem::warn!("bloom: failed to import built-in busy cursor texture");
+            stem::warn!("bloom: failed to import built-in busy spinner texture");
             return;
         };
 
@@ -464,13 +461,24 @@ impl CompositorVisuals {
             fallback: true,
         });
         stem::info!(
-            "bloom: built-in busy cursor ready buffer={} size={}x{} hotspot={},{}",
+            "bloom: built-in busy spinner ready buffer={} size={}x{} hotspot={},{}",
             buffer_id,
             CURSOR_SIZE,
             CURSOR_SIZE,
             BUSY_CURSOR_HOTSPOT_X,
             BUSY_CURSOR_HOTSPOT_Y
         );
+    }
+
+    pub fn draw_busy_spinner_frame(&mut self, frame: u32) -> Option<(u32, u32, u32, u32)> {
+        let cursor = self.cursor.as_mut()?;
+        if !cursor.fallback {
+            return None;
+        }
+        let stride_pixels = cursor._texture.stride / 4;
+        let height = cursor._texture.height;
+        draw_builtin_busy_spinner(cursor._texture.as_slice_mut(), stride_pixels, height, frame);
+        Some((cursor.width, cursor.height, cursor.hotspot_x, cursor.hotspot_y))
     }
 
     pub fn prepare_cursor(&mut self, display: &DisplayBackend) {
@@ -973,73 +981,56 @@ fn call_draw_svg_icon(
     )
 }
 
-fn draw_builtin_busy_cursor(dst: &mut [u32], stride: u32, height: u32) {
+fn draw_builtin_busy_spinner(dst: &mut [u32], stride: u32, height: u32, frame: u32) {
     dst.fill(0);
     if stride < CURSOR_SIZE || height < CURSOR_SIZE {
         return;
     }
 
-    for y in 0..BUSY_CURSOR_MASK_SIZE {
-        for x in 0..BUSY_CURSOR_MASK_SIZE {
-            if busy_cursor_mask_bit(x, y) {
-                draw_scaled_cursor_pixel(dst, stride, x + 1, y + 1, BUSY_CURSOR_SHADOW);
+    let phase = (frame as usize) % BUSY_SPINNER_DOT_OFFSETS.len();
+    let center = (CURSOR_SIZE / 2) as i32;
+
+    for &(dx, dy) in &BUSY_SPINNER_DOT_OFFSETS {
+        draw_spinner_dot(dst, stride, center + dx + 1, center + dy + 2, 3, 0x24000000);
+    }
+
+    for (idx, &(dx, dy)) in BUSY_SPINNER_DOT_OFFSETS.iter().enumerate() {
+        let age = (BUSY_SPINNER_DOT_OFFSETS.len() + idx - phase) % BUSY_SPINNER_DOT_OFFSETS.len();
+        let alpha = BUSY_SPINNER_ALPHA[age];
+        let radius = if age <= 2 { 3 } else { 2 };
+        draw_spinner_dot(
+            dst,
+            stride,
+            center + dx,
+            center + dy,
+            radius,
+            argb(alpha, BUSY_SPINNER_RGB),
+        );
+    }
+}
+
+fn draw_spinner_dot(dst: &mut [u32], stride: u32, cx: i32, cy: i32, radius: i32, color: u32) {
+    let radius_sq = radius * radius;
+    for y in cy - radius..=cy + radius {
+        if y < 0 || y >= CURSOR_SIZE as i32 {
+            continue;
+        }
+        let row = y as usize * stride as usize;
+        for x in cx - radius..=cx + radius {
+            if x < 0 || x >= CURSOR_SIZE as i32 {
+                continue;
             }
-        }
-    }
-
-    for y in 5..11 {
-        let radius = 11u32.saturating_sub(y);
-        for x in BUSY_CURSOR_MASK_SIZE / 2 - radius..=BUSY_CURSOR_MASK_SIZE / 2 + radius {
-            draw_scaled_cursor_pixel(dst, stride, x, y, BUSY_CURSOR_SAND);
-        }
-    }
-    for y in 14..21 {
-        let radius = (y - 14).min(7);
-        for x in BUSY_CURSOR_MASK_SIZE / 2 - radius..=BUSY_CURSOR_MASK_SIZE / 2 + radius {
-            let color = if y >= 19 { BUSY_CURSOR_SAND_DARK } else { BUSY_CURSOR_SAND };
-            draw_scaled_cursor_pixel(dst, stride, x, y, color);
-        }
-    }
-    for y in 10..15 {
-        draw_scaled_cursor_pixel(dst, stride, BUSY_CURSOR_MASK_SIZE / 2, y, BUSY_CURSOR_SAND);
-    }
-
-    for y in 0..BUSY_CURSOR_MASK_SIZE {
-        for x in 0..BUSY_CURSOR_MASK_SIZE {
-            if busy_cursor_mask_bit(x, y) {
-                let color = if y <= 2 || (x <= 2 && y < BUSY_CURSOR_MASK_SIZE - 2) {
-                    BUSY_CURSOR_FRAME_LIGHT
-                } else {
-                    BUSY_CURSOR_FRAME
-                };
-                draw_scaled_cursor_pixel(dst, stride, x, y, color);
+            let dx = x - cx;
+            let dy = y - cy;
+            if dx * dx + dy * dy <= radius_sq {
+                dst[row + x as usize] = color;
             }
         }
     }
 }
 
-fn busy_cursor_mask_bit(x: u32, y: u32) -> bool {
-    if x >= BUSY_CURSOR_MASK_SIZE || y >= BUSY_CURSOR_MASK_SIZE {
-        return false;
-    }
-    let row = y as usize * BUSY_CURSOR_MASK_STRIDE;
-    let byte = BUSY_CURSOR_MASK[row + (x as usize / 8)];
-    let bit = 7 - (x % 8);
-    (byte & (1 << bit)) != 0
-}
-
-fn draw_scaled_cursor_pixel(dst: &mut [u32], stride: u32, x: u32, y: u32, color: u32) {
-    let dst_x = x * BUSY_CURSOR_SCALE;
-    let dst_y = y * BUSY_CURSOR_SCALE;
-    if dst_x >= CURSOR_SIZE || dst_y >= CURSOR_SIZE {
-        return;
-    }
-    for yy in 0..BUSY_CURSOR_SCALE {
-        let row = ((dst_y + yy) * stride) as usize;
-        for xx in 0..BUSY_CURSOR_SCALE {
-            dst[row + (dst_x + xx) as usize] = color;
-        }
-    }
+fn argb(alpha: u8, rgb: u32) -> u32 {
+    ((alpha as u32) << 24) | (rgb & 0x00FFFFFF)
 }
 
 fn copy_cursor_sample(cursor: &CursorBuffer, dst: &mut [u32; CURSOR_PIXELS]) -> Option<()> {

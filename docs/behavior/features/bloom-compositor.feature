@@ -17,7 +17,8 @@ Feature: Bloom compositor desktop behavior
     And the serial output should contain "bloom: initial theme configured Solarized Warm" within 60s
     And the serial output should contain "bloom: watching theme config /session/desktop/theme" within 60s
     And the serial output should contain "bloom: watching wallpaper config /session/desktop/wallpaper" within 60s
-    And the serial output should contain "bloom: built-in busy cursor ready" within 60s
+    And the serial output should contain "bloom: built-in busy spinner ready" within 60s
+    And the serial output should contain "bloom: busy spinner serviceLoop started" within 60s
     And the serial output should contain "bloom: cursor ready" within 60s
     And the serial output should contain "bloom: deferred visual resources ready" within 60s
     And the serial output should contain "size=96x96" within 60s
@@ -48,7 +49,10 @@ Feature: Bloom compositor desktop behavior
   @bootfb
   Scenario: The boot framebuffer backend can present the desktop
     Given the machine is booted
-    Then the serial output should contain "bloom: output0" within 60s
+    Then the serial output should contain "display_bootfb: recovered Cambium DriverEntryCtx" within 60s
+    And the serial output should contain "display_bootfb: mounted VFS provider at /dev/display/card0 via cambium" within 60s
+    And the serial output should not contain "bloom: failed to connect to any /dev/display/cardN after retries"
+    And the serial output should contain "bloom: output0" within 60s
     And the serial output should contain "display_bootfb: imported buffer" within 60s
     And the serial output should contain "bloom: display driver supports partial flush (damage regions)" within 60s
     And the serial output should contain "First frame rendered" within 60s
@@ -60,7 +64,7 @@ Feature: Bloom compositor desktop behavior
     Given the machine is booted
     Then the serial output should contain "display_virtio_gpu: recovered Cambium DriverEntryCtx" within 60s
     And the serial output should contain "display_virtio_gpu: mounted VFS provider at /dev/display/card0 via cambium" within 60s
-    And the serial output should not contain "bloom: failed to connect to /dev/display/card0 after retries"
+    And the serial output should not contain "bloom: failed to connect to any /dev/display/cardN after retries"
     And the serial output should contain "display_virtio_gpu: GPU initialized successfully" within 60s
     And the serial output should contain "display_virtio_gpu: host scanout" within 60s
     And the serial output should contain "bloom: output0" within 60s

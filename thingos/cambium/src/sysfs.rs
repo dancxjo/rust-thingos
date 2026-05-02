@@ -26,7 +26,7 @@ pub fn scan_devices() -> Result<Vec<SysDevice>, Errno> {
     let slots = read_dir("/sys/devices")?;
     let mut devices = Vec::new();
     for slot in slots {
-        if !slot.starts_with("pci-") && !slot.starts_with("isa-") {
+        if !is_supported_device_slot(&slot) {
             continue;
         }
 
@@ -74,7 +74,7 @@ fn read_device_snapshot() -> Result<Vec<SysDevice>, Errno> {
         };
         let status = parts.next().unwrap_or("present");
 
-        if !slot.starts_with("pci-") && !slot.starts_with("isa-") {
+        if !is_supported_device_slot(slot) {
             continue;
         }
 
@@ -92,6 +92,10 @@ fn read_device_snapshot() -> Result<Vec<SysDevice>, Errno> {
         return Err(Errno::ENOENT);
     }
     Ok(devices)
+}
+
+fn is_supported_device_slot(slot: &str) -> bool {
+    slot.starts_with("pci-") || slot.starts_with("isa-") || slot.starts_with("platform-")
 }
 
 pub fn device_present(slot: &str) -> bool {

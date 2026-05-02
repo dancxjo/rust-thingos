@@ -1,10 +1,10 @@
 use core::sync::atomic::{AtomicU32, AtomicU64, Ordering};
 
-use abi::KindId;
 use abi::hid::{
     BristleEventHeader, EventType, Key, KeyEventPayload, PointerButtonPayload, PointerMovePayload,
     ScrollPayload,
 };
+use abi::{KindId, ui_event};
 use stem::syscall::message::msg_send;
 use stem::syscall::port_send_all;
 
@@ -13,7 +13,7 @@ use crate::protocol::{
     EVT_KEYBOARD_ENTER, EVT_KEYBOARD_KEY, EVT_KEYBOARD_LEAVE, EVT_POINTER_BUTTON,
     EVT_POINTER_ENTER, EVT_POINTER_LEAVE, EVT_POINTER_MOTION, KIND_KEYBOARD_ENTER,
     KIND_KEYBOARD_KEY, KIND_KEYBOARD_LEAVE, KIND_POINTER_BUTTON, KIND_POINTER_ENTER,
-    KIND_POINTER_LEAVE, KIND_POINTER_MOTION, KeyboardEnterEvent, KeyboardKeyEvent,
+    KIND_POINTER_LEAVE, KIND_POINTER_MOTION, KIND_UI_EVENT, KeyboardEnterEvent, KeyboardKeyEvent,
     KeyboardLeaveEvent, PointerButtonEvent, PointerEnterEvent, PointerLeaveEvent,
     PointerMotionEvent, msg_header, to_vec,
 };
@@ -317,7 +317,7 @@ impl InputState {
         let mut hdr_bytes = [0u8; abi::hid::WaylandIpcHeader::SIZE];
         hdr_bytes.copy_from_slice(&bytes[..abi::hid::WaylandIpcHeader::SIZE]);
         let header = abi::hid::WaylandIpcHeader::from_bytes(&hdr_bytes);
-        
+
         let event_type = header.opcode();
         let timestamp_ns = stem::monotonic_ns();
         let event_no = BLOOM_HANDLE_EVENT_COUNT.fetch_add(1, Ordering::Relaxed) + 1;
@@ -372,7 +372,9 @@ impl InputState {
                 // Focus update and client PointerMotionEvent delivery are
                 // deferred — do NOT call update_pointer_focus here.
             }
-            Ok(EventType::PointerButtonDown) if payload.len() >= abi::hid::WaylandPointerButton::SIZE => {
+            Ok(EventType::PointerButtonDown)
+                if payload.len() >= abi::hid::WaylandPointerButton::SIZE =>
+            {
                 let mut p = [0u8; abi::hid::WaylandPointerButton::SIZE];
                 p.copy_from_slice(&payload[..abi::hid::WaylandPointerButton::SIZE]);
                 let btn = abi::hid::WaylandPointerButton::from_bytes(&p);
@@ -496,7 +498,9 @@ impl InputState {
                     self.pointer_y,
                 );
             }
-            Ok(EventType::PointerButtonUp) if payload.len() >= abi::hid::WaylandPointerButton::SIZE => {
+            Ok(EventType::PointerButtonUp)
+                if payload.len() >= abi::hid::WaylandPointerButton::SIZE =>
+            {
                 let mut p = [0u8; abi::hid::WaylandPointerButton::SIZE];
                 p.copy_from_slice(&payload[..abi::hid::WaylandPointerButton::SIZE]);
                 let btn = abi::hid::WaylandPointerButton::from_bytes(&p);
@@ -857,6 +861,7 @@ impl InputState {
         scene.keyboard_focus = new_focus;
         mark_focus_damage(scene, damage, old_focus, new_focus);
         self.send_keyboard_focus_events(scene, old_focus, scene.keyboard_focus, wayland_evt_write);
+        send_close_requested_to_owner(scene, surface_id);
         send_wayland_toplevel_action(
             wayland_evt_write,
             surface_id,
@@ -864,7 +869,7 @@ impl InputState {
             0,
             0,
         );
-        stem::info!("bloom: close action surface={}", surface_id);
+        stem::info!("bloom: close button pressed surface={}", surface_id);
     }
 
     fn toggle_shade(
@@ -1462,5 +1467,33 @@ fn send_client_event(scene: &Scene, client_id: u32, kind: KindId, payload: &[u8]
         let _ = msg_send(pid, kind, payload);
     } else if let Some(ch) = scene.client_event_port(client_id) {
         let _ = port_send_all(ch, payload);
+    }
+}
+
+fn send_close_requested_to_owner(scene: &Scene, surface_id: u32) {
+    let Some(client_id) = scene.surface_client(surface_id) else {
+        return;
+    };
+    let Some(pid) = scene.client_inbox_pid(client_id) else {
+        return;
+    };
+
+    let event = ui_event::UiEvent::CloseRequested { window: surface_id as u64 };
+    let mut buf = [0u8; 32];
+    let Some(len) = ui_event::encode(&event, &mut buf) else {
+        return;
+    };
+    match msg_send(pid, KIND_UI_EVENT, &buf[..len]) {
+        Ok(()) => stem::info!(
+            "bloom: sent CloseRequested to app inbox pid={} surface={}",
+            pid,
+            surface_id
+        ),
+        Err(err) => stem::warn!(
+            "bloom: failed to send CloseRequested to app inbox pid={} surface={} err={:?}",
+            pid,
+            surface_id,
+            err
+        ),
     }
 }

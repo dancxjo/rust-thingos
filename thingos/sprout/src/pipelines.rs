@@ -107,6 +107,38 @@ pub fn spawn_shell() -> Option<u64> {
     }
 }
 
+pub fn kernel_terminal_requested() -> bool {
+    let Some(cmdline) = read_trimmed_text("/sys/boot/cmdline") else {
+        return false;
+    };
+
+    for token in cmdline.split_ascii_whitespace() {
+        if token.eq_ignore_ascii_case("kernel.terminal") {
+            return true;
+        }
+
+        let Some(value) = token.strip_prefix("kernel.terminal=") else {
+            continue;
+        };
+        if value == "1"
+            || value.eq_ignore_ascii_case("true")
+            || value.eq_ignore_ascii_case("yes")
+            || value.eq_ignore_ascii_case("on")
+        {
+            return true;
+        }
+        if value == "0"
+            || value.eq_ignore_ascii_case("false")
+            || value.eq_ignore_ascii_case("no")
+            || value.eq_ignore_ascii_case("off")
+        {
+            return false;
+        }
+    }
+
+    false
+}
+
 pub fn spawn_bristle() -> Option<u64> {
     let path = "/services/bristle";
     let argv: [&[u8]; 1] = [path.as_bytes()];

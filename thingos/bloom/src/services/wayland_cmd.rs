@@ -12,6 +12,7 @@ use alloc::collections::BTreeMap;
 use alloc::string::String;
 use alloc::vec;
 use alloc::vec::Vec;
+use core::time::Duration;
 
 use abi::pixel::PixelFormat;
 use stem::syscall::port_send_all;
@@ -22,6 +23,9 @@ use crate::loop_types::{BloomService, Interest, LoopAction, LoopEvent};
 use crate::scene::{SurfaceBuffer, SurfaceChrome};
 use crate::wayland::ipc;
 use crate::world::BloomWorld;
+
+const DRAMATIC_CLOSE_TIMER: u64 = 0x4452_414d_434c_4f53; // "DRAMCLOS"
+const DRAMATIC_CLOSE_FRAME: Duration = Duration::from_millis(16);
 
 /// Service that reads Wayland IPC commands from the compositor side.
 pub struct WaylandCommandService {
@@ -37,6 +41,7 @@ pub struct WaylandCommandService {
     bloom_to_buf_key: BTreeMap<u32, u32>,
     rx_buf: Vec<u8>,
     interests: Vec<Interest>,
+    dramatic_timer_armed: bool,
 }
 
 impl WaylandCommandService {
@@ -50,6 +55,7 @@ impl WaylandCommandService {
             bloom_to_buf_key: BTreeMap::new(),
             rx_buf: Vec::new(),
             interests,
+            dramatic_timer_armed: false,
         }
     }
 
@@ -69,6 +75,7 @@ impl WaylandCommandService {
             ipc::WCMD_SET_LAYER_SURFACE => self.handle_set_layer_surface(data, world),
             ipc::WCMD_SET_OPAQUE_REGION => self.handle_set_opaque_region(data, world),
             ipc::WCMD_SET_INPUT_REGION => self.handle_set_input_region(data, world),
+            ipc::WCMD_DRAMATIC_CLOSE_SURFACE => self.handle_dramatic_close_surface(data, world),
             other => {
                 warn!("wayland-cmd: unknown command type {}", other);
                 false
@@ -131,6 +138,19 @@ impl WaylandCommandService {
             );
         }
         true
+    }
+
+    fn handle_dramatic_close_surface(&mut self, data: &[u8], world: &mut BloomWorld) -> bool {
+        if data.len() < 8 {
+            return false;
+        }
+        let bloom_surface_id = u32::from_ne_bytes(data[4..8].try_into().unwrap_or([0; 4]));
+        if world.start_dramatic_surface_close(bloom_surface_id) {
+            debug!("wayland-cmd: dramatic close surface={}", bloom_surface_id);
+            true
+        } else {
+            false
+        }
     }
 
     fn handle_import_attach(&mut self, data: &[u8], world: &mut BloomWorld) -> bool {
@@ -493,7 +513,21 @@ impl BloomService for WaylandCommandService {
         &self.interests
     }
 
-    fn dispatch(&mut self, _event: LoopEvent, world: &mut BloomWorld) -> LoopAction {
+    fn dispatch(&mut self, event: LoopEvent, world: &mut BloomWorld) -> LoopAction {
+        if matches!(event, LoopEvent::Timer(DRAMATIC_CLOSE_TIMER)) {
+            self.dramatic_timer_armed = false;
+            let (active, closed) = world.tick_dramatic_surface_closes();
+            for surface in closed {
+                for buf_id in surface.released_buffer_ids {
+                    world.display.release_buffer(buf_id);
+                    if let Some(key) = self.bloom_to_buf_key.remove(&buf_id) {
+                        self.buf_key_to_bloom.remove(&key);
+                    }
+                }
+            }
+            return if active { self.arm_dramatic_timer() } else { LoopAction::RequestRepaint };
+        }
+
         let mut buf = [0u8; 512];
         let mut repaint = false;
 
@@ -525,7 +559,27 @@ impl BloomService for WaylandCommandService {
             self.rx_buf.drain(..consumed);
         }
 
-        if repaint { LoopAction::RequestRepaint } else { LoopAction::None }
+        if repaint && world.has_dramatic_surface_closes() {
+            self.arm_dramatic_timer()
+        } else if repaint {
+            LoopAction::RequestRepaint
+        } else {
+            LoopAction::None
+        }
+    }
+}
+
+impl WaylandCommandService {
+    fn arm_dramatic_timer(&mut self) -> LoopAction {
+        if self.dramatic_timer_armed {
+            LoopAction::RequestRepaint
+        } else {
+            self.dramatic_timer_armed = true;
+            LoopAction::RequestRepaintAndArmTimer {
+                delay: DRAMATIC_CLOSE_FRAME,
+                id: DRAMATIC_CLOSE_TIMER,
+            }
+        }
     }
 }
 
@@ -543,6 +597,7 @@ fn wayland_command_len(data: &[u8]) -> Option<usize> {
         ipc::WCMD_SET_LAYER_SURFACE => 44,
         ipc::WCMD_SET_OPAQUE_REGION => 24,
         ipc::WCMD_SET_INPUT_REGION => 24,
+        ipc::WCMD_DRAMATIC_CLOSE_SURFACE => 8,
         _ => 1,
     };
     Some(len)
