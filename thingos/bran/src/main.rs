@@ -108,6 +108,7 @@ unsafe extern "C" fn kmain() -> ! {
     RUNTIME.init(hhdm_offset);
     early_serial_write(b"[bran] runtime init ok\r\n");
     init_onscreen_terminal();
+    kernel::syscall::handlers::register_console_disable(crate::console::disable);
 
     early_serial_write(b"[bran] logging init begin\r\n");
     unsafe {

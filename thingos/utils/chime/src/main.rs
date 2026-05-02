@@ -13,19 +13,13 @@ mod chime;
 mod tone;
 
 use abi::device::DeviceKind;
-use abi::driver_interface::{
-    DRIVER_DESCRIPTOR_ABI_VERSION, DeviceInfo, DriverClass, DriverDescriptor, DriverEntryCtx,
-    ProbeResult, Status,
-};
 use abi::sound::{
     AUDIO_DRAIN, AUDIO_GET_INFO, AUDIO_GET_MAPPED_RING_INFO, AUDIO_GET_STATUS,
     AUDIO_MAPPED_RING_VERSION, AUDIO_SET_PARAMS, AUDIO_START, AudioMappedRingHeader,
     AudioMappedRingInfo, AudioMappedRingSetup, AudioParams, AudioSampleFormat, AudioState,
     AudioStatus, AudioStreamInfo,
 };
-use stem::abi::module_manifest::{MANIFEST_MAGIC, ManifestHeader, ModuleKind, device_kind_bytes};
 use stem::info;
-const THINGOS_DRIVER_NAME: &[u8] = b"chime";
 
 struct MappedProducer {
     control_fd: u32,
@@ -212,81 +206,6 @@ fn wait_for_playback_completion(out_fd: u32, sample_bytes: usize, params: &Audio
         stem::time::sleep_ms(10);
     }
 }
-
-#[cfg(target_arch = "x86_64")]
-unsafe extern "C" {
-    fn thingos_driver_start_safe(ctx: *const DriverEntryCtx) -> Status;
-}
-
-#[unsafe(no_mangle)]
-#[used]
-pub static THINGOS_DRIVER: DriverDescriptor = DriverDescriptor {
-    abi_version: DRIVER_DESCRIPTOR_ABI_VERSION,
-    driver_name_ptr: THINGOS_DRIVER_NAME.as_ptr(),
-    driver_name_len: THINGOS_DRIVER_NAME.len(),
-    driver_class: DriverClass::Audio,
-    flags: 0,
-    probe: thingos_driver_probe,
-    #[cfg(target_arch = "x86_64")]
-    start: thingos_driver_start_safe,
-    #[cfg(not(target_arch = "x86_64"))]
-    start: thingos_driver_start,
-};
-
-#[cfg(target_arch = "x86_64")]
-core::arch::global_asm!(
-    r#"
-    .section .text
-    .global thingos_driver_start_safe
-    thingos_driver_start_safe:
-        // RSP = 16n (kernel spawn)
-        sub rsp, 8
-        push rdi
-        // Call std initialization (TLS, etc)
-        call thingos_runtime_setup
-        // Restore RDI and realign for the next call.
-        pop rdi
-        add rsp, 8
-        // CALL will push 8 bytes, so inside Rust entry RSP = 16n + 8.
-        call thingos_driver_start_rust
-        ret
-"#
-);
-
-#[unsafe(no_mangle)]
-unsafe extern "C" fn thingos_driver_start_rust(ctx: *const DriverEntryCtx) -> Status {
-    thingos_driver_start(ctx)
-}
-
-unsafe extern "C" fn thingos_driver_probe(
-    _dev: *const DeviceInfo,
-    out: *mut ProbeResult,
-) -> Status {
-    if out.is_null() {
-        return Status::InvalidArgument;
-    }
-    let out = &mut *out;
-    out.matched = 0;
-    out.score = 0;
-    out.claimed_class = DriverClass::Audio;
-    out.flags = 0;
-    Status::NoMatch
-}
-
-unsafe extern "C" fn thingos_driver_start(_ctx: *const DriverEntryCtx) -> Status {
-    main(0)
-}
-
-#[unsafe(link_section = ".thing_manifest")]
-#[unsafe(no_mangle)]
-#[used]
-pub static MANIFEST: ManifestHeader = ManifestHeader {
-    magic: MANIFEST_MAGIC,
-    kind: ModuleKind::Driver,
-    device_kind: device_kind_bytes(b"dev.sound.Chime"),
-    version: 1,
-    _reserved: 0,
-};
 
 fn read_piped_stdin() -> Option<Vec<u8>> {
     use abi::syscall::poll_flags::POLLIN;

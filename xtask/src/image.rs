@@ -51,7 +51,7 @@ const ISO_ROOT_DIRS: &[&str] = &[
     "run",
     "tmp",
     "media",
-    "media/cdrom",
+    "media/livedisk",
     "drivers",
     "session",
     "public",
@@ -610,7 +610,7 @@ fn limine_modules(
     }
 
     modules.push_str("    module_path: boot():/public/fonts/unifont.hex\n");
-    modules.push_str("    module_path: boot():/etc/roots/root\n");
+    modules.push_str("    module_path: boot():/etc/roots/boot\n");
     if include_default_shell && !safe_shell_only {
         modules.push_str("    module_path: boot():/etc/default/shell\n");
     }
@@ -735,11 +735,11 @@ pub fn build_iso_with_config(
     sh.write_file(iso_root.join("etc/motd"), generate_motd())?;
     sh.write_file(
         iso_root.join("etc/fstab"),
-        "none /net net defaults 0 0\nnone /https https defaults 0 0\nnone /media/cdrom iso9660 defaults 0 0\n",
+        "none /net net defaults 0 0\nnone /https https defaults 0 0\nnone /media/livedisk iso9660 defaults 0 0\n",
     )?;
     sh.write_file(
-        iso_root.join("etc/roots/root"),
-        "# Thing-OS early root overlay.\nsource=/media/cdrom\ntarget=/\nflags=before,cor\nwait_ms=10000\n",
+        iso_root.join("etc/roots/boot"),
+        "# Thing-OS livedisk root overlay.\ntype=iso9660\ndevice=none\nsource=/media/livedisk\ntarget=/\nflags=before,cor\nwait_ms=10000\n",
     )?;
     sh.write_file(iso_root.join("etc/hostname"), "thingos\n")?;
 
@@ -1101,7 +1101,7 @@ pub fn build_hdd(sh: &Shell, arch: &str, programs: &[ProgramConfig]) -> Result<P
     cmd!(sh, "mformat -i {hdd}@@1M").run()?;
     cmd!(
         sh,
-        "mmd -i {hdd}@@1M ::/EFI ::/EFI/BOOT ::/boot ::/boot/limine ::/bin ::/applications ::/lib ::/etc ::/dev ::/proc ::/sys ::/run ::/tmp ::/media ::/media/cdrom ::/drivers ::/session ::/public ::/services ::/version"
+        "mmd -i {hdd}@@1M ::/EFI ::/EFI/BOOT ::/boot ::/boot/limine ::/bin ::/applications ::/lib ::/etc ::/dev ::/proc ::/sys ::/run ::/tmp ::/media ::/media/livedisk ::/drivers ::/session ::/public ::/services ::/version"
     )
     .run()?;
     for (src, dst) in PUBLIC_ASSET_DIRS {
@@ -1224,7 +1224,6 @@ fn is_driver(name: &str) -> bool {
     let drivers = [
         "ahci_disk",
         "ata_disk",
-        "chime",
         "display_bootfb",
         "display_fake",
         "display_virtio_gpu",
@@ -1260,6 +1259,7 @@ fn is_bin_program(name: &str) -> bool {
             | "rm"
             | "rmdir"
             | "mkdir"
+            | "mount"
             | "echo"
             | "printf"
             | "pwd"
@@ -1277,6 +1277,28 @@ fn is_bin_program(name: &str) -> bool {
             | "false"
             | "tee"
             | "loglevel"
+            | "ps"
+            | "kill"
+            | "killall"
+            | "top"
+            | "which"
+            | "dmesg"
+            | "file"
+            | "ip"
+            | "find"
+            | "ping"
+            | "nslookup"
+            | "clear"
+            | "xargs"
+            | "lsusb"
+            | "lspci"
+            | "reboot"
+            | "shutdown"
+            | "attr_list"
+            | "attr_get"
+            | "attr_set"
+            | "attr_rm"
+            | "chime"
     )
 }
 
@@ -1464,7 +1486,7 @@ mod tests {
             assert!(ISO_ROOT_DIRS.contains(&dir), "missing canonical ISO root dir {dir}");
         }
         assert!(ISO_ROOT_DIRS.contains(&"etc/roots"));
-        assert!(ISO_ROOT_DIRS.contains(&"media/cdrom"));
+        assert!(ISO_ROOT_DIRS.contains(&"media/livedisk"));
         assert!(!ISO_ROOT_DIRS.contains(&"app"));
         assert!(!ISO_ROOT_DIRS.contains(&"drv"));
         assert!(!ISO_ROOT_DIRS.contains(&"pub"));
@@ -1495,7 +1517,9 @@ mod tests {
 
     #[test]
     fn executable_staging_keeps_bin_to_core_commands() {
-        for name in ["sh", "ls", "cat", "cp", "mkdir", "printf", "stat", "tree", "loglevel"] {
+        for name in
+            ["sh", "ls", "cat", "cp", "mkdir", "mount", "printf", "stat", "tree", "loglevel"]
+        {
             assert_eq!(executable_subdir(name), "bin", "{name} should stay in /bin");
         }
         for name in ["sprout", "grep", "find"] {
@@ -1543,7 +1567,7 @@ mod tests {
         assert!(normal_entry.contains("module_path: boot():/drivers/ata_disk"));
         assert!(normal_entry.contains("module_path: boot():/drivers/ahci_disk"));
         assert!(normal_entry.contains("module_path: boot():/public/fonts/unifont.hex"));
-        assert!(normal_entry.contains("module_path: boot():/etc/roots/root"));
+        assert!(normal_entry.contains("module_path: boot():/etc/roots/boot"));
 
         assert!(!normal_entry.contains("module_path: boot():/bin/ps"));
         assert!(!normal_entry.contains("module_path: boot():/bin/grep"));

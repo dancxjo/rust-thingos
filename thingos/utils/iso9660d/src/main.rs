@@ -2,7 +2,7 @@
 //!
 //! Discovers storage devices in `/dev/storage/`, probes them for ISO9660
 //! filesystems, and mounts the first one found as a userland VFS provider at
-//! `/media/cdrom`.
+//! `/media/livedisk`.
 #![no_std]
 #![no_main]
 extern crate alloc;
@@ -21,7 +21,7 @@ use stem::syscall::vfs::{vfs_close, vfs_mount, vfs_open, vfs_read, vfs_readdir, 
 use stem::syscall::{PortHandle, argv_get, port_create};
 use stem::{info, warn};
 
-const DEFAULT_MOUNT_POINT: &str = "/media/cdrom";
+const DEFAULT_MOUNT_POINT: &str = "/media/livedisk";
 
 struct MountConfig {
     device: Option<String>,

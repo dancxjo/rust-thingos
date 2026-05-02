@@ -1064,6 +1064,10 @@ fn unlock_hotkey_shell_spawn(spawned_tid: Option<u64>) {
 }
 
 pub fn activate_terminal_and_spawn_shell() {
+    if crate::console::is_disabled() {
+        return;
+    }
+
     crate::console::activate_onscreen_terminal();
 
     if !try_lock_hotkey_shell_spawn() {

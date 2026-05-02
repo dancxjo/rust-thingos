@@ -21,12 +21,16 @@ pub fn enable_for_claim(
         return Err(Errno::EINVAL);
     }
 
-    let (location, msi_cap, msix_cap, resource_id, bars) = {
+    let (location, msi_cap, msix_cap, resource_id, bars, mapped_bars) = {
         let reg = REGISTRY.lock();
         let (location, msi_cap, msix_cap) = reg.get_pci_info(claim_handle).ok_or(Errno::ENODEV)?;
         let bars = reg.get_bars(claim_handle).ok_or(Errno::ENODEV)?;
         let resource_id = reg.get_resource_id_for_claim(claim_handle).ok_or(Errno::ENODEV)?;
-        (location, msi_cap, msix_cap, resource_id, bars)
+        let mut mapped_bars = [0u64; 6];
+        for bar in 0..mapped_bars.len() {
+            mapped_bars[bar] = reg.get_bar_mapping(claim_handle, bar).unwrap_or(0);
+        }
+        (location, msi_cap, msix_cap, resource_id, bars, mapped_bars)
     };
 
     if resource_id == 0 {
@@ -36,7 +40,7 @@ pub fn enable_for_claim(
     let vector = alloc_vector(resource_id, 0).ok_or(Errno::ENOMEM)?;
     let result = if prefer_msix {
         if let Some(msix) = msix_cap {
-            program_msix(location, msix, vector, bars)?;
+            program_msix(location, msix, vector, bars, mapped_bars)?;
             Ok(EnableResult { vector, mode: IrqMode::Msix })
         } else if let Some(msi) = msi_cap {
             program_msi(location, msi, vector)?;
@@ -48,7 +52,7 @@ pub fn enable_for_claim(
         program_msi(location, msi, vector)?;
         Ok(EnableResult { vector, mode: IrqMode::Msi })
     } else if let Some(msix) = msix_cap {
-        program_msix(location, msix, vector, bars)?;
+        program_msix(location, msix, vector, bars, mapped_bars)?;
         Ok(EnableResult { vector, mode: IrqMode::Msix })
     } else {
         Err(Errno::ENOSYS)
@@ -96,6 +100,7 @@ fn program_msix(
     msix: MsixCapability,
     vector: u8,
     bars: ([u64; 6], [u64; 6]),
+    mapped_bars: [u64; 6],
 ) -> Result<(), Errno> {
     let (addr, data) = build_msi_message(vector);
     let (bar_addrs, bar_sizes) = bars;
@@ -112,9 +117,11 @@ fn program_msix(
         return Err(Errno::EINVAL);
     }
 
-    let table_phys = bar_base + msix.table_offset as u64;
-    let hhdm = crate::boot_info::get().map(|i| i.hhdm_offset).unwrap_or(0);
-    let table_virt = table_phys + hhdm;
+    let mapped_base = mapped_bars[bar_index];
+    if mapped_base == 0 {
+        return Err(Errno::ENODEV);
+    }
+    let table_virt = mapped_base + msix.table_offset as u64;
 
     unsafe {
         let entry = table_virt as *mut u32;

@@ -1,5 +1,7 @@
 extern crate alloc;
 
+use alloc::collections::BTreeMap;
+
 use stem::kinds::{
     KIND_ID_THINGOS_SHUTDOWN_READY, KIND_ID_THINGOS_SHUTDOWN_REQUEST, ShutdownReadyV1,
     ShutdownRequestV1,
@@ -12,6 +14,7 @@ use crate::pipelines::{spawn_bristle, spawn_shell};
 
 const SHELL_HEADSTART_MS: u64 = 50;
 const INBOX_MAX_PAYLOAD: usize = 256;
+const MOUNT_BIN: &str = "/bin/mount";
 
 pub struct Supervisor;
 
@@ -23,13 +26,19 @@ impl Supervisor {
     pub fn run_forever(&mut self) -> ! {
         info!("SPROUT: minimal supervisor online");
 
-        let shell_pid = spawn_shell();
-        stem::sleep_ms(SHELL_HEADSTART_MS);
-
         // Bristle must come up before Cambium can launch input drivers that
         // publish through `/run/bristle/*`.
-        let _ = spawn_bristle();
+        if spawn_bristle().is_some() {
+            info!("SPROUT: bristle launched; disabling kernel framebuffer terminal");
+            stem::syscall::console_disable();
+        }
         let cambium_pid = self.spawn_cambium();
+
+        self.activate_boot_roots();
+        info!("SPROUT: Continuing supervisor startup");
+
+        let shell_pid = spawn_shell();
+        stem::sleep_ms(SHELL_HEADSTART_MS);
 
         match shell_pid {
             Some(pid) => {
@@ -60,6 +69,38 @@ impl Supervisor {
                 warn!("SPROUT: failed to spawn cambium: {:?}", err);
                 None
             }
+        }
+    }
+
+    fn activate_boot_roots(&mut self) {
+        let argv: [&[u8]; 2] = [MOUNT_BIN.as_bytes(), b"--roots"];
+        let env = BTreeMap::new();
+        let null = abi::types::stdio_mode::NULL;
+        let inherit = abi::types::stdio_mode::INHERIT;
+
+        let pid = match stem::syscall::spawn_process_ex(
+            MOUNT_BIN,
+            &argv,
+            &env,
+            null,
+            inherit,
+            inherit,
+            0,
+            &[],
+        ) {
+            Ok(resp) => resp.child_tid,
+            Err(err) => {
+                warn!("SPROUT: failed to spawn /etc/roots activator: {:?}", err);
+                return;
+            }
+        };
+
+        match stem::syscall::waitpid(pid as i64, 0) {
+            Ok((_pid, 0)) => info!("SPROUT: /etc/roots activation complete"),
+            Ok((_pid, status)) => {
+                warn!("SPROUT: /etc/roots activation exited status {:#x}", status)
+            }
+            Err(err) => warn!("SPROUT: waitpid for /etc/roots activation failed: {:?}", err),
         }
     }
 

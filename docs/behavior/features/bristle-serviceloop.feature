@@ -13,6 +13,12 @@ Feature: Bristle HID broker — ServiceLoop-based fanout
     # The file must exist and contain a non-zero decimal PID.
     Then the log should match pattern "bristle: published pid [1-9][0-9]* to /run/bristle/pid"
 
+  Scenario: bristle startup stops the kernel framebuffer terminal
+    # Once bristle owns input routing, the F12/kernel framebuffer terminal must
+    # stop touching the framebuffer so display ownership stays in userland.
+    Then the log should match pattern "SPROUT: bristle launched; disabling kernel framebuffer terminal"
+    And the log should match pattern "kernel: boot framebuffer console disabled"
+
   Scenario: bloom registers with bristle via inbox after bristle starts
     # bloom creates a port pair and sends KIND_BRISTLE_REGISTER_SINK to bristle.
     Then the log should match pattern "bristle: bloom sink registered"

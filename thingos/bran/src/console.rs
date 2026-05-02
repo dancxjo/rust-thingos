@@ -24,7 +24,7 @@ const GLYPH_PRELOAD_END_U8: u8 = GLYPH_PRELOAD_END as u8;
 const ACTIVATION_BANNER: &[u8] = b"\x1b[0mThing-OS kernel terminal (F12)\n";
 
 pub static CONSOLE: Mutex<Option<FbConsole>> = Mutex::new(None);
-pub static CONSOLE_DISABLED: AtomicBool = AtomicBool::new(false);
+pub static FB_CONSOLE_DISABLED: AtomicBool = AtomicBool::new(false);
 
 /// Lock to ensure only one CPU flushes the serial ring buffer at a time.
 /// This prevents chunk-level reordering of logs from different CPUs without
@@ -789,7 +789,7 @@ pub fn init(fb: Framebuffer) {
 }
 
 pub fn activate_onscreen_terminal() {
-    if CONSOLE_DISABLED.load(Ordering::Relaxed) {
+    if FB_CONSOLE_DISABLED.load(Ordering::Relaxed) {
         return;
     }
     let state = crate::RUNTIME.irq_disable();
@@ -800,24 +800,21 @@ pub fn activate_onscreen_terminal() {
 }
 
 pub fn disable() {
-    CONSOLE_DISABLED.store(true, Ordering::Relaxed);
+    FB_CONSOLE_DISABLED.store(true, Ordering::Relaxed);
 }
 
 pub fn is_disabled() -> bool {
-    CONSOLE_DISABLED.load(Ordering::Relaxed)
+    FB_CONSOLE_DISABLED.load(Ordering::Relaxed)
 }
 
 pub fn put_char(c: u8) {
-    if CONSOLE_DISABLED.load(Ordering::Relaxed) {
+    if FB_CONSOLE_DISABLED.load(Ordering::Relaxed) {
         return;
     }
     DEFERRED.push(c);
 }
 
 pub fn serial_put_char(c: u8) {
-    if CONSOLE_DISABLED.load(Ordering::Relaxed) {
-        return;
-    }
     SERIAL_DEFERRED.push(c);
     // Kick-start: arm the TX interrupt so the serial IRQ handler drains the
     // ring asynchronously.  Producers deliberately do not touch UART readiness
@@ -828,16 +825,13 @@ pub fn serial_put_char(c: u8) {
 
 /// Enqueue a byte slice for deferred framebuffer rendering.
 pub fn put_buf(buf: &[u8]) {
-    if CONSOLE_DISABLED.load(Ordering::Relaxed) {
+    if FB_CONSOLE_DISABLED.load(Ordering::Relaxed) {
         return;
     }
     DEFERRED.push_slice(buf);
 }
 
 pub fn serial_put_buf(buf: &[u8]) {
-    if CONSOLE_DISABLED.load(Ordering::Relaxed) {
-        return;
-    }
     SERIAL_DEFERRED.push_slice(buf);
     // Kick-start TX interrupt for async drain without making the producer
     // perform UART I/O on the hot path.
@@ -846,7 +840,7 @@ pub fn serial_put_buf(buf: &[u8]) {
 
 /// Called from the timer IRQ to blink the cursor.
 pub fn blink_cursor() {
-    if CONSOLE_DISABLED.load(Ordering::Relaxed) {
+    if FB_CONSOLE_DISABLED.load(Ordering::Relaxed) {
         return;
     }
     // Use try_lock to avoid deadlock if the console is already held.
@@ -873,7 +867,7 @@ const FLUSH_BATCH: usize = 64;
 const FLUSH_BATCH_IDLE: usize = 2048;
 
 pub fn flush_deferred() {
-    if CONSOLE_DISABLED.load(Ordering::Relaxed) {
+    if FB_CONSOLE_DISABLED.load(Ordering::Relaxed) {
         return;
     }
 
@@ -904,7 +898,7 @@ pub fn flush_deferred() {
 /// so that console rendering happens without delaying real work.  Still
 /// uses `try_lock` so it never blocks an IRQ handler.
 pub fn flush_deferred_idle() {
-    if CONSOLE_DISABLED.load(Ordering::Relaxed) {
+    if FB_CONSOLE_DISABLED.load(Ordering::Relaxed) {
         return;
     }
 
@@ -957,10 +951,6 @@ pub fn flush_sync() {
 /// FIFO is busy it simply returns and tries again on the next tick (or the
 /// serial IRQ handler will pick it up when THRE fires).
 pub fn serial_flush_deferred() {
-    if CONSOLE_DISABLED.load(Ordering::Relaxed) {
-        return;
-    }
-
     // Ensure only one CPU flushes at a time to prevent reordering.
     let _flush_guard = match FlushGuard::try_enter(&SERIAL_FLUSH_ACTIVE) {
         Some(g) => g,
@@ -992,10 +982,6 @@ pub fn serial_flush_deferred() {
 /// on the ring. If the ring is empty after draining, disarms the TX interrupt
 /// to stop spurious IRQs until new data is pushed.
 pub fn serial_drain_irq() {
-    if CONSOLE_DISABLED.load(Ordering::Relaxed) {
-        return;
-    }
-
     // Share the same drain gate as timer/idle flushes.  Without this, two CPUs
     // can dequeue different FIFO-sized chunks and write them to the UART in the
     // opposite order.
@@ -1022,10 +1008,6 @@ pub fn serial_drain_irq() {
 }
 
 pub fn serial_flush_deferred_idle() {
-    if CONSOLE_DISABLED.load(Ordering::Relaxed) {
-        return;
-    }
-
     // Ensure only one CPU flushes at a time to prevent reordering.
     let _flush_guard = match FlushGuard::try_enter(&SERIAL_FLUSH_ACTIVE) {
         Some(g) => g,

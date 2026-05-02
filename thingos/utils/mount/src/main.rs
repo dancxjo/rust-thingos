@@ -7,11 +7,16 @@ use alloc::string::{String, ToString};
 use alloc::vec::Vec;
 
 use abi::errors::Errno;
-use stem::syscall::{argv_get, exit, spawn_driver_ex, vfs_close, vfs_open, vfs_read, vfs_write};
+use stem::syscall::vfs::vfs_bind;
+use stem::syscall::{
+    argv_get, exit, spawn_driver_ex, vfs_close, vfs_open, vfs_read, vfs_readdir, vfs_write,
+};
 
 const MOUNT_VERIFICATION_ATTEMPTS: usize = 50;
 const MOUNT_VERIFICATION_DELAY_MS: u64 = 100;
+const ROOT_SOURCE_POLL_DELAY_MS: u64 = 100;
 const READ_FILE_CHUNK_SIZE: usize = 1024;
+const READDIR_BUFFER_SIZE: usize = 4096;
 
 fn get_args() -> Vec<String> {
     let len = match argv_get(&mut []) {
@@ -48,6 +53,11 @@ fn main(_arg: usize) -> ! {
 
     if args.len() == 1 && args[0] == "-a" {
         let status = mount_all_from_fstab("/etc/fstab");
+        exit(status);
+    }
+
+    if args.len() == 1 && (args[0] == "--roots" || args[0] == "-R") {
+        let status = mount_all_from_roots("/etc/roots");
         exit(status);
     }
 
@@ -91,7 +101,7 @@ fn main(_arg: usize) -> ! {
 }
 
 fn print_usage() {
-    err("usage: mount -t <type> [device] <target>\n       mount -a\n");
+    err("usage: mount -t <type> [device] <target>\n       mount -a\n       mount --roots\n");
 }
 
 fn mount_all_from_fstab(path: &str) -> i32 {
@@ -149,6 +159,138 @@ fn mount_one(fs_type: &str, device: &str, target: &str) -> Result<(), Errno> {
     Ok(())
 }
 
+#[derive(Default)]
+struct RootSpec {
+    fs_type: String,
+    device: String,
+    source: String,
+    target: String,
+    flags: u32,
+    flags_text: String,
+    wait_ms: u64,
+}
+
+fn mount_all_from_roots(dir: &str) -> i32 {
+    let entries = match read_dir_entries(dir) {
+        Some(entries) => entries,
+        None => {
+            err("mount: cannot read /etc/roots\n");
+            return 1;
+        }
+    };
+
+    let mut had_error = false;
+    for name in entries {
+        if name == "." || name == ".." || name.starts_with('.') {
+            continue;
+        }
+        let path = alloc::format!("{}/{}", dir.trim_end_matches('/'), name);
+        match read_root_spec(&path) {
+            Some(spec) => {
+                if let Err(e) = activate_root_spec(&spec) {
+                    had_error = true;
+                    err(&alloc::format!(
+                        "mount: root overlay failed source={} target={}: {:?}\n",
+                        spec.source,
+                        spec.target,
+                        e
+                    ));
+                }
+            }
+            None => {
+                had_error = true;
+                err(&alloc::format!("mount: root spec {} is invalid\n", path));
+            }
+        }
+    }
+
+    if had_error { 1 } else { 0 }
+}
+
+fn read_root_spec(path: &str) -> Option<RootSpec> {
+    let data = read_file(path, 16 * 1024)?;
+    let text = core::str::from_utf8(&data).ok()?;
+    let mut spec = RootSpec { flags: abi::syscall::mount_flags::MREPL, ..RootSpec::default() };
+
+    for line in text.lines() {
+        let line = line.trim();
+        if line.is_empty() || line.starts_with('#') {
+            continue;
+        }
+        let Some((key, value)) = line.split_once('=') else {
+            continue;
+        };
+        let key = key.trim();
+        let value = value.trim();
+        match key {
+            "type" | "fs_type" => spec.fs_type = value.to_string(),
+            "device" => spec.device = value.to_string(),
+            "source" => spec.source = value.to_string(),
+            "target" => spec.target = value.to_string(),
+            "flags" => {
+                spec.flags_text = value.to_string();
+                spec.flags = parse_mount_flags(value)?;
+            }
+            "wait_ms" => spec.wait_ms = value.parse::<u64>().ok()?,
+            _ => {}
+        }
+    }
+
+    if spec.source.is_empty() || spec.target.is_empty() {
+        return None;
+    }
+    if spec.flags_text.is_empty() {
+        spec.flags_text = "repl".to_string();
+    }
+    Some(spec)
+}
+
+fn parse_mount_flags(value: &str) -> Option<u32> {
+    let mut flags = abi::syscall::mount_flags::MREPL;
+    for token in value.split(',').map(str::trim).filter(|token| !token.is_empty()) {
+        match token {
+            "repl" | "replace" => {}
+            "before" => flags |= abi::syscall::mount_flags::MBEFORE,
+            "after" => flags |= abi::syscall::mount_flags::MAFTER,
+            "create" => flags |= abi::syscall::mount_flags::MCREATE,
+            "cor" => flags |= abi::syscall::mount_flags::MCOR,
+            "cow" => flags |= abi::syscall::mount_flags::MCOW,
+            _ => return None,
+        }
+    }
+    Some(flags)
+}
+
+fn activate_root_spec(spec: &RootSpec) -> Result<(), Errno> {
+    if !spec.fs_type.is_empty() && !mount_table_contains(&spec.source) {
+        let device = if spec.device.is_empty() { "none" } else { spec.device.as_str() };
+        match mount_one(&spec.fs_type, device, &spec.source) {
+            Ok(()) | Err(Errno::ETIMEDOUT) => {}
+            Err(e) => return Err(e),
+        }
+    }
+    wait_for_root_source(&spec.source, spec.wait_ms)?;
+    vfs_bind(&spec.source, &spec.target, spec.flags)?;
+    out(&alloc::format!(
+        "mount: root overlay mounted source={} target={} flags={}\n",
+        spec.source,
+        spec.target,
+        spec.flags_text
+    ));
+    Ok(())
+}
+
+fn wait_for_root_source(source: &str, wait_ms: u64) -> Result<(), Errno> {
+    let attempts = (wait_ms / ROOT_SOURCE_POLL_DELAY_MS).max(1);
+    for _ in 0..attempts {
+        if mount_table_contains(source) || dir_has_entries(source) {
+            return Ok(());
+        }
+        stem::time::sleep_ms(ROOT_SOURCE_POLL_DELAY_MS);
+    }
+    Err(Errno::ETIMEDOUT)
+}
+
 fn wait_for_mount(target: &str, attempts: usize, delay_ms: u64) -> Result<(), Errno> {
     for _ in 0..attempts {
         if mount_table_contains(target) {
@@ -170,6 +312,12 @@ fn mount_table_contains(target: &str) -> bool {
     text.lines()
         .filter_map(|line| line.split_whitespace().next())
         .any(|path| normalize_mount_path(path) == target)
+}
+
+fn dir_has_entries(path: &str) -> bool {
+    read_dir_entries(path).is_some_and(|entries| {
+        entries.into_iter().any(|entry| !entry.is_empty() && entry != "." && entry != "..")
+    })
 }
 
 fn normalize_mount_path(path: &str) -> String {
@@ -224,6 +372,39 @@ fn path_exists(path: &str) -> bool {
         }
         Err(_) => false,
     }
+}
+
+fn read_dir_entries(path: &str) -> Option<Vec<String>> {
+    let fd = vfs_open(path, abi::syscall::vfs_flags::O_RDONLY).ok()?;
+    let mut entries = Vec::new();
+    let mut buf = [0u8; READDIR_BUFFER_SIZE];
+    loop {
+        match vfs_readdir(fd, &mut buf) {
+            Ok(0) => break,
+            Ok(n) => {
+                let mut offset = 0;
+                while offset < n {
+                    let mut end = offset;
+                    while end < n && buf[end] != 0 {
+                        end += 1;
+                    }
+                    if end > offset {
+                        if let Ok(name) = core::str::from_utf8(&buf[offset..end]) {
+                            entries.push(name.to_string());
+                        }
+                    }
+                    offset = end + 1;
+                }
+            }
+            Err(_) => {
+                let _ = vfs_close(fd);
+                return None;
+            }
+        }
+    }
+    let _ = vfs_close(fd);
+    entries.sort();
+    Some(entries)
 }
 
 fn read_file(path: &str, max_bytes: usize) -> Option<Vec<u8>> {

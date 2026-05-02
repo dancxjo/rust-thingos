@@ -39,7 +39,7 @@ A service provider is a normal userland process that:
 /run/
   wayland-0        ← Wayland socket (Bloom, when running)
 /media/
-  cdrom/           ← ISO9660 filesystem from the boot CD-ROM (iso9660d)
+  livedisk/        ← ISO9660 filesystem from the boot live disk (iso9660d)
     etc/
     bin/
     drivers/
@@ -151,20 +151,20 @@ them back verbatim on `Read`, `Write`, `Readdir`, `Stat`, and `Close`.
 
 ---
 
-## iso9660d: boot CD-ROM provider
+## iso9660d: boot live disk provider
 
 `userspace/iso9660d` is the reference VFS provider implementation.  It:
 
 1. Finds the first block device with a valid ISO9660 PVD.
-2. Calls `vfs_mount(write_handle, "/media/cdrom")`.
+2. Calls `vfs_mount(write_handle, "/media/livedisk")`.
 3. Serves `Lookup`, `Read`, `Readdir`, `Stat`, and `Close` using the
    `iso9660` library.  `Write` returns `EROFS`.
 
-Files on the boot CD-ROM are accessible at paths like:
+Files on the boot live disk are accessible at paths like:
 
 ```
-/media/cdrom/etc/hostname
-/media/cdrom/bin/sprout
+/media/livedisk/etc/hostname
+/media/livedisk/bin/sprout
 ```
 
 ---

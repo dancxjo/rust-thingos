@@ -74,19 +74,19 @@ Represents a directory in the content graph (future enhancement).
 3. For each module, creates:
    - An `Asset` node (backward compatibility with existing consumers)
    - A `content.File` node with computed content hash and MIME type
-4. Content is reachable via VFS path (e.g., `/media/cdrom/modules/{name}`)
+4. Content is reachable via VFS path (e.g., `/media/livedisk/modules/{name}`)
 
 ### ISO9660 Source
 
 **Service**: `iso_reader`
 
-1. Probes for ATAPI CD-ROM devices
+1. Probes for boot live-disk devices
 2. Scans ISO9660 filesystem
 3. Creates a `content.Source` node with kind `"iso9660_disk"` and priority 50
 4. For each file:
    - Creates a `boot.Module` node (backward compatibility)
    - Creates a `content.File` node with computed content hash and MIME type
-5. Content is reachable via VFS path (e.g., `/dev/cdrom0/{path}`)
+5. Content is reachable via VFS path (e.g., `/media/livedisk/{path}`)
 
 ### Content Discovery
 

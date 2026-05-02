@@ -458,7 +458,7 @@ pub mod keys {
     // Content Provider System (unified content sources)
     /// Content source kind: "limine_module", "iso9660_disk", etc.
     pub const CONTENT_SOURCE_KIND: &str = "content.source.kind";
-    /// Content source name (e.g., "boot", "cdrom0")
+    /// Content source name (e.g., "boot", "livedisk0")
     pub const CONTENT_SOURCE_NAME: &str = "content.source.name";
     /// Content source priority for overlay resolution (higher wins)
     pub const CONTENT_SOURCE_PRIORITY: &str = "content.source.priority";

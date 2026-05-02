@@ -325,6 +325,18 @@ impl DeviceRegistry {
         }
     }
 
+    pub fn get_bar_mapping(&self, claim_handle: usize, bar_index: usize) -> Option<u64> {
+        if claim_handle >= MAX_CLAIMS || bar_index >= MAX_BARS {
+            return None;
+        }
+        let claim = &self.claims[claim_handle];
+        if !claim.valid {
+            return None;
+        }
+        let virt = claim.mapped_bar_virt[bar_index];
+        if virt == 0 { None } else { Some(virt) }
+    }
+
     pub fn get_pci_info(
         &self,
         claim_handle: usize,

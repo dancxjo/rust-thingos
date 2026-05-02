@@ -8,7 +8,7 @@ members = [
   "compiler/rustc",
   "thingos/drivers/ahci_disk",
   "thingos/drivers/ata_disk",
-  "thingos/drivers/chime",
+  "thingos/utils/chime",
   "thingos/cambium",
   "thingos/drivers/display_bootfb",
   "thingos/drivers/display_fake",

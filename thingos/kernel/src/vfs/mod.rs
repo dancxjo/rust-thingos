@@ -63,7 +63,7 @@ const ROOTFS_VISIBLE_DIRS: &[&str] = &[
     "run",
     "tmp",
     "media",
-    "media/cdrom",
+    "media/livedisk",
     "drivers",
     "session",
     "public",
