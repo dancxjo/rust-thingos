@@ -32,7 +32,7 @@ use ipc_helpers::provider::{ProviderLoop, ProviderRequest, ProviderResponse};
 use ipc_helpers::service_provider::{ServiceProviderEvent, ServiceProviderLoop};
 use spin::Mutex;
 use stem::abi::module_manifest::{MANIFEST_MAGIC, ManifestHeader, ModuleKind, device_kind_bytes};
-use stem::syscall::vfs::{vfs_mkdir, vfs_mount, vfs_symlink};
+use stem::syscall::vfs::{vfs_close, vfs_mkdir, vfs_mount, vfs_open, vfs_read, vfs_symlink};
 use stem::syscall::{
     device_alloc_dma, device_claim, device_dma_phys, device_irq_subscribe, device_irq_wait,
     device_map_mmio, port_create,
@@ -1417,9 +1417,25 @@ struct UsbBlockProvider {
 type SharedUsbBlockProvider = Arc<Mutex<UsbBlockProvider>>;
 
 impl UsbBlockProvider {
+    fn lookup_root_handle(payload: &[u8], handle: u64) -> ProviderResponse {
+        if payload.len() < 4 {
+            return ProviderResponse::err(Errno::EINVAL);
+        }
+        let path_len = u32::from_le_bytes(payload[0..4].try_into().unwrap()) as usize;
+        if 4 + path_len > payload.len() {
+            return ProviderResponse::err(Errno::EINVAL);
+        }
+        let path = core::str::from_utf8(&payload[4..4 + path_len]).unwrap_or("");
+        if path.is_empty() || path == "/" {
+            ProviderResponse::ok_u64(handle)
+        } else {
+            ProviderResponse::err(Errno::ENOENT)
+        }
+    }
+
     fn handle_rpc(&mut self, req: &ProviderRequest) -> ProviderResponse {
         match req.op {
-            VfsRpcOp::Lookup => ProviderResponse::ok_u64(1),
+            VfsRpcOp::Lookup => Self::lookup_root_handle(&req.payload, 1),
             VfsRpcOp::Stat => {
                 let size = self.storage.sector_count * self.storage.sector_size as u64;
                 ProviderResponse::ok_stat(S_IFREG | 0o444, size, 1)
@@ -1431,7 +1447,7 @@ impl UsbBlockProvider {
                 let offset = u64::from_le_bytes(req.payload[8..16].try_into().unwrap());
                 let len = u32::from_le_bytes(req.payload[16..20].try_into().unwrap()) as usize;
                 if len == 0 {
-                    return ProviderResponse::ok_bytes(&[]);
+                    return ProviderResponse::ok_read(&[]);
                 }
                 let sector_size = self.storage.sector_size as u64;
                 let start_lba = offset / sector_size;
@@ -1442,7 +1458,7 @@ impl UsbBlockProvider {
                 {
                     Ok(()) => {
                         let inner = (offset % sector_size) as usize;
-                        ProviderResponse::ok_bytes(&bounce[inner..inner + len])
+                        ProviderResponse::ok_read(&bounce[inner..inner + len])
                     }
                     Err(e) => {
                         warn!("ums: read failed: {}", e);
@@ -1469,7 +1485,7 @@ impl UsbBlockProvider {
         let sector_size = self.storage.sector_size as u64;
         let part_size = lba_count * sector_size;
         match req.op {
-            VfsRpcOp::Lookup => ProviderResponse::ok_u64(1),
+            VfsRpcOp::Lookup => Self::lookup_root_handle(&req.payload, part_ino),
             VfsRpcOp::Stat => ProviderResponse::ok_stat(S_IFREG | 0o444, part_size, part_ino),
             VfsRpcOp::Read => {
                 if req.payload.len() < 20 {
@@ -1478,10 +1494,10 @@ impl UsbBlockProvider {
                 let offset = u64::from_le_bytes(req.payload[8..16].try_into().unwrap());
                 let len = u32::from_le_bytes(req.payload[16..20].try_into().unwrap()) as usize;
                 if len == 0 {
-                    return ProviderResponse::ok_bytes(&[]);
+                    return ProviderResponse::ok_read(&[]);
                 }
                 if offset >= part_size {
-                    return ProviderResponse::ok_bytes(&[]);
+                    return ProviderResponse::ok_read(&[]);
                 }
                 let actual_len = len.min((part_size - offset) as usize);
                 let abs_offset = start_lba * sector_size + offset;
@@ -1496,7 +1512,7 @@ impl UsbBlockProvider {
                 match self.storage.read_sectors(&mut self.controller, s_lba, count, &mut bounce) {
                     Ok(()) => {
                         let inner = (abs_offset % sector_size) as usize;
-                        ProviderResponse::ok_bytes(&bounce[inner..inner + actual_len])
+                        ProviderResponse::ok_read(&bounce[inner..inner + actual_len])
                     }
                     Err(e) => {
                         warn!("ums: partition read failed: {}", e);
@@ -1845,6 +1861,36 @@ fn run_partition_provider(
     }
 }
 
+fn scan_mbr_partitions_from_vfs(
+    path: &str,
+    disk_sectors: u64,
+    sector_size: usize,
+) -> Vec<MbrPartition> {
+    let fd = match vfs_open(path, abi::syscall::vfs_flags::O_RDONLY) {
+        Ok(fd) => fd,
+        Err(e) => {
+            warn!("ums: partition scan: failed to open {}: {:?}", path, e);
+            return Vec::new();
+        }
+    };
+    let mut mbr_buf = vec![0u8; sector_size.max(512)];
+    let n = match vfs_read(fd, &mut mbr_buf) {
+        Ok(n) => n,
+        Err(e) => {
+            warn!("ums: partition scan: failed to read {} LBA 0: {:?}", path, e);
+            let _ = vfs_close(fd);
+            return Vec::new();
+        }
+    };
+    let _ = vfs_close(fd);
+    if n < 512 {
+        warn!("ums: partition scan: short read from {}: {} bytes", path, n);
+        return Vec::new();
+    }
+    info!("ums: partition scan: read {} LBA 0 ok", path);
+    parse_mbr_partitions(&mbr_buf, disk_sectors)
+}
+
 fn serve_usb_block(controller: XhciController, storage: UsbMassStorage) -> ! {
     let _ = vfs_mkdir("/dev/block");
     let _ = vfs_mkdir("/dev/disk");
@@ -1881,21 +1927,8 @@ fn serve_usb_block(controller: XhciController, storage: UsbMassStorage) -> ! {
     }
 
     let mut provider = UsbBlockProvider { controller, storage };
-
-    // Read LBA 0 to scan for MBR partitions.
     let sector_size = provider.storage.sector_size as usize;
     let disk_sectors = provider.storage.sector_count;
-    let mut mbr_buf = vec![0u8; sector_size.max(512)];
-    let parts = match provider.storage.read_sectors(&mut provider.controller, 0, 1, &mut mbr_buf) {
-        Ok(()) => {
-            info!("ums: partition scan: read LBA 0 ok");
-            parse_mbr_partitions(&mbr_buf, disk_sectors)
-        }
-        Err(e) => {
-            warn!("ums: partition scan: failed to read LBA 0: {}", e);
-            Vec::new()
-        }
-    };
 
     // Provider worker tasks run independently of the startup task that
     // subscribed the controller IRQ. Poll completions here so USB block reads
@@ -1905,6 +1938,11 @@ fn serve_usb_block(controller: XhciController, storage: UsbMassStorage) -> ! {
 
     let provider = Arc::new(Mutex::new(provider));
     spawn_whole_disk_provider(provider.clone(), ProviderLoop::new(v_r));
+
+    // Scan partitions through the mounted block provider so /dev/block/usb0 is
+    // already live if userland probes the whole disk while partition discovery
+    // is still in progress.
+    let parts = scan_mbr_partitions_from_vfs("/dev/block/usb0", disk_sectors, sector_size);
 
     // Mount a provider for each discovered MBR partition.  Keep the first
     // partition on the original xHCI task so the hot USB-FAT path uses the

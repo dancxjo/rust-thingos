@@ -392,7 +392,7 @@ impl ThingOsWorld {
         // Handle machine type and pflash - riscv64 requires special blockdev syntax
         match arch {
             "x86_64" => {
-                cmd.args(["-M", "q35,usb=off,vmport=off,i8042=on"]);
+                cmd.args(["-M", "q35,vmport=off,i8042=on"]);
                 cmd.args(["-device", "virtio-vga"]);
                 if options.qemu_xhci {
                     cmd.args(["-device", "qemu-xhci,id=xhci"]);
@@ -1025,8 +1025,8 @@ impl ThingOsWorld {
 
     /// Create a small MBR-partitioned FAT16 disk image at `path`.
     ///
-    /// The image contains a single FAT partition and a `hello.txt` file with
-    /// the text "hello from USB\n".  Uses Linux utilities (`mkdosfs`,
+    /// The image contains a single FAT partition, a `hello.txt` file with
+    /// the text "hello from USB\n", and a long-name file. Uses Linux utilities (`mkdosfs`,
     /// `mtools`) when available; falls back to writing a pre-built raw
     /// image when they are not.
     fn create_usb_fat_image(path: &Path) -> Result<(), Box<dyn std::error::Error>> {
@@ -1107,7 +1107,7 @@ impl ThingOsWorld {
             .into());
         }
 
-        // Write hello.txt via mcopy
+        // Write files via mcopy
         let drive_spec = format!("-i{}@@{}", path.to_string_lossy(), part_start_lba * 512);
         let mut child = std::process::Command::new("mcopy")
             .args([&drive_spec, "-", "::hello.txt"])
@@ -1116,6 +1116,19 @@ impl ThingOsWorld {
         {
             use std::io::Write;
             child.stdin.as_mut().unwrap().write_all(b"hello from USB\n")?;
+        }
+        let mcopy_out = child.wait_with_output()?;
+        if !mcopy_out.status.success() {
+            eprintln!("[bdd] mcopy warning: {}", String::from_utf8_lossy(&mcopy_out.stderr));
+        }
+
+        let mut child = std::process::Command::new("mcopy")
+            .args([&drive_spec, "-", "::long-file-name.txt"])
+            .stdin(std::process::Stdio::piped())
+            .spawn()?;
+        {
+            use std::io::Write;
+            child.stdin.as_mut().unwrap().write_all(b"hello from a long filename\n")?;
         }
         let mcopy_out = child.wait_with_output()?;
         if !mcopy_out.status.success() {
@@ -1214,6 +1227,9 @@ impl ThingOsWorld {
         // Cluster 2: end-of-chain
         img[fat1 + 4] = 0xFF;
         img[fat1 + 5] = 0xFF;
+        // Cluster 3: end-of-chain
+        img[fat1 + 6] = 0xFF;
+        img[fat1 + 7] = 0xFF;
 
         // FAT2 mirror
         let fat2 = fat1 + fat_size as usize * sector_size as usize;
@@ -1236,13 +1252,47 @@ impl ThingOsWorld {
         let fsz = content.len() as u32;
         img[e + 28..e + 32].copy_from_slice(&fsz.to_le_bytes());
 
+        // long-file-name.txt as two LFN entries followed by its 8.3 alias.
+        write_fat_lfn_entry(&mut img[root + 64..root + 96], 2, true, "e-name.txt");
+        write_fat_lfn_entry(&mut img[root + 96..root + 128], 1, false, "long-fil");
+        let long = root + 128;
+        img[long..long + 8].copy_from_slice(b"LONG-F~1");
+        img[long + 8..long + 11].copy_from_slice(b"TXT");
+        img[long + 11] = 0x20;
+        img[long + 26] = 3;
+        img[long + 27] = 0;
+        let long_content = b"hello from a long filename\n";
+        img[long + 28..long + 32].copy_from_slice(&(long_content.len() as u32).to_le_bytes());
+
         // File data at cluster 2
         let data = (part_start_lba as u32 + data_start_lba) as usize * sector_size as usize;
         img[data..data + content.len()].copy_from_slice(content);
+        let long_data = data + SECTORS_PER_CLUSTER as usize * sector_size as usize;
+        img[long_data..long_data + long_content.len()].copy_from_slice(long_content);
 
         let mut f = std::fs::File::create(path)?;
         f.write_all(&img)?;
         Ok(())
+    }
+}
+
+fn write_fat_lfn_entry(entry: &mut [u8], order: u8, last: bool, fragment: &str) {
+    entry.fill(0);
+    entry[0] = order | if last { 0x40 } else { 0 };
+    entry[11] = 0x0F;
+    let slots = [1usize, 3, 5, 7, 9, 14, 16, 18, 20, 22, 24, 28, 30];
+    let mut units = fragment.encode_utf16();
+    let mut terminated = false;
+    for idx in slots {
+        let code = if let Some(unit) = units.next() {
+            unit
+        } else if !terminated {
+            terminated = true;
+            0
+        } else {
+            0xFFFF
+        };
+        entry[idx..idx + 2].copy_from_slice(&code.to_le_bytes());
     }
 }
 

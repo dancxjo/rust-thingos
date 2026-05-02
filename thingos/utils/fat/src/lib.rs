@@ -1,7 +1,7 @@
 //! FAT Filesystem Parser (read-only)
 //!
 //! Minimal, read-only FAT16/FAT32 parser for reading files from block devices.
-//! Supports short 8.3 filenames and cluster-chain traversal.
+//! Supports long filenames, short 8.3 fallback names, and cluster-chain traversal.
 #![no_std]
 extern crate alloc;
 
@@ -189,6 +189,7 @@ impl FatFs {
     /// Skips deleted entries, volume labels, and LFN entries.
     pub fn list_dir(&self, dev: &dyn BlockDevice, first_cluster: u32) -> Vec<FatDirEntry> {
         let mut entries = Vec::new();
+        let mut pending_lfn = Vec::new();
 
         if matches!(self.fat_type, FatType::Fat16) && first_cluster == 0 {
             // FAT16 root directory occupies a fixed region
@@ -200,7 +201,7 @@ impl FatFs {
                 if dev.read_sectors(sector, 1, &mut buf).is_err() {
                     break;
                 }
-                if !self.parse_dir_sector(&buf, &mut entries) {
+                if !self.parse_dir_sector(&buf, &mut entries, &mut pending_lfn) {
                     break; // End-of-directory sentinel hit
                 }
             }
@@ -214,7 +215,7 @@ impl FatFs {
                     if dev.read_sectors(sector + i as u64, 1, &mut buf).is_err() {
                         return entries;
                     }
-                    if !self.parse_dir_sector(&buf, &mut entries) {
+                    if !self.parse_dir_sector(&buf, &mut entries, &mut pending_lfn) {
                         return entries;
                     }
                 }
@@ -230,7 +231,12 @@ impl FatFs {
     /// Parse one 512-byte directory sector into `out`.
     ///
     /// Returns `false` if the all-zero entry sentinel was found (no more entries).
-    fn parse_dir_sector(&self, buf: &[u8], out: &mut Vec<FatDirEntry>) -> bool {
+    fn parse_dir_sector(
+        &self,
+        buf: &[u8],
+        out: &mut Vec<FatDirEntry>,
+        pending_lfn: &mut Vec<(u8, String)>,
+    ) -> bool {
         let count = buf.len() / 32;
         for i in 0..count {
             let e = &buf[i * 32..(i + 1) * 32];
@@ -239,21 +245,31 @@ impl FatFs {
                 return false; // End-of-directory
             }
             if first_byte == 0xE5 {
+                pending_lfn.clear();
                 continue; // Deleted entry
             }
             let attr = e[11];
             if attr == 0x0F {
+                if let Some((order, fragment)) = parse_lfn_entry(e) {
+                    pending_lfn.push((order, fragment));
+                } else {
+                    pending_lfn.clear();
+                }
                 continue; // Long File Name entry
             }
             if attr & 0x08 != 0 {
+                pending_lfn.clear();
                 continue; // Volume label
             }
             let is_dir = (attr & 0x10) != 0;
 
             let Some(name) = parse_short_name(&e[0..11]) else {
+                pending_lfn.clear();
                 continue;
             };
+            let name = assemble_lfn(pending_lfn).unwrap_or(name);
             if name == "." || name == ".." {
+                pending_lfn.clear();
                 continue;
             }
 
@@ -267,6 +283,7 @@ impl FatFs {
             let size = u32::from_le_bytes([e[28], e[29], e[30], e[31]]);
 
             out.push(FatDirEntry { name, first_cluster, size, is_directory: is_dir });
+            pending_lfn.clear();
         }
         true
     }
@@ -385,6 +402,54 @@ impl FatFs {
 
 // ── Short name parsing ────────────────────────────────────────────────────────
 
+fn parse_lfn_entry(entry: &[u8]) -> Option<(u8, String)> {
+    if entry.len() < 32 || entry[11] != 0x0F {
+        return None;
+    }
+    let order = entry[0] & 0x1F;
+    if order == 0 || order > 20 {
+        return None;
+    }
+
+    let mut fragment = String::new();
+    for idx in [1usize, 3, 5, 7, 9, 14, 16, 18, 20, 22, 24, 28, 30] {
+        let code = u16::from_le_bytes([entry[idx], entry[idx + 1]]);
+        if code == 0x0000 {
+            break;
+        }
+        if code == 0xFFFF {
+            continue;
+        }
+        if let Some(ch) = char::from_u32(code as u32) {
+            fragment.push(ch);
+        }
+    }
+
+    Some((order, fragment))
+}
+
+fn assemble_lfn(parts: &mut Vec<(u8, String)>) -> Option<String> {
+    if parts.is_empty() || !parts.iter().any(|(order, _)| *order == 1) {
+        parts.clear();
+        return None;
+    }
+
+    parts.sort_by_key(|(order, _)| *order);
+    let mut name = String::new();
+    let mut expected = 1u8;
+    for (order, fragment) in parts.iter() {
+        if *order != expected {
+            parts.clear();
+            return None;
+        }
+        name.push_str(fragment);
+        expected += 1;
+    }
+    parts.clear();
+
+    if name.is_empty() { None } else { Some(name) }
+}
+
 /// Parse the raw 8.3 directory entry name bytes (11 bytes, no dot) into a
 /// lowercase String.  Returns `None` for deleted or empty entries.
 fn parse_short_name(raw: &[u8]) -> Option<String> {
@@ -491,6 +556,43 @@ mod tests {
         let mut raw = *b"README  TXT";
         raw[0] = 0xE5;
         assert!(parse_short_name(&raw).is_none());
+    }
+
+    fn write_lfn_entry(entry: &mut [u8], order: u8, last: bool, fragment: &str) {
+        entry.fill(0);
+        entry[0] = order | if last { 0x40 } else { 0 };
+        entry[11] = 0x0F;
+        entry[13] = 0;
+
+        let slots = [1usize, 3, 5, 7, 9, 14, 16, 18, 20, 22, 24, 28, 30];
+        let mut units = fragment.encode_utf16();
+        let mut terminated = false;
+        for idx in slots {
+            let code = if let Some(unit) = units.next() {
+                unit
+            } else if !terminated {
+                terminated = true;
+                0x0000
+            } else {
+                0xFFFF
+            };
+            entry[idx..idx + 2].copy_from_slice(&code.to_le_bytes());
+        }
+    }
+
+    #[test]
+    fn parse_lfn_entries_are_assembled_in_logical_order() {
+        let mut first = [0u8; 32];
+        let mut second = [0u8; 32];
+        write_lfn_entry(&mut second, 2, true, "me.txt");
+        write_lfn_entry(&mut first, 1, false, "LongFileNa");
+
+        let mut parts = Vec::new();
+        parts.push(parse_lfn_entry(&second).unwrap());
+        parts.push(parse_lfn_entry(&first).unwrap());
+
+        assert_eq!(assemble_lfn(&mut parts), Some("LongFileName.txt".to_string()));
+        assert!(parts.is_empty());
     }
 
     #[test]
@@ -608,6 +710,78 @@ mod tests {
         // Partial read
         let partial = fs.read_file(&dev, 2, content.len() as u32, 6, 4);
         assert_eq!(partial, b"test");
+    }
+
+    #[test]
+    fn roundtrip_fat16_volume_with_long_filename() {
+        const SECTOR_SIZE: usize = 512;
+        const RESERVED: u32 = 1;
+        const NUM_FATS: u32 = 2;
+        const ROOT_ENTRIES: u32 = 16;
+        const FAT_SIZE: u32 = 1;
+        const TOTAL_SECTORS: u32 = 32;
+
+        let root_dir_sectors = ROOT_ENTRIES * 32 / SECTOR_SIZE as u32;
+        let data_start = (RESERVED + NUM_FATS * FAT_SIZE + root_dir_sectors) as usize;
+        let mut img = vec![0u8; TOTAL_SECTORS as usize * SECTOR_SIZE];
+
+        {
+            let s = &mut img[0..SECTOR_SIZE];
+            s[0] = 0xEB;
+            s[1] = 0x58;
+            s[2] = 0x90;
+            s[3..11].copy_from_slice(b"MSWIN4.1");
+            s[11..13].copy_from_slice(&(SECTOR_SIZE as u16).to_le_bytes());
+            s[13] = 1;
+            s[14..16].copy_from_slice(&(RESERVED as u16).to_le_bytes());
+            s[16] = NUM_FATS as u8;
+            s[17..19].copy_from_slice(&(ROOT_ENTRIES as u16).to_le_bytes());
+            s[19..21].copy_from_slice(&(TOTAL_SECTORS as u16).to_le_bytes());
+            s[21] = 0xF8;
+            s[22..24].copy_from_slice(&(FAT_SIZE as u16).to_le_bytes());
+            s[38] = 0x29;
+            s[43..54].copy_from_slice(b"TEST       ");
+            s[54..62].copy_from_slice(b"FAT16   ");
+            s[510] = 0x55;
+            s[511] = 0xAA;
+        }
+
+        let fat1 = RESERVED as usize * SECTOR_SIZE;
+        img[fat1] = 0xF8;
+        img[fat1 + 1] = 0xFF;
+        img[fat1 + 2] = 0xFF;
+        img[fat1 + 3] = 0xFF;
+        img[fat1 + 4] = 0xFF;
+        img[fat1 + 5] = 0xFF;
+        let fat2 = (RESERVED + FAT_SIZE) as usize * SECTOR_SIZE;
+        img.copy_within(fat1..fat1 + SECTOR_SIZE, fat2);
+
+        let root = (RESERVED + NUM_FATS * FAT_SIZE) as usize * SECTOR_SIZE;
+        write_lfn_entry(&mut img[root..root + 32], 2, true, "me.txt");
+        write_lfn_entry(&mut img[root + 32..root + 64], 1, false, "LongFileNa");
+        let short = root + 64;
+        img[short..short + 8].copy_from_slice(b"LONGFI~1");
+        img[short + 8..short + 11].copy_from_slice(b"TXT");
+        img[short + 11] = 0x20;
+        img[short + 26] = 2;
+        let content = b"long name contents\n";
+        img[short + 28..short + 32].copy_from_slice(&(content.len() as u32).to_le_bytes());
+
+        let data_off = data_start * SECTOR_SIZE;
+        img[data_off..data_off + content.len()].copy_from_slice(content);
+
+        let dev = MockDev { data: img };
+        let fs = FatFs::probe(&dev).expect("probe should succeed");
+        let entries = fs.list_dir(&dev, 0);
+        assert_eq!(entries.len(), 1);
+        assert_eq!(entries[0].name, "LongFileName.txt");
+
+        let entry =
+            fs.lookup_path(&dev, "LongFileName.txt").expect("lookup_path should use long filename");
+        assert_eq!(
+            fs.read_file(&dev, entry.first_cluster, entry.size, 0, entry.size as usize),
+            content
+        );
     }
 
     #[test]

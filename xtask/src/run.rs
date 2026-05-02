@@ -73,7 +73,7 @@ fn push_x86_interactive_display_args<'a>(
         return;
     }
 
-    args.extend_from_slice(&["-device", "virtio-vga", "-M", "q35,usb=off,vmport=off,i8042=on"]);
+    args.extend_from_slice(&["-device", "virtio-vga", "-M", "q35,vmport=off,i8042=on"]);
 
     if !has_user_display_args(qemu_flags) {
         // Bloom draws/manages the guest cursor. Forcing QEMU's host cursor
@@ -146,6 +146,7 @@ pub fn run(
         "x86_64" => {
             let pflash0 = format!("if=pflash,unit=0,format=raw,file={ovmf_code},readonly=on");
             let pflash1 = format!("if=pflash,unit=1,format=raw,file={ovmf_vars}");
+            let usb_boot_drive = format!("file={iso},if=none,id=usbstick,format=raw,readonly=on");
             let netdev_arg =
                 "virtio-net-pci,netdev=n0,mac=52:54:00:12:34:56,disable-legacy=on".to_string();
             let netdev_val = netdev.to_string();
@@ -158,8 +159,12 @@ pub fn run(
                     &pflash0,
                     "-drive",
                     &pflash1,
-                    "-cdrom",
-                    iso,
+                    "-drive",
+                    &usb_boot_drive,
+                    "-device",
+                    "qemu-xhci,id=xhci",
+                    "-device",
+                    "usb-storage,bus=xhci.0,drive=usbstick,bootindex=1",
                     "-no-reboot",
                     "-d",
                     "int,cpu_reset",
@@ -178,8 +183,12 @@ pub fn run(
                     &pflash0,
                     "-drive",
                     &pflash1,
-                    "-cdrom",
-                    iso,
+                    "-drive",
+                    &usb_boot_drive,
+                    "-device",
+                    "qemu-xhci,id=xhci",
+                    "-device",
+                    "usb-storage,bus=xhci.0,drive=usbstick,bootindex=1",
                     "-no-reboot",
                     "-device",
                     &netdev_arg,

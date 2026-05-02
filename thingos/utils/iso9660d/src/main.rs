@@ -288,7 +288,16 @@ fn try_mount_config(config: &MountConfig) -> Option<(IsoFs, VfsBlockDevice, Port
 }
 
 fn try_scan_and_mount(mount_point: &str) -> Option<(IsoFs, VfsBlockDevice, PortHandle)> {
-    let dir_fd = vfs_open("/dev/storage", abi::syscall::vfs_flags::O_RDONLY).ok()?;
+    try_scan_dir_and_mount("/dev/storage", mount_point)
+        .or_else(|| try_scan_dir_and_mount("/dev/block", mount_point))
+        .or_else(|| try_probe_usb_block_paths(mount_point))
+}
+
+fn try_scan_dir_and_mount(
+    dir_path: &str,
+    mount_point: &str,
+) -> Option<(IsoFs, VfsBlockDevice, PortHandle)> {
+    let dir_fd = vfs_open(dir_path, abi::syscall::vfs_flags::O_RDONLY).ok()?;
     let mut buf = [0u8; 4096];
     let n = vfs_readdir(dir_fd, &mut buf).unwrap_or(0);
     vfs_close(dir_fd);
@@ -301,7 +310,7 @@ fn try_scan_and_mount(mount_point: &str) -> Option<(IsoFs, VfsBlockDevice, PortH
         }
         if end > offset {
             if let Ok(name) = core::str::from_utf8(&buf[offset..end]) {
-                let path = format!("/dev/storage/{}", name);
+                let path = format!("{}/{}", dir_path, name);
                 if let Some(mounted) = try_mount_device(&path, name, mount_point) {
                     return Some(mounted);
                 }
@@ -312,11 +321,31 @@ fn try_scan_and_mount(mount_point: &str) -> Option<(IsoFs, VfsBlockDevice, PortH
     None
 }
 
+fn try_probe_usb_block_paths(mount_point: &str) -> Option<(IsoFs, VfsBlockDevice, PortHandle)> {
+    for disk in 0..4 {
+        let path = format!("/dev/block/usb{}", disk);
+        if let Some(mounted) = try_mount_device(&path, &path, mount_point) {
+            return Some(mounted);
+        }
+
+        for part in 1..8 {
+            let path = format!("/dev/block/usb{}p{}", disk, part);
+            if let Some(mounted) = try_mount_device(&path, &path, mount_point) {
+                return Some(mounted);
+            }
+        }
+    }
+    None
+}
+
 fn try_mount_device(
     device_path: &str,
     device_name: &str,
     mount_point: &str,
 ) -> Option<(IsoFs, VfsBlockDevice, PortHandle)> {
+    let fd = vfs_open(device_path, abi::syscall::vfs_flags::O_RDONLY).ok()?;
+    let _ = vfs_close(fd);
+
     info!("iso9660d: probing device {}", device_name);
     let dev = VfsBlockDevice { path: device_path.to_string() };
     let fs = IsoFs::probe(&dev)?;

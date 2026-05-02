@@ -233,35 +233,47 @@ fn is_usb_partition_name(name: &str) -> bool {
     !rest.is_empty() && rest.chars().all(|c| c.is_ascii_digit())
 }
 
+fn push_unique_path(paths: &mut Vec<String>, path: String) {
+    if !paths.iter().any(|existing| existing == &path) {
+        paths.push(path);
+    }
+}
+
 /// Read null-separated names from `/dev/block/` and return those that look
 /// like USB partition devices (e.g. `usb0p1`, `usb1p2`).
 fn find_usb_partitions() -> Vec<String> {
     let mut result = Vec::new();
-    let dir_fd = match vfs_open("/dev/block", abi::syscall::vfs_flags::O_RDONLY) {
-        Ok(fd) => fd,
-        Err(_) => return result,
-    };
-    let mut buf = [0u8; 4096];
-    let n = vfs_readdir(dir_fd, &mut buf).unwrap_or(0);
-    let _ = vfs_close(dir_fd);
 
-    let mut offset = 0;
-    while offset < n {
-        let mut end = offset;
-        while end < n && buf[end] != 0 {
-            end += 1;
-        }
-        if end > offset {
-            if let Ok(name) = core::str::from_utf8(&buf[offset..end]) {
-                // Accept names of the form "usb<digits>p<digits>" only.
-                // This prevents false matches on names like "usb_port".
-                if is_usb_partition_name(name) {
-                    result.push(format!("/dev/block/{}", name));
+    if let Ok(dir_fd) = vfs_open("/dev/block", abi::syscall::vfs_flags::O_RDONLY) {
+        let mut buf = [0u8; 4096];
+        let n = vfs_readdir(dir_fd, &mut buf).unwrap_or(0);
+        let _ = vfs_close(dir_fd);
+
+        let mut offset = 0;
+        while offset < n {
+            let mut end = offset;
+            while end < n && buf[end] != 0 {
+                end += 1;
+            }
+            if end > offset {
+                if let Ok(name) = core::str::from_utf8(&buf[offset..end]) {
+                    // Accept names of the form "usb<digits>p<digits>" only.
+                    // This prevents false matches on names like "usb_port".
+                    if is_usb_partition_name(name) {
+                        push_unique_path(&mut result, format!("/dev/block/{}", name));
+                    }
                 }
             }
+            offset = end + 1;
         }
-        offset = end + 1;
     }
+
+    for disk in 0..4 {
+        for part in 1..8 {
+            push_unique_path(&mut result, format!("/dev/block/usb{}p{}", disk, part));
+        }
+    }
+
     result
 }
 
