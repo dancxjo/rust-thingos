@@ -12,12 +12,12 @@ use stem::abi::syscall::vfs_flags;
 use stem::abi::termios;
 use stem::syscall::{argv_get, exit, vfs, vfs_close, vfs_open, vfs_read, vfs_write};
 
-const TTY_FD: u32 = 0;
 const DEFAULT_ROWS: usize = 24;
 const DEFAULT_COLS: usize = 80;
 const READ_BUF_SIZE: usize = 4096;
 
 struct TtyModeGuard {
+    fd: u32,
     original: Option<termios::Termios>,
 }
 
@@ -25,7 +25,7 @@ impl TtyModeGuard {
     fn raw(fd: u32) -> Self {
         let mut original = termios::Termios::default();
         if vfs::tcgetattr(fd, &mut original).is_err() {
-            return Self { original: None };
+            return Self { fd, original: None };
         }
 
         let mut raw = original;
@@ -36,10 +36,10 @@ impl TtyModeGuard {
         raw.c_cc[termios::VTIME] = 0;
 
         if vfs::tcsetattr(fd, &raw).is_err() {
-            return Self { original: None };
+            return Self { fd, original: None };
         }
 
-        Self { original: Some(original) }
+        Self { fd, original: Some(original) }
     }
 
     fn is_active(&self) -> bool {
@@ -50,7 +50,7 @@ impl TtyModeGuard {
 impl Drop for TtyModeGuard {
     fn drop(&mut self) {
         if let Some(original) = self.original.as_ref() {
-            let _ = vfs::tcsetattr(TTY_FD, original);
+            let _ = vfs::tcsetattr(self.fd, original);
         }
     }
 }
@@ -215,7 +215,7 @@ fn line_end(data: &[u8], starts: &[usize], line: usize) -> usize {
     if line + 1 < starts.len() { starts[line + 1] } else { data.len() }
 }
 
-fn terminal_size() -> (usize, usize) {
+fn terminal_size(tty_fd: u32) -> (usize, usize) {
     let mut winsize = termios::Winsize::default();
     let call = DeviceCall {
         kind: DeviceKind::Terminal,
@@ -226,7 +226,7 @@ fn terminal_size() -> (usize, usize) {
         out_len: core::mem::size_of::<termios::Winsize>() as u32,
     };
 
-    if vfs::vfs_device_call_raw(TTY_FD, &call).is_ok() {
+    if vfs::vfs_device_call_raw(tty_fd, &call).is_ok() {
         let rows = if winsize.ws_row == 0 { DEFAULT_ROWS } else { winsize.ws_row as usize };
         let cols = if winsize.ws_col == 0 { DEFAULT_COLS } else { winsize.ws_col as usize };
         (rows, cols)
@@ -307,26 +307,26 @@ fn render(data: &[u8], starts: &[usize], top_line: usize, rows: usize, cols: usi
     let _ = write_all(1, &prompt_bytes);
 }
 
-fn read_command() -> Option<u8> {
+fn read_command(tty_fd: u32) -> Option<u8> {
     let mut one = [0u8; 1];
-    match vfs_read(0, &mut one) {
+    match vfs_read(tty_fd, &mut one) {
         Ok(0) | Err(_) => None,
         Ok(_) if one[0] == 0x1b => {
-            if vfs_read(0, &mut one).unwrap_or(0) == 0 || one[0] != b'[' {
+            if vfs_read(tty_fd, &mut one).unwrap_or(0) == 0 || one[0] != b'[' {
                 return Some(0x1b);
             }
-            if vfs_read(0, &mut one).unwrap_or(0) == 0 {
+            if vfs_read(tty_fd, &mut one).unwrap_or(0) == 0 {
                 return Some(0x1b);
             }
             match one[0] {
                 b'A' => Some(b'k'),
                 b'B' => Some(b'j'),
                 b'5' => {
-                    let _ = vfs_read(0, &mut one);
+                    let _ = vfs_read(tty_fd, &mut one);
                     Some(b'b')
                 }
                 b'6' => {
-                    let _ = vfs_read(0, &mut one);
+                    let _ = vfs_read(tty_fd, &mut one);
                     Some(b' ')
                 }
                 _ => Some(0x1b),
@@ -336,15 +336,15 @@ fn read_command() -> Option<u8> {
     }
 }
 
-fn page(data: &[u8], starts: &[usize], quit_if_one_screen: bool) {
-    let (rows, cols) = terminal_size();
+fn page(data: &[u8], starts: &[usize], quit_if_one_screen: bool, tty_fd: u32) {
+    let (rows, cols) = terminal_size(tty_fd);
     let page_lines = visible_line_count(rows);
     if quit_if_one_screen && starts.len() <= page_lines {
         let _ = write_all(1, data);
         return;
     }
 
-    let tty_guard = TtyModeGuard::raw(TTY_FD);
+    let tty_guard = TtyModeGuard::raw(tty_fd);
     if !tty_guard.is_active() {
         let _ = write_all(1, data);
         return;
@@ -354,7 +354,7 @@ fn page(data: &[u8], starts: &[usize], quit_if_one_screen: bool) {
     let mut top_line = 0usize;
     loop {
         render(data, starts, top_line, rows, cols);
-        match read_command() {
+        match read_command(tty_fd) {
             Some(b'q') | Some(0x03) | Some(0x04) => break,
             Some(b' ') | Some(b'f') => {
                 top_line = top_line.saturating_add(page_lines).min(starts.len().saturating_sub(1));
@@ -371,7 +371,7 @@ fn page(data: &[u8], starts: &[usize], quit_if_one_screen: bool) {
                     1,
                     b"\r\x1B[Kq quit  space/f page down  b page up  j/k line  g/G top/bottom",
                 );
-                let _ = read_command();
+                let _ = read_command(tty_fd);
             }
             None => break,
             _ => {}
@@ -394,14 +394,29 @@ fn main(_arg: usize) -> ! {
         Err(_) => exit(1),
     };
 
-    let stdin_is_tty = vfs::vfs_isatty(0).unwrap_or(false);
     let stdout_is_tty = vfs::vfs_isatty(1).unwrap_or(false);
-    if !stdin_is_tty || !stdout_is_tty {
+    if !stdout_is_tty {
         let _ = write_all(1, &data);
         exit(0);
     }
 
+    let stdin_is_tty = vfs::vfs_isatty(0).unwrap_or(false);
+    let control_fd = if stdin_is_tty {
+        0
+    } else {
+        match vfs_open("/dev/console", vfs_flags::O_RDWR) {
+            Ok(fd) => fd,
+            Err(_) => {
+                let _ = write_all(1, &data);
+                exit(0);
+            }
+        }
+    };
+
     let starts = line_starts(&data);
-    page(&data, &starts, parsed.quit_if_one_screen);
+    page(&data, &starts, parsed.quit_if_one_screen, control_fd);
+    if control_fd != 0 {
+        let _ = vfs_close(control_fd);
+    }
     exit(0)
 }

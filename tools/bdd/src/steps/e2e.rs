@@ -468,6 +468,68 @@ async fn when_type_on_serial(world: &mut ThingOsWorld, text: String) -> Result<(
     Ok(())
 }
 
+#[when(regex = r#"^I start "(.+)" on the serial console$"#)]
+async fn when_start_on_serial(world: &mut ThingOsWorld, text: String) -> Result<(), StepError> {
+    eprintln!("│  │  │      Starting on serial without waiting for prompt: {}", text);
+
+    world.ensure_serial_console_interactive(60.0).await.map_err(|e| StepError(e.to_string()))?;
+
+    world.serial_checkpoint = world.get_serial_log().await.len();
+    world.last_typed_command = Some(text.clone());
+
+    let mut data = text.into_bytes();
+    if !data.ends_with(b"\n") {
+        data.push(b'\n');
+    }
+
+    for b in data {
+        world
+            .serial_write(&[b])
+            .await
+            .map_err(|e| StepError(format!("Failed to write to serial: {}", e)))?;
+        tokio::time::sleep(std::time::Duration::from_millis(15)).await;
+    }
+
+    tokio::time::sleep(std::time::Duration::from_millis(250)).await;
+    Ok(())
+}
+
+#[when(regex = r#"^I send "(.+)" to the serial console$"#)]
+async fn when_send_to_serial(world: &mut ThingOsWorld, text: String) -> Result<(), StepError> {
+    eprintln!("│  │  │      Sending to serial: {}", text);
+
+    world.ensure_serial_console_interactive(60.0).await.map_err(|e| StepError(e.to_string()))?;
+
+    for b in text.into_bytes() {
+        world
+            .serial_write(&[b])
+            .await
+            .map_err(|e| StepError(format!("Failed to write to serial: {}", e)))?;
+        tokio::time::sleep(std::time::Duration::from_millis(15)).await;
+    }
+
+    Ok(())
+}
+
+#[then("the shell prompt should return")]
+async fn then_shell_prompt_should_return(world: &mut ThingOsWorld) -> Result<(), StepError> {
+    let start = std::time::Instant::now();
+    let timeout = std::time::Duration::from_secs(30);
+
+    loop {
+        let log = world.get_serial_log().await;
+        let start_offset = world.serial_checkpoint.min(log.len());
+        let recent = strip_ansi(&log[start_offset..]);
+        if shell_prompt_present(&recent) {
+            return Ok(());
+        }
+        if start.elapsed() >= timeout {
+            return Err(StepError("Timeout waiting for shell prompt to return".to_string()));
+        }
+        tokio::time::sleep(std::time::Duration::from_millis(50)).await;
+    }
+}
+
 #[when(regex = r#"^the shell command "(.+)" succeeds$"#)]
 async fn when_shell_command_succeeds(
     world: &mut ThingOsWorld,
