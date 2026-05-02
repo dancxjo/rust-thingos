@@ -523,7 +523,7 @@ impl InputState {
                 p.copy_from_slice(&payload[..KeyEventPayload::SIZE]);
                 let key = KeyEventPayload::from_bytes(&p);
                 let raw_key = key.key;
-                stem::info!(
+                stem::trace!(
                     "bloom: KeyDown received: {:?} (raw={:#06x}, mods={:?}, repeat={})",
                     key.key(),
                     raw_key,
@@ -1238,7 +1238,7 @@ impl BloomInputTrace {
         let enabled = should_log_input(event_no);
         let start_ns = stem::monotonic_ns();
         if enabled {
-            stem::info!(
+            stem::trace!(
                 "bloom: handle_bristle_event entry event={} type={} start_ns={}",
                 event_no,
                 event_type_name(event_type),
@@ -1253,7 +1253,7 @@ impl Drop for BloomInputTrace {
     fn drop(&mut self) {
         if self.enabled {
             let end_ns = stem::monotonic_ns();
-            stem::info!(
+            stem::trace!(
                 "bloom: handle_bristle_event exit event={} type={} elapsed_ns={}",
                 self.event_no,
                 event_type_name(self.event_type),

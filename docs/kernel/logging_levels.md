@@ -12,6 +12,31 @@ This document defines the canonical logging level semantics for ThingOS kernel a
 | `debug!` | Developer diagnostics | "allocated framebuffer pool (n=3)", "state transition Free → Acquired" | Moderate |
 | `trace!` | Extremely verbose, per-event/per-iteration | per-drawlist op, per-interrupt, per-packet, per-node traversal | Very High |
 
+## Serial Mirroring
+
+ThingOS keeps two log thresholds:
+
+- `loglevel` controls which records are retained in the kernel log buffer (for
+  example `/dev/kmsg`).
+- `serial_loglevel` controls which retained-style records are mirrored to the
+  UART serial console.
+
+The default command-line behavior remains compatible: `loglevel=debug` sets
+both thresholds to debug unless `serial_loglevel=...` appears later on the
+kernel command line.  At runtime, `loglevel <0-5>` sets both thresholds, while
+`loglevel serial <0-5>` lowers or raises only UART mirroring.  For input-heavy
+debugging, prefer `loglevel=trace serial_loglevel=warn` so detailed records
+remain readable from `/dev/kmsg` without putting serial I/O in hot input paths.
+
+Serial output is deferred through BRAN's serial ring and drained from UART IRQ,
+timer, and idle paths.  Normal logging producers must enqueue only; synchronous
+serial output is reserved for panic/fatal paths.
+
+Hot input diagnostics should also emit compact binary summaries through
+`SYS_TRACE_MARK_INPUT`/`SYS_TRACE_READ` instead of per-event serial text.  The
+PS/2 mouse driver, bristle, and Bloom input service publish rate-limited input
+summary events to the trace ring.
+
 ## Detailed Semantics
 
 ### `error!` - Correctness Impact
@@ -92,6 +117,9 @@ kinfo!("scheduler running");
 ```rust
 // Don't log repetitive events
 info!("rendering frame {}", frame_num); // Use debug! or trace! instead
+
+// Don't log input events
+info!("KeyDown received: {:?}", key); // Use trace! or a rate-limited summary
 
 // Don't log intermediate steps
 info!("allocating buffer..."); // Use debug! instead

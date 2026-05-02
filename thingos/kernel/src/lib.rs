@@ -78,7 +78,7 @@ fn parse_loglevel_value(raw: &str) -> Option<u8> {
     }
 }
 
-fn parse_cmdline_loglevel(cmdline: &str) -> Option<u8> {
+fn parse_cmdline_level_key(cmdline: &str, key: &str) -> Option<u8> {
     let mut parsed = None;
     let mut expect_value = false;
 
@@ -91,19 +91,29 @@ fn parse_cmdline_loglevel(cmdline: &str) -> Option<u8> {
             continue;
         }
 
-        if let Some(value) = token.strip_prefix("loglevel=") {
-            if let Some(level) = parse_loglevel_value(value) {
-                parsed = Some(level);
+        if let Some(rest) = token.strip_prefix(key) {
+            if let Some(value) = rest.strip_prefix('=') {
+                if let Some(level) = parse_loglevel_value(value) {
+                    parsed = Some(level);
+                }
+                continue;
             }
-            continue;
         }
 
-        if token.eq_ignore_ascii_case("loglevel") {
+        if token.eq_ignore_ascii_case(key) {
             expect_value = true;
         }
     }
 
     parsed
+}
+
+fn parse_cmdline_loglevel(cmdline: &str) -> Option<u8> {
+    parse_cmdline_level_key(cmdline, "loglevel")
+}
+
+fn parse_cmdline_serial_loglevel(cmdline: &str) -> Option<u8> {
+    parse_cmdline_level_key(cmdline, "serial_loglevel")
 }
 
 #[unsafe(no_mangle)]
@@ -1016,8 +1026,13 @@ pub fn start<R: BootRuntime>(runtime: &'static R) -> ! {
         );
     }
 
-    if let Some(level) = parse_cmdline_loglevel(runtime.get_kernel_cmdline()) {
+    let kernel_cmdline = runtime.get_kernel_cmdline();
+    if let Some(level) = parse_cmdline_loglevel(kernel_cmdline) {
         crate::logging::set_log_level(level);
+        crate::logging::set_serial_log_level(level);
+    }
+    if let Some(level) = parse_cmdline_serial_loglevel(kernel_cmdline) {
+        crate::logging::set_serial_log_level(level);
     }
 
     unsafe { crate::logging::init(runtime) };
@@ -1815,7 +1830,7 @@ pub fn scan_pci() {
 
 #[cfg(test)]
 mod cmdline_loglevel_tests {
-    use super::parse_cmdline_loglevel;
+    use super::{parse_cmdline_loglevel, parse_cmdline_serial_loglevel};
 
     #[test]
     fn parses_numeric_loglevel() {
@@ -1844,6 +1859,17 @@ mod cmdline_loglevel_tests {
     #[test]
     fn last_valid_occurrence_wins() {
         assert_eq!(parse_cmdline_loglevel("loglevel=2 loglevel=trace"), Some(5));
+    }
+
+    #[test]
+    fn parses_serial_loglevel_independently() {
+        assert_eq!(parse_cmdline_serial_loglevel("loglevel=debug serial_loglevel=warn"), Some(2));
+        assert_eq!(parse_cmdline_loglevel("loglevel=debug serial_loglevel=warn"), Some(4));
+    }
+
+    #[test]
+    fn parses_serial_loglevel_space_separated_form() {
+        assert_eq!(parse_cmdline_serial_loglevel("display=bootfb serial_loglevel off"), Some(0));
     }
 }
 

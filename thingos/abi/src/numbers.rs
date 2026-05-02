@@ -110,6 +110,7 @@ pub const SYS_DEBUG_WRITE: u32 = 0x1402;
 pub const SYS_LOG_WRITE: u32 = 0x1403;
 pub const SYS_TRACE_READ: u32 = 0x1404;
 pub const SYS_CONSOLE_DISABLE: u32 = 0x1405;
+pub const SYS_TRACE_MARK_INPUT: u32 = 0x1406;
 
 // ============================================================================
 // Memory & Virtual Mapping (0x2000)
@@ -399,6 +400,8 @@ pub const SYS_ENTROPY_SEED: u32 = 0x7004;
 ///   4: last_event_len — byte length of last-event string
 ///   5: last_dispatch_ns — monotonic nanosecond timestamp of last dispatch
 pub const SYS_SERVICE_LOOP_REPORT: u32 = 0x7005;
+/// Set the minimum log level mirrored to the serial console only.
+pub const SYS_LOG_SET_SERIAL_LEVEL: u32 = 0x7006;
 
 pub mod reboot_cmd {
     pub const RESTART: u32 = 0;

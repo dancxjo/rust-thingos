@@ -35,6 +35,22 @@ pub fn sys_trace_read(ptr: usize, len: usize) -> SysResult<usize> {
     Ok(count)
 }
 
+pub fn sys_trace_mark_input(
+    source: usize,
+    bytes: usize,
+    events: usize,
+    drops: usize,
+) -> SysResult<usize> {
+    irq_ring::push(TraceEvent::InputSummary {
+        source: source.min(u8::MAX as usize) as u8,
+        events: events.min(u32::MAX as usize) as u32,
+        bytes: bytes.min(u32::MAX as usize) as u32,
+        drops: drops.min(u32::MAX as usize) as u32,
+        timestamp: crate::trace::now_or_zero(),
+    });
+    Ok(0)
+}
+
 /// Registered boot console disable function (set by bran at init)
 static CONSOLE_DISABLE_FN: AtomicPtr<()> = AtomicPtr::new(core::ptr::null_mut());
 

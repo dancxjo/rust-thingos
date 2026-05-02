@@ -99,6 +99,11 @@ static PANIC_ACTIVE: AtomicBool = AtomicBool::new(false);
 /// command-line (`loglevel=debug`) or `SYS_SET_PARAM`.
 static MIN_LOG_LEVEL: AtomicU8 = AtomicU8::new(3);
 
+/// Minimum log level mirrored to the serial console.  This is intentionally
+/// separate from [`MIN_LOG_LEVEL`] so `/dev/kmsg` can retain detail while the
+/// UART stays quiet enough for input-heavy sessions.
+static SERIAL_LOG_LEVEL: AtomicU8 = AtomicU8::new(3);
+
 /// Set the minimum log level for output (0=Off, 1=Error+, 2=Warn+, etc.)
 pub fn set_log_level(level: u8) {
     MIN_LOG_LEVEL.store(level, Ordering::Relaxed);
@@ -107,6 +112,16 @@ pub fn set_log_level(level: u8) {
 /// Get the current minimum log level
 pub fn get_log_level() -> u8 {
     MIN_LOG_LEVEL.load(Ordering::Relaxed)
+}
+
+/// Set the minimum log level mirrored to serial output.
+pub fn set_serial_log_level(level: u8) {
+    SERIAL_LOG_LEVEL.store(level, Ordering::Relaxed);
+}
+
+/// Get the current serial mirror log level.
+pub fn get_serial_log_level() -> u8 {
+    SERIAL_LOG_LEVEL.load(Ordering::Relaxed)
 }
 
 /// Cycle the minimum log level for low-level hotkey handling.
@@ -130,7 +145,10 @@ pub fn cycle_log_level() -> u8 {
             Ordering::Relaxed,
             Ordering::Relaxed,
         ) {
-            Ok(_) => return next,
+            Ok(_) => {
+                set_serial_log_level(next);
+                return next;
+            }
             Err(actual) => current = actual,
         }
     }
@@ -182,6 +200,21 @@ fn logger_runtime() -> Option<&'static dyn BootRuntimeBase> {
     if LOGGER_READY.load(Ordering::Acquire) { unsafe { LOGGER_RUNTIME } } else { None }
 }
 
+#[inline]
+fn level_enabled(setting: u8, level: Level) -> bool {
+    setting > 0 && (level as u8) <= setting
+}
+
+#[inline]
+fn should_record_log(level: Level) -> bool {
+    level_enabled(MIN_LOG_LEVEL.load(Ordering::Relaxed), level)
+}
+
+#[inline]
+fn should_serial_log(level: Level) -> bool {
+    level_enabled(SERIAL_LOG_LEVEL.load(Ordering::Relaxed), level)
+}
+
 /// RAII guard for log transactions (multi-line atomic output)
 pub struct LogTransaction {
     #[allow(dead_code)]
@@ -198,7 +231,7 @@ impl LogTransaction {
         // Emit BEGIN marker (always, like contract)
         let _seq = GLOBAL_SEQ.fetch_add(1, Ordering::Relaxed);
 
-        if !MUTE_SERIAL.load(Ordering::Relaxed) {
+        if should_serial_log(Level::Info) && !MUTE_SERIAL.load(Ordering::Relaxed) {
             if let Some(runtime) = logger_runtime() {
                 let ts = runtime.mono_ticks();
                 let mut writer = Logger::new(runtime);
@@ -215,7 +248,7 @@ impl Drop for LogTransaction {
         // Emit END marker (always, like contract)
         let _seq = GLOBAL_SEQ.fetch_add(1, Ordering::Relaxed);
 
-        if !MUTE_SERIAL.load(Ordering::Relaxed) {
+        if should_serial_log(Level::Info) && !MUTE_SERIAL.load(Ordering::Relaxed) {
             if let Some(runtime) = logger_runtime() {
                 let ts = runtime.mono_ticks();
                 let mut writer = Logger::new(runtime);
@@ -341,15 +374,6 @@ fn level_to_colored_str(level: Level) -> &'static str {
     }
 }
 
-/// Check if this level should be logged (considering MIN_LOG_LEVEL)
-#[inline]
-fn should_log(level: Level) -> bool {
-    let min = MIN_LOG_LEVEL.load(Ordering::Relaxed);
-    // If min is 0, all log output is disabled.
-    // Otherwise, check if level <= min (Error=1 is most severe, Trace=5 is least)
-    min > 0 && (level as u8) <= min
-}
-
 /// Maximum size of a pre-formatted log line (truncated if exceeded).
 const LOG_LINE_BUF_SIZE: usize = 1024;
 
@@ -398,8 +422,11 @@ pub fn _log_event(
     fields: &[(&'static str, u64)],
     _about: &[u64],
 ) {
+    let record_log = should_record_log(meta.level);
+    let serial_log = should_serial_log(meta.level) && !MUTE_SERIAL.load(Ordering::Relaxed);
+
     // Fast path: bail out before any formatting work.
-    if !should_log(meta.level) {
+    if !record_log && !serial_log {
         return;
     }
     let _seq = GLOBAL_SEQ.fetch_add(1, Ordering::Relaxed);
@@ -415,7 +442,7 @@ pub fn _log_event(
     // 1. Serial Output — pre-format the line before handing it to the deferred
     //    output rings. Each emitted chunk uses an atomic reservation, keeping
     //    producers non-blocking on spawn / syscall hot paths.
-    if !MUTE_SERIAL.load(Ordering::Relaxed) {
+    if serial_log {
         // Format: [TIME] [LEVEL] [SOURCE] [CPUx] Message [fields]\n
         let mut linebuf = FixedBuf::new();
         let _ = write!(
@@ -442,7 +469,7 @@ pub fn _log_event(
 
     // 2. Log Buffer Output — plain (no ANSI colour codes) version stored in
     //    the in-memory ring buffer for later retrieval.
-    {
+    if record_log {
         let mut writer = LogBufferWriter;
         let _ = write!(writer, "[{}] [{}] [{}] [CPU{}] ", ts, meta.level.as_str(), event_str, cpu);
         let _ = writer.write_fmt(msg_fmt);
@@ -675,6 +702,7 @@ mod tests {
     fn reset_test_state(min_level: u8) {
         MUTE_SERIAL.store(true, Ordering::Relaxed);
         set_log_level(min_level);
+        set_serial_log_level(min_level);
         LOG_RING.clear();
     }
 
@@ -699,5 +727,28 @@ mod tests {
         _log_contract("contract.test", format_args!("hidden"));
 
         assert_eq!(get_log_buffer_len(), 0);
+    }
+
+    #[test]
+    fn serial_log_level_filters_independently_from_recorded_log() {
+        let _guard = TEST_LOCK.lock();
+        reset_test_state(4);
+        set_serial_log_level(2);
+
+        assert!(should_record_log(Level::Info));
+        assert!(!should_serial_log(Level::Info));
+        assert!(should_serial_log(Level::Error));
+    }
+
+    #[test]
+    fn cycling_log_level_keeps_serial_escape_hatch_in_sync() {
+        let _guard = TEST_LOCK.lock();
+        reset_test_state(5);
+
+        let next = cycle_log_level();
+
+        assert_eq!(next, 0);
+        assert_eq!(get_log_level(), 0);
+        assert_eq!(get_serial_log_level(), 0);
     }
 }

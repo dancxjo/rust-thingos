@@ -15,6 +15,7 @@ pub fn dispatch(n: usize, args: [usize; 6]) -> isize {
         SYS_WRITE => handlers::sys_write(args[0], args[1], args[2]),
         SYS_DEBUG_WRITE => handlers::sys_debug_write(args[0], args[1]),
         SYS_LOG_WRITE => handlers::sys_log_write(args[0], args[1], args[2]),
+        SYS_TRACE_MARK_INPUT => handlers::sys_trace_mark_input(args[0], args[1], args[2], args[3]),
         SYS_YIELD => handlers::sys_yield(),
         SYS_SLEEP_MS => handlers::sys_sleep_ms(args[0] as u64),
         SYS_SLEEP => handlers::sys_sleep_ns(args[0] as u64),
@@ -109,6 +110,16 @@ pub fn dispatch(n: usize, args: [usize; 6]) -> isize {
                 Err(e)
             } else {
                 crate::logging::set_log_level(args[0] as u8);
+                crate::logging::set_serial_log_level(args[0] as u8);
+                Ok(0)
+            }
+        }
+        SYS_LOG_SET_SERIAL_LEVEL => {
+            let authority = crate::authority::bridge::authority_for_current();
+            if let Err(e) = crate::authority::bridge::check_privilege(&authority, "log_level") {
+                Err(e)
+            } else {
+                crate::logging::set_serial_log_level(args[0] as u8);
                 Ok(0)
             }
         }

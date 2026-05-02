@@ -11,7 +11,9 @@ use abi::hid::{
     KIND_BRISTLE_REGISTER_SINK, encode_register_sink_with_mask,
 };
 use abi::syscall::vfs_flags::O_RDONLY;
+use abi::trace::input_source;
 use stem::syscall::message::msg_send;
+use stem::syscall::trace_mark_input;
 use stem::syscall::vfs::{vfs_close, vfs_open, vfs_read};
 
 use crate::loop_types::{BloomService, Interest, LoopAction, LoopEvent};
@@ -23,6 +25,7 @@ const INPUT_READ_CHUNK: usize = 64;
 const MAX_READS_PER_WAKE: usize = 4;
 const INPUT_TRACE_INITIAL: u64 = 24;
 const INPUT_TRACE_INTERVAL: u64 = 128;
+const INPUT_SUMMARY_INTERVAL_NS: u64 = 1_000_000_000;
 static BLOOM_INPUT_READ_COUNT: AtomicU64 = AtomicU64::new(0);
 static BLOOM_INPUT_EVENT_COUNT: AtomicU64 = AtomicU64::new(0);
 static BLOOM_INPUT_VFS_READ_COUNT: AtomicU64 = AtomicU64::new(0);
@@ -38,13 +41,30 @@ pub struct InputService {
     event_accum: [u8; 64],
     accum_len: usize,
     interests: Vec<Interest>,
+    rate_window_start_ns: u64,
+    rate_window_wakes: u64,
+    rate_window_reads: u64,
+    rate_window_events: u64,
+    rate_window_bytes: u64,
 }
 
 impl InputService {
     /// Create an `InputService` that reads from `fd`.
     pub fn new(fd: u32, sink_write: u32) -> Self {
         let interests = vec![Interest::FdReadable(fd)];
-        Self { fd, sink_write, registered: false, event_accum: [0; 64], accum_len: 0, interests }
+        Self {
+            fd,
+            sink_write,
+            registered: false,
+            event_accum: [0; 64],
+            accum_len: 0,
+            interests,
+            rate_window_start_ns: 0,
+            rate_window_wakes: 0,
+            rate_window_reads: 0,
+            rate_window_events: 0,
+            rate_window_bytes: 0,
+        }
     }
 }
 
@@ -86,9 +106,10 @@ impl BloomService for InputService {
                 let mut handled = false;
                 let read_wake = BLOOM_INPUT_READ_COUNT.fetch_add(1, Ordering::Relaxed) + 1;
                 let start_ns = stem::monotonic_ns();
+                self.rate_window_wakes = self.rate_window_wakes.wrapping_add(1);
 
                 if should_log_input(read_wake) {
-                    stem::info!(
+                    stem::trace!(
                         "bloom: input fd wake entry wake={} accum_depth={} event_total={}",
                         read_wake,
                         self.accum_len,
@@ -100,7 +121,7 @@ impl BloomService for InputService {
                     let read_no = BLOOM_INPUT_VFS_READ_COUNT.fetch_add(1, Ordering::Relaxed) + 1;
                     let read_start_ns = stem::monotonic_ns();
                     if should_log_input(read_wake) || should_log_input(read_no) {
-                        stem::info!(
+                        stem::trace!(
                             "bloom: input vfs_read entry wake={} read={} iter={} fd={} accum_depth={}",
                             read_wake,
                             read_no,
@@ -111,9 +132,10 @@ impl BloomService for InputService {
                     }
                     let read_result = vfs_read(self.fd, &mut buf);
                     let read_elapsed_ns = stem::monotonic_ns().saturating_sub(read_start_ns);
+                    self.rate_window_reads = self.rate_window_reads.wrapping_add(1);
                     if should_log_input(read_wake) || should_log_input(read_no) {
                         match &read_result {
-                            Ok(n) => stem::info!(
+                            Ok(n) => stem::trace!(
                                 "bloom: input vfs_read exit wake={} read={} iter={} fd={} result=ok bytes={} elapsed_ns={}",
                                 read_wake,
                                 read_no,
@@ -122,7 +144,7 @@ impl BloomService for InputService {
                                 *n,
                                 read_elapsed_ns
                             ),
-                            Err(e) => stem::info!(
+                            Err(e) => stem::trace!(
                                 "bloom: input vfs_read exit wake={} read={} iter={} fd={} result=err err={:?} elapsed_ns={}",
                                 read_wake,
                                 read_no,
@@ -136,6 +158,7 @@ impl BloomService for InputService {
                     match read_result {
                         Ok(0) => break,
                         Ok(n) => {
+                            self.rate_window_bytes = self.rate_window_bytes.wrapping_add(n as u64);
                             handled |= self.drain_bristle_bytes(&buf[..n], world);
                             if n < buf.len() {
                                 break;
@@ -145,7 +168,7 @@ impl BloomService for InputService {
                     }
                 }
                 if should_log_input(read_wake) {
-                    stem::info!(
+                    stem::trace!(
                         "bloom: input fd wake exit wake={} handled={} accum_depth={} elapsed_ns={}",
                         read_wake,
                         handled,
@@ -153,6 +176,7 @@ impl BloomService for InputService {
                         stem::monotonic_ns().saturating_sub(start_ns)
                     );
                 }
+                self.maybe_log_input_summary();
 
                 if handled {
                     LoopAction::RequestImmediateRepaint
@@ -217,8 +241,9 @@ impl InputService {
                 }
 
                 let event_no = BLOOM_INPUT_EVENT_COUNT.fetch_add(1, Ordering::Relaxed) + 1;
+                self.rate_window_events = self.rate_window_events.wrapping_add(1);
                 if should_log_input(event_no) {
-                    stem::info!(
+                    stem::trace!(
                         "bloom: input event entry event={} type={} payload_len={} accum_depth={}",
                         event_no,
                         event_type_name(event_type),
@@ -228,7 +253,7 @@ impl InputService {
                 }
                 handled |= world.handle_bristle_event(&self.event_accum[..total_len]);
                 if should_log_input(event_no) {
-                    stem::info!(
+                    stem::trace!(
                         "bloom: input event exit event={} type={} handled={} accum_depth={}",
                         event_no,
                         event_type_name(event_type),
@@ -254,6 +279,31 @@ impl InputService {
                 self.event_accum.copy_within(1..1 + self.accum_len, 0);
             }
         }
+    }
+
+    fn maybe_log_input_summary(&mut self) {
+        let now = stem::monotonic_ns();
+        if self.rate_window_start_ns == 0 {
+            self.rate_window_start_ns = now;
+            return;
+        }
+        if now.saturating_sub(self.rate_window_start_ns) < INPUT_SUMMARY_INTERVAL_NS {
+            return;
+        }
+        trace_mark_input(input_source::BLOOM, self.rate_window_bytes, self.rate_window_events, 0);
+        stem::info!(
+            "bloom: input_summary wakes={} reads={} events={} bytes={} accum_depth={}",
+            self.rate_window_wakes,
+            self.rate_window_reads,
+            self.rate_window_events,
+            self.rate_window_bytes,
+            self.accum_len
+        );
+        self.rate_window_start_ns = now;
+        self.rate_window_wakes = 0;
+        self.rate_window_reads = 0;
+        self.rate_window_events = 0;
+        self.rate_window_bytes = 0;
     }
 }
 

@@ -14,10 +14,11 @@ use abi::driver_interface::{
     DRIVER_DESCRIPTOR_ABI_VERSION, DeviceInfo, DriverClass, DriverDescriptor, DriverEntryCtx,
     ProbeResult, Status,
 };
+use abi::trace::input_source;
 use stem::abi::module_manifest::{MANIFEST_MAGIC, ManifestHeader, ModuleKind, device_kind_bytes};
 use stem::syscall::message::msg_send;
 use stem::syscall::vfs::{vfs_close, vfs_open, vfs_read};
-use stem::syscall::{ioport_read, ioport_write, irq_subscribe};
+use stem::syscall::{ioport_read, ioport_write, irq_subscribe, trace_mark_input};
 use stem::time::Duration;
 use stem::wait_set::WaitSet;
 use stem::{debug, error, info, trace, warn};
@@ -730,6 +731,12 @@ fn interrupt_loop(bristle_pid: u32) -> ! {
         let now_ns = stem::monotonic_ns();
         let window_ns = now_ns.saturating_sub(rate_window_start_ns);
         if window_ns >= 1_000_000_000 {
+            trace_mark_input(
+                input_source::PS2_MOUSE,
+                rate_window_input,
+                rate_window_input / 3,
+                drop_counter as u64,
+            );
             stem::info!(
                 "ps2_mouse: input_rate bytes_per_sec={} total={} irq_wakes={} poll_timeouts={} dropped={}",
                 rate_window_input,

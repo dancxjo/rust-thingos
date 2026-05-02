@@ -1313,13 +1313,35 @@ fn print_irq_trace_summary() {
                 kernel::kprint!("  preempt depth={}  t={}\n", depth, timestamp);
             }
             TraceEvent::Heartbeat { cpu, tid, runq_len, timestamp } => {
-                kernel::kprint!("  heartbeat cpu={} tid={} runq={} t={}\n", cpu, tid, runq_len, timestamp);
+                kernel::kprint!(
+                    "  heartbeat cpu={} tid={} runq={} t={}\n",
+                    cpu,
+                    tid,
+                    runq_len,
+                    timestamp
+                );
             }
             TraceEvent::SchedSwitch { cpu, from_tid, to_tid, timestamp } => {
-                kernel::kprint!("  sched_switch cpu={} {} -> {} t={}\n", cpu, from_tid, to_tid, timestamp);
+                kernel::kprint!(
+                    "  sched_switch cpu={} {} -> {} t={}\n",
+                    cpu,
+                    from_tid,
+                    to_tid,
+                    timestamp
+                );
             }
             TraceEvent::VfsRpc { enter, op_tag, timestamp } => {
                 kernel::kprint!("  vfs_rpc enter={} op={} t={}\n", enter, op_tag, timestamp);
+            }
+            TraceEvent::InputSummary { source, events, bytes, drops, timestamp } => {
+                kernel::kprint!(
+                    "  input source={} events={} bytes={} drops={} t={}\n",
+                    source,
+                    events,
+                    bytes,
+                    drops,
+                    timestamp
+                );
             }
         }
     }

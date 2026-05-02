@@ -6,8 +6,8 @@ use crate::pal;
 
 pub fn log(level: usize, args: fmt::Arguments) {
     let pal_level = match level {
-        0 => pal::log::Level::Error,
-        1 => pal::log::Level::Warn,
+        1 => pal::log::Level::Error,
+        2 => pal::log::Level::Warn,
         3 => pal::log::Level::Info,
         4 => pal::log::Level::Debug,
         5 => pal::log::Level::Trace,
@@ -18,8 +18,8 @@ pub fn log(level: usize, args: fmt::Arguments) {
 
 pub fn log_with_provenance(level: usize, provenance: &str, args: fmt::Arguments) {
     let pal_level = match level {
-        0 => pal::log::Level::Error,
-        1 => pal::log::Level::Warn,
+        1 => pal::log::Level::Error,
+        2 => pal::log::Level::Warn,
         3 => pal::log::Level::Info,
         4 => pal::log::Level::Debug,
         5 => pal::log::Level::Trace,

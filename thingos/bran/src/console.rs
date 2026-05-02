@@ -819,10 +819,11 @@ pub fn serial_put_char(c: u8) {
         return;
     }
     SERIAL_DEFERRED.push(c);
-    // Kick-start: arm the TX interrupt so the serial IRQ handler drains
-    // the ring asynchronously.  This is a no-op if already armed.
+    // Kick-start: arm the TX interrupt so the serial IRQ handler drains the
+    // ring asynchronously.  Producers deliberately do not touch UART readiness
+    // or write FIFO bursts; timer and idle flush paths cover platforms without
+    // TX interrupts.
     crate::RUNTIME.arch.arm_serial_tx_irq();
-    serial_flush_deferred();
 }
 
 /// Enqueue a byte slice for deferred framebuffer rendering.
@@ -838,9 +839,9 @@ pub fn serial_put_buf(buf: &[u8]) {
         return;
     }
     SERIAL_DEFERRED.push_slice(buf);
-    // Kick-start TX interrupt for async drain.
+    // Kick-start TX interrupt for async drain without making the producer
+    // perform UART I/O on the hot path.
     crate::RUNTIME.arch.arm_serial_tx_irq();
-    serial_flush_deferred();
 }
 
 /// Called from the timer IRQ to blink the cursor.

@@ -28,19 +28,24 @@ use abi::hid::{
     KIND_BRISTLE_REGISTER_SINK, Key, KeyEventPayload, decode_register_sink_with_mask,
 };
 use abi::syscall::vfs_flags::{O_CREAT, O_RDWR, O_TRUNC};
+use abi::trace::input_source;
 use abi::wire::KindId;
 use stem::service_loop::{ServiceEvent, ServiceLoop};
 use stem::syscall::vfs::{
     vfs_close, vfs_handle_from_port, vfs_mkdir, vfs_open, vfs_read, vfs_write,
 };
-use stem::syscall::{port_close, port_create, port_send_all};
+use stem::syscall::{port_close, port_create, port_send_all, trace_mark_input};
 use stem::wait_set::WaitToken;
 use stem::{debug, info, trace, warn};
 
 const INPUT_TRACE_INITIAL: u64 = 24;
 const INPUT_TRACE_INTERVAL: u64 = 128;
+const INPUT_SUMMARY_INTERVAL_NS: u64 = 1_000_000_000;
 static BRISTLE_DISPATCH_COUNT: AtomicU64 = AtomicU64::new(0);
 static BRISTLE_FORWARD_DROP_COUNT: AtomicU64 = AtomicU64::new(0);
+static BRISTLE_RATE_WINDOW_START_NS: AtomicU64 = AtomicU64::new(0);
+static BRISTLE_RATE_WINDOW_BYTES: AtomicU64 = AtomicU64::new(0);
+static BRISTLE_RATE_WINDOW_EVENTS: AtomicU64 = AtomicU64::new(0);
 
 fn ensure_session_roots() {
     let _ = vfs_mkdir("/session");
@@ -353,7 +358,7 @@ fn accumulate_and_dispatch(
                     let event_no = BRISTLE_DISPATCH_COUNT.fetch_add(1, Ordering::Relaxed) + 1;
                     dispatched = dispatched.wrapping_add(1);
                     if should_log_input(event_no) {
-                        stem::info!(
+                        stem::trace!(
                             "bristle: dispatch entry source={} event={} type={} payload_len={} accum_depth={} input_len={}",
                             source,
                             event_no,
@@ -369,7 +374,7 @@ fn accumulate_and_dispatch(
                         let mut p = [0u8; 4];
                         p.copy_from_slice(&event_bytes[20..24]);
                         let payload = KeyEventPayload::from_bytes(&p);
-                        stem::info!("bristle: KeyDown received: {:?}", payload.key());
+                        stem::trace!("bristle: KeyDown received: {:?}", payload.key());
 
                         match payload.key() {
                             Key::F2 => {
@@ -411,7 +416,7 @@ fn accumulate_and_dispatch(
                         }
                     }
                     if should_log_input(event_no) {
-                        stem::info!(
+                        stem::trace!(
                             "bristle: dispatch exit source={} event={} class={} accum_depth={} drops={}",
                             source,
                             event_no,
@@ -441,7 +446,7 @@ fn accumulate_and_dispatch(
     if dispatched != 0 {
         let total = BRISTLE_DISPATCH_COUNT.load(Ordering::Relaxed);
         if should_log_input(total) {
-            stem::info!(
+            stem::trace!(
                 "bristle: input_rate source={} bytes={} events={} total_events={} entry_depth={} exit_depth={} elapsed_ns={} drops={}",
                 source,
                 input.len(),
@@ -453,6 +458,7 @@ fn accumulate_and_dispatch(
                 BRISTLE_FORWARD_DROP_COUNT.load(Ordering::Relaxed)
             );
         }
+        maybe_log_input_summary(source, input.len() as u64, dispatched, *accum_len);
     }
 }
 
@@ -477,4 +483,47 @@ fn event_class(event_type: u16) -> u8 {
 
 fn should_log_input(count: u64) -> bool {
     count <= INPUT_TRACE_INITIAL || count % INPUT_TRACE_INTERVAL == 0
+}
+
+fn maybe_log_input_summary(source: &str, bytes: u64, events: u64, accum_depth: usize) {
+    BRISTLE_RATE_WINDOW_BYTES.fetch_add(bytes, Ordering::Relaxed);
+    BRISTLE_RATE_WINDOW_EVENTS.fetch_add(events, Ordering::Relaxed);
+
+    let now = stem::monotonic_ns();
+    let mut start = BRISTLE_RATE_WINDOW_START_NS.load(Ordering::Relaxed);
+    if start == 0 {
+        match BRISTLE_RATE_WINDOW_START_NS.compare_exchange(
+            0,
+            now,
+            Ordering::Relaxed,
+            Ordering::Relaxed,
+        ) {
+            Ok(_) => return,
+            Err(actual) => start = actual,
+        }
+    }
+
+    if now.saturating_sub(start) < INPUT_SUMMARY_INTERVAL_NS {
+        return;
+    }
+
+    if BRISTLE_RATE_WINDOW_START_NS
+        .compare_exchange(start, now, Ordering::Relaxed, Ordering::Relaxed)
+        .is_err()
+    {
+        return;
+    }
+
+    let window_bytes = BRISTLE_RATE_WINDOW_BYTES.swap(0, Ordering::Relaxed);
+    let window_events = BRISTLE_RATE_WINDOW_EVENTS.swap(0, Ordering::Relaxed);
+    let drops = BRISTLE_FORWARD_DROP_COUNT.load(Ordering::Relaxed);
+    trace_mark_input(input_source::BRISTLE, window_bytes, window_events, drops);
+    stem::info!(
+        "bristle: input_summary source={} bytes={} events={} accum_depth={} drops={}",
+        source,
+        window_bytes,
+        window_events,
+        accum_depth,
+        drops
+    );
 }

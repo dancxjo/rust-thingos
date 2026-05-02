@@ -81,6 +81,16 @@ Feature: Debug-level log output during boot
     Then the latest serial output should contain "Entering scheduler loop."
 
   @smoke
+  @kmsg
+  @timeout-30s
+  Scenario: Serial log mirroring can be lowered without disabling the kernel message ring
+    Given the machine is started
+    When I wait for the system to boot
+    And the shell command "loglevel serial 0" succeeds
+    And the shell command "cat /dev/kmsg" succeeds
+    Then the latest serial output should contain "Entering scheduler loop."
+
+  @smoke
   @timeout-30s
   Scenario: F11 cycles the kernel log level from the low-level keyboard path
     Given the machine is started

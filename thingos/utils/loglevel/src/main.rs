@@ -1,11 +1,23 @@
 #![no_std]
 #![no_main]
-use alloc::string::ToString;
-use core::default::Default;
+use alloc::string::String;
+use core::fmt::{self, Write};
 extern crate alloc;
 
-use stem::syscall::{argv_get, log_set_level};
-use stem::{info, println};
+use stem::syscall::{argv_get, log_set_level, log_set_serial_level, write as fd_write};
+
+fn console(args: fmt::Arguments) {
+    let mut text = String::new();
+    let _ = text.write_fmt(args);
+    let _ = text.write_str("\n");
+    let _ = fd_write(1, text.as_bytes());
+}
+
+macro_rules! consoleln {
+    ($($arg:tt)*) => {
+        console(format_args!($($arg)*))
+    };
+}
 
 fn get_args() -> alloc::vec::Vec<alloc::string::String> {
     let mut len = 0;
@@ -46,17 +58,19 @@ fn get_args() -> alloc::vec::Vec<alloc::string::String> {
 fn main(_arg: usize) -> ! {
     let args = get_args();
     if args.len() < 2 {
-        println!("Usage: loglevel <0-5>");
-        println!("  0: Off");
-        println!("  1: Error");
-        println!("  2: Warn");
-        println!("  3: Info");
-        println!("  4: Debug (Default)");
-        println!("  5: Trace");
+        consoleln!("Usage: loglevel [kernel|serial] <0-5>");
+        consoleln!("  0: Off");
+        consoleln!("  1: Error");
+        consoleln!("  2: Warn");
+        consoleln!("  3: Info (Default)");
+        consoleln!("  4: Debug");
+        consoleln!("  5: Trace");
+        consoleln!("No target sets both kernel retention and serial mirroring.");
         stem::syscall::exit(0);
     }
 
-    let level_str = &args[1];
+    let (target, level_str) =
+        if args.len() >= 3 { (Some(args[1].as_str()), &args[2]) } else { (None, &args[1]) };
     let level: u8 = match level_str.as_str() {
         "0" => 0,
         "1" => 1,
@@ -65,14 +79,33 @@ fn main(_arg: usize) -> ! {
         "4" => 4,
         "5" => 5,
         _ => {
-            println!("Invalid log level: {}", level_str);
+            consoleln!("Invalid log level: {}", level_str);
             stem::syscall::exit(1);
         }
     };
 
-    match log_set_level(level) {
-        Ok(_) => println!("Log level set to {}", level),
-        Err(e) => println!("Failed to set log level: {:?}", e),
+    match target {
+        Some("kernel") => match log_set_level(level) {
+            Ok(_) => consoleln!("Kernel and serial log level set to {}", level),
+            Err(e) => consoleln!("Failed to set kernel log level: {:?}", e),
+        },
+        Some("serial") => match log_set_serial_level(level) {
+            Ok(_) => consoleln!("Serial log level set to {}", level),
+            Err(e) => consoleln!("Failed to set serial log level: {:?}", e),
+        },
+        Some(other) => {
+            consoleln!("Invalid log target: {}", other);
+            stem::syscall::exit(1);
+        }
+        None => {
+            let kernel_result = log_set_level(level);
+            let serial_result = log_set_serial_level(level);
+            match (kernel_result, serial_result) {
+                (Ok(_), Ok(_)) => consoleln!("Kernel and serial log level set to {}", level),
+                (Err(e), _) => consoleln!("Failed to set kernel log level: {:?}", e),
+                (_, Err(e)) => consoleln!("Failed to set serial log level: {:?}", e),
+            }
+        }
     }
 
     stem::syscall::exit(0);

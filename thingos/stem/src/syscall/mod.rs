@@ -69,6 +69,13 @@ pub fn log_set_level(level: u8) -> Result<(), Errno> {
     abi::errors::errno(ret).map(|_| ())
 }
 
+pub fn log_set_serial_level(level: u8) -> Result<(), Errno> {
+    let ret = unsafe {
+        raw_syscall6(abi::syscall::SYS_LOG_SET_SERIAL_LEVEL, level as usize, 0, 0, 0, 0, 0)
+    };
+    abi::errors::errno(ret).map(|_| ())
+}
+
 pub fn read(thing: usize, buf: &mut [u8]) -> Result<usize, Errno> {
     let ret =
         unsafe { raw_syscall6(SYS_READ, thing, buf.as_mut_ptr() as usize, buf.len(), 0, 0, 0) };
@@ -1001,6 +1008,20 @@ pub fn trace_read(buf: &mut [abi::trace::TraceEvent]) -> Result<usize, Errno> {
         }
     };
     Ok(ret)
+}
+
+pub fn trace_mark_input(source: u8, bytes: u64, events: u64, drops: u64) {
+    unsafe {
+        let _ = raw_syscall6(
+            abi::syscall::SYS_TRACE_MARK_INPUT,
+            source as usize,
+            bytes.min(usize::MAX as u64) as usize,
+            events.min(usize::MAX as u64) as usize,
+            drops.min(usize::MAX as u64) as usize,
+            0,
+            0,
+        );
+    }
 }
 
 /// Disable the boot console (call when compositor takes over framebuffer)
