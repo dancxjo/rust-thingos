@@ -2790,7 +2790,7 @@ mod tests {
         // ── Replicate spawn_process_from_path Phase 3 ─────────────────────────
         // 1. Outer irq_disable (as performed by spawn_process_from_path at Phase 1
         //    boundary, still held at Phase 3 entry).  Named `_irq` to match the
-        //    production variable at line 1639 of spawn_process_from_path.
+        //    production variable in spawn_process_from_path.
         let _irq = MOCK_RUNTIME.irq_disable();
         assert_eq!(
             crate::sched::tests::mock_irq_depth(),
@@ -2817,8 +2817,8 @@ mod tests {
             "need_resched must be set on CPU 0 after waking display-driver task on same CPU"
         );
 
-        // 3. Outer irq_restore (as performed by spawn_process_from_path at line
-        //    after "Task N woken, restoring IRQs").
+        // 3. Outer irq_restore (as performed by spawn_process_from_path
+        //    immediately after TP-B in Phase 3).
         MOCK_RUNTIME.irq_restore(_irq);
 
         // After irq_restore the depth must return to 0 — balanced.
