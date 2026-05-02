@@ -704,7 +704,7 @@ fn allocate_indexed_dev_path(
 
 fn should_skip_for_display_input_isolation(driver_class: DriverClass, path: &str) -> bool {
     let _ = path;
-    DISPLAY_INPUT_ISOLATION && matches!(driver_class, DriverClass::Net | DriverClass::Audio)
+    DISPLAY_INPUT_ISOLATION && matches!(driver_class, DriverClass::Net)
 }
 
 fn is_fallback_bootfb() -> bool {
