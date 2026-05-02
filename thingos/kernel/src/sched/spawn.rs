@@ -1841,8 +1841,7 @@ pub unsafe fn spawn_process_from_path<R: BootRuntime>(
     // display-driver-entry freezes with the last log line being
     // "Task N woken, restoring IRQs"):
     //   TP-A: logged before wake_task enters  → hang inside wake_task
-    //   TP-B: logged after wake_task returns  → hang between wake_task and irq_restore
-    //   TP-C: logged before irq_restore       → hang inside irq_restore / at interrupt re-enable point
+    //   TP-B: logged after wake_task returns  → hang inside irq_restore / at interrupt re-enable point
     //   TP-D: logged after irq_restore        → hang is further along in the spawn return path
     let spawn_caller_tid = rt.current_tid();
     crate::kdebug!(
@@ -1859,16 +1858,6 @@ pub unsafe fn spawn_process_from_path<R: BootRuntime>(
     crate::kdebug!(
         "SPAWN_FROM_PATH[TP-B]: cpu={} caller_tid={} spawned_tid={} irq_saved={} need_resched={} \
          wake_task returned, about to restore IRQs path={}",
-        current_cpu,
-        spawn_caller_tid,
-        id,
-        _irq.0,
-        crate::sched::need_resched_pending(current_cpu),
-        path,
-    );
-    crate::kdebug!(
-        "SPAWN_FROM_PATH[TP-C]: cpu={} caller_tid={} spawned_tid={} irq_saved={} need_resched={} \
-         entering irq_restore path={}",
         current_cpu,
         spawn_caller_tid,
         id,
@@ -2646,8 +2635,7 @@ mod tests {
     //
     // The suspected hang sites, in order:
     //   (A) inside wake_task (scheduler lock / IPI path)
-    //   (B) between wake_task return and irq_restore
-    //   (C) inside irq_restore / at interrupt re-enable point
+    //   (B) inside irq_restore / at interrupt re-enable point
     //
     // This test verifies the Phase 3 contract that spawn_process_from_path
     // relies on:
@@ -2801,8 +2789,9 @@ mod tests {
 
         // ── Replicate spawn_process_from_path Phase 3 ─────────────────────────
         // 1. Outer irq_disable (as performed by spawn_process_from_path at Phase 1
-        //    boundary, still held at Phase 3 entry).
-        let saved_irq = MOCK_RUNTIME.irq_disable();
+        //    boundary, still held at Phase 3 entry).  Named `_irq` to match the
+        //    production variable at line 1639 of spawn_process_from_path.
+        let _irq = MOCK_RUNTIME.irq_disable();
         assert_eq!(
             crate::sched::tests::mock_irq_depth(),
             1,
@@ -2817,7 +2806,7 @@ mod tests {
         assert_eq!(
             crate::sched::tests::mock_irq_depth(),
             1,
-            "IRQ depth must remain 1 after wake_task returns (TP-B/TP-C state): \
+            "IRQ depth must remain 1 after wake_task returns (TP-B state): \
              wake_task's internal irq_restore must not over-restore the outer disable"
         );
 
@@ -2830,7 +2819,7 @@ mod tests {
 
         // 3. Outer irq_restore (as performed by spawn_process_from_path at line
         //    after "Task N woken, restoring IRQs").
-        MOCK_RUNTIME.irq_restore(saved_irq);
+        MOCK_RUNTIME.irq_restore(_irq);
 
         // After irq_restore the depth must return to 0 — balanced.
         assert_eq!(
