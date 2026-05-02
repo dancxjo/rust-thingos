@@ -1243,6 +1243,11 @@ pub fn on_tick<R: BootRuntime>() {
         TICK_COUNT.load(Ordering::Relaxed)
     };
 
+    // Record the monotonic timestamp of this timer interrupt so a freeze
+    // detector can distinguish "timer stopped firing" from other stalls.
+    let now_ns = crate::trace::now_or_zero();
+    profiling::LAST_TIMER_IRQ_MONO_NS.store(now_ns, Ordering::Relaxed);
+
     if cpu_idx == 0 {
         crate::vfs::devfs::ConsoleNode::poll_input();
         crate::time::maybe_log_system_clock_tick(crate::time::monotonic_now_ns());
@@ -1272,10 +1277,15 @@ fn emit_debug_summary<R: BootRuntime>(caller_cpu: usize) {
         return;
     }
 
+    // Snapshot monotonic wall time for the heartbeat line.
+    let now_ns = crate::trace::now_or_zero();
+    let last_timer_ns = profiling::LAST_TIMER_IRQ_MONO_NS.load(Ordering::Relaxed);
+
     #[derive(Copy, Clone)]
     struct CpuStats {
         i: usize,
         curr: Option<crate::sched::TaskId>,
+        last_switch: u64,
         runq: usize,
         runq_avg: u64,
         runq_samples: u64,
@@ -1319,6 +1329,7 @@ fn emit_debug_summary<R: BootRuntime>(caller_cpu: usize) {
             stats_buf[num_stats].write(CpuStats {
                 i,
                 curr: pc.current,
+                last_switch: pc.last_switch,
                 runq,
                 runq_avg,
                 runq_samples: pc.stats.runq_sample_count,
@@ -1337,26 +1348,62 @@ fn emit_debug_summary<R: BootRuntime>(caller_cpu: usize) {
         }
     } // drop lock
 
-    crate::ktrace!("SCHED-DBG: cpus_online={}", cpus_online);
+    // Emit the 1 Hz heartbeat at INFO level so it is visible in default log
+    // output and can be used to diagnose freezes from serial logs.
+    crate::kinfo!(
+        "HEARTBEAT: mono_ns={} last_timer_ns={} cpus_online={}",
+        now_ns,
+        last_timer_ns,
+        cpus_online,
+    );
     for idx in 0..num_stats {
         let s = unsafe { stats_buf[idx].assume_init_ref() };
-        crate::ktrace!(
-            "SCHED-DBG: cpu={} curr={:?} runq={} runq_avg={} runq_samples={} ctxsw={} idle2busy={} tick={} ipi={} enq={} deq={} wake={} lock_miss={} lock_pending={} lock_blocked={}",
+
+        // Per-interval deltas: compute how many events happened since the last
+        // heartbeat rather than reporting monotonically-increasing totals.
+        let prev_ctxsw = if s.i < types::MAX_CPUS {
+            profiling::SNAPSHOT_CTXSW_PER_CPU[s.i].swap(s.ctxsw, Ordering::Relaxed)
+        } else {
+            0
+        };
+        let prev_tick = if s.i < types::MAX_CPUS {
+            profiling::SNAPSHOT_TICK_PER_CPU[s.i].swap(s.tick, Ordering::Relaxed)
+        } else {
+            0
+        };
+        let prev_wake = if s.i < types::MAX_CPUS {
+            profiling::SNAPSHOT_WAKE_PER_CPU[s.i].swap(s.wake, Ordering::Relaxed)
+        } else {
+            0
+        };
+        let delta_ctxsw = s.ctxsw.saturating_sub(prev_ctxsw);
+        let delta_tick = s.tick.saturating_sub(prev_tick);
+        let delta_wake = s.wake.saturating_sub(prev_wake);
+
+        // Record a heartbeat entry in the progress ring for post-mortem
+        // analysis of freeze events.  Use `NO_CURRENT_TASK` as the sentinel
+        // when no task is running on this CPU (e.g. before scheduler init).
+        const NO_CURRENT_TASK: u64 = u64::MAX;
+        let curr_tid = s.curr.unwrap_or(NO_CURRENT_TASK);
+        crate::trace::progress_ring::push(
+            crate::trace::progress_ring::ProgressTag::TimerHeartbeat,
+            s.i,
+            curr_tid,
+            now_ns,
+        );
+
+        crate::kinfo!(
+            "HEARTBEAT: cpu={} curr={:?} last_switch_ns={} runq={} ctxsw/s={} tick/s={} wake/s={} ipi={} lock_miss={} lock_blocked={}",
             s.i,
             s.curr,
+            s.last_switch,
             s.runq,
-            s.runq_avg,
-            s.runq_samples,
-            s.ctxsw,
-            s.idle2busy,
-            s.tick,
+            delta_ctxsw,
+            delta_tick,
+            delta_wake,
             s.ipi,
-            s.enq,
-            s.deq,
-            s.wake,
             s.lock_miss,
-            s.lock_pending,
-            s.lock_blocked
+            s.lock_blocked,
         );
     }
 }
@@ -3243,6 +3290,18 @@ impl<R: BootRuntime> types::Scheduler<R> {
             self.state.per_cpu[cpu_idx].stats.context_switches.saturating_add(1);
         self.state.per_cpu[cpu_idx].stats.dispatch_count =
             self.state.per_cpu[cpu_idx].stats.dispatch_count.saturating_add(1);
+
+        // Update last-switch monotonic timestamp for the per-CPU heartbeat.
+        let now_ns = crate::trace::now_or_zero();
+        self.state.per_cpu[cpu_idx].last_switch = now_ns;
+
+        // Record context switch in the progress ring for freeze post-mortems.
+        crate::trace::progress_ring::push(
+            crate::trace::progress_ring::ProgressTag::ContextSwitch,
+            cpu_idx,
+            next_id,
+            now_ns,
+        );
 
         self.state.per_cpu[cpu_idx].current = Some(next_id);
 

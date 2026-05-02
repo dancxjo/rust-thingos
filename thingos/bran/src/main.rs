@@ -134,6 +134,11 @@ fn alloc_error_handler(layout: core::alloc::Layout) -> ! {
 #[panic_handler]
 fn panic(info: &core::panic::PanicInfo) -> ! {
     kernel::kerror!("{}", info);
+
+    // Dump the progress ring so post-mortem analysis can see recent scheduler
+    // and IRQ activity before the panic.
+    kernel::trace::progress_ring::dump();
+
     crate::console::flush_sync();
     crate::console::serial_flush_sync();
 
