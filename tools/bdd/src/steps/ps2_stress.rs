@@ -13,6 +13,11 @@ use crate::world::ThingOsWorld;
 /// Keys cycled during the stress test (non-modifier, safe for repeated taps).
 const STRESS_KEYS: &[&str] = &["a", "s", "d", "f", "j", "k", "l"];
 
+/// Milliseconds between individual QMP events during the stress test.
+/// 15 ms is long enough for QEMU to process each event but short enough to
+/// generate the burst needed to trigger the PS/2 IRQ path reliably.
+const STRESS_SETTLE_MS: u64 = 15;
+
 /// Stress PS/2 input by injecting `count` synthetic key-press and mouse-move
 /// events in rapid succession via QEMU QMP.
 ///
@@ -25,8 +30,10 @@ async fn stress_ps2_input(
     world: &mut ThingOsWorld,
     count: u64,
 ) -> Result<(), StepError> {
-    let settle = std::time::Duration::from_millis(15);
-    let mut commands = Vec::with_capacity(count as usize * 3);
+    let settle = std::time::Duration::from_millis(STRESS_SETTLE_MS);
+    // Upper bound: even events emit 2 commands (key-down + key-up),
+    // odd events emit 1 command (mouse-move).  Maximum is count * 2.
+    let mut commands = Vec::with_capacity(count as usize * 2);
 
     for i in 0..count {
         if i % 2 == 0 {
