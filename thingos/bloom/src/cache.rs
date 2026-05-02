@@ -160,11 +160,7 @@ impl ResourceCache {
         for old_id in stale_ids {
             display.release_buffer(old_id);
             self.counters.invalidations += 1;
-            stem::trace!(
-                "bloom: cache evicted stale gen handle={} buffer_id={}",
-                handle,
-                old_id
-            );
+            stem::trace!("bloom: cache evicted stale gen handle={} buffer_id={}", handle, old_id);
         }
 
         let buffer_id =

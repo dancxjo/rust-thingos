@@ -272,6 +272,11 @@ pub extern "C" fn pistil_draw_text(
 }
 
 #[unsafe(no_mangle)]
+pub extern "C" fn pistil_default_font_ready() -> i32 {
+    if default_text_renderer().is_some() { 1 } else { 0 }
+}
+
+#[unsafe(no_mangle)]
 pub extern "C" fn pistil_draw_symbol_text(
     text_ptr: *const u8,
     dst_ptr: *mut u32,
@@ -312,6 +317,11 @@ pub extern "C" fn pistil_draw_symbol_text(
     let mut canvas = Canvas::new(dst, dst_w, dst_h, dst_stride_pixels);
     renderer.draw_text(&mut canvas, text, x, y, px_size * 1.25, color);
     0
+}
+
+#[unsafe(no_mangle)]
+pub extern "C" fn pistil_symbol_font_ready() -> i32 {
+    if symbol_text_renderer().is_some() { 1 } else { 0 }
 }
 
 #[unsafe(no_mangle)]

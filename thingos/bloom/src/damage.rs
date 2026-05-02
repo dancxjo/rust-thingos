@@ -219,17 +219,14 @@ impl DamageTracker {
     /// pipeline. Counters are not updated by this call.
     #[allow(dead_code)]
     pub fn as_rects_or_full(&self, width: u32, height: u32) -> Vec<Rect> {
-        let mut rects = clip_all(self.regions.clone(), width, height, &mut DamageCounters::default());
+        let mut rects =
+            clip_all(self.regions.clone(), width, height, &mut DamageCounters::default());
         coalesce_in_place(&mut rects);
         if rects.len() > MAX_DAMAGE_RECTS {
             return alloc::vec![Rect { x: 0, y: 0, w: width, h: height }];
         }
-        let cursor = clip_all(
-            self.cursor_regions.clone(),
-            width,
-            height,
-            &mut DamageCounters::default(),
-        );
+        let cursor =
+            clip_all(self.cursor_regions.clone(), width, height, &mut DamageCounters::default());
         rects.extend(cursor);
         if rects.len() > MAX_DAMAGE_RECTS {
             return alloc::vec![Rect { x: 0, y: 0, w: width, h: height }];

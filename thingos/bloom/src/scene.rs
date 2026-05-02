@@ -199,10 +199,7 @@ impl CompositionEntry {
         let Some(opaque) = self.opaque_region else {
             return false;
         };
-        opaque.x == 0
-            && opaque.y == 0
-            && opaque.w >= self.src_rect.w
-            && opaque.h >= self.src_rect.h
+        opaque.x == 0 && opaque.y == 0 && opaque.w >= self.src_rect.w && opaque.h >= self.src_rect.h
     }
 }
 
@@ -940,7 +937,8 @@ impl Scene {
         let surfaces_len = self.surfaces.len();
 
         if let Some(surface) = self.surfaces.get_mut(&surface_id) {
-            if surface.current.z_order < max_z || (surface.current.z_order == 0 && surfaces_len > 1) {
+            if surface.current.z_order < max_z || (surface.current.z_order == 0 && surfaces_len > 1)
+            {
                 let next_z = max_z.saturating_add(1);
                 surface.current.z_order = next_z;
                 let dest = surface.current.dest_rect;
@@ -1180,12 +1178,7 @@ pub fn surface_visual_rect(rect: Rect, chrome: SurfaceChrome) -> Rect {
     if chrome.is_empty() {
         return rect;
     }
-    Rect {
-        x: rect.x,
-        y: rect.y,
-        w: rect.w.saturating_add(2),
-        h: rect.h.saturating_add(2),
-    }
+    Rect { x: rect.x, y: rect.y, w: rect.w.saturating_add(2), h: rect.h.saturating_add(2) }
 }
 
 fn resize_edge_at(rect: Rect, thickness: u32, x: i32, y: i32) -> Option<ResizeEdge> {

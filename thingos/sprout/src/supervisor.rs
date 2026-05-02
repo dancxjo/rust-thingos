@@ -10,6 +10,7 @@ use alloc::string::ToString;
 use core::default::Default;
 extern crate alloc;
 // Modules are now declared in main.rs
+use alloc::string::String;
 use alloc::sync::Arc;
 use alloc::vec::Vec;
 use core::sync::atomic::{AtomicU8, Ordering};
@@ -38,6 +39,11 @@ const NETD_LIVENESS_PATH: &str = "/net/icmp/new";
 const NETD_PROBE_INTERVAL_NS: u64 = 1_000_000_000;
 const NETD_MAX_PROBE_FAILURES: u32 = 3;
 const SERIAL_SHELL_HEADSTART_MS: u64 = 50;
+const ROOT_OVERLAY_CONFIG: &str = "/etc/roots/root";
+const ROOT_OVERLAY_DEFAULT_SOURCE: &str = "/media/cdrom";
+const ROOT_OVERLAY_DEFAULT_TARGET: &str = "/";
+const ROOT_OVERLAY_POLL_MS: u64 = 100;
+const ROOT_OVERLAY_DEFAULT_WAIT_MS: u64 = 10_000;
 const WAYLAND_HELLO_BLOOM_GRACE_NS: u64 = 1_000_000_000;
 /// Periodic supervisor cadence — preserves the previous 100 ms `sleep_ms`
 /// rhythm that drove netd liveness probing and the health-vine restart loop.
@@ -236,6 +242,11 @@ impl Supervisor {
         // mounts the first FAT volume at `/media/usb`.
         stem::info!("SPROUT: Spawning fatd...");
         self.spawn_fatd();
+
+        // Stage 4b: Apply the boot-time root overlay policy.  `/etc/roots/root`
+        // is a Limine boot module, so the policy is available before the root
+        // disk itself is mounted.
+        overlay_configured_root();
 
         // Stage 5: Mount local hostname cache before netd. Mesocarp can serve
         // self entries from VFS state and attach its UDP socket later.
@@ -914,6 +925,177 @@ impl Supervisor {
 
 fn path_exists(path: &str) -> bool {
     stem::syscall::vfs::vfs_lstat(path).is_ok()
+}
+
+struct RootOverlaySpec {
+    source: String,
+    target: String,
+    flags: u32,
+    wait_ms: u64,
+}
+
+impl RootOverlaySpec {
+    fn default() -> Self {
+        Self {
+            source: ROOT_OVERLAY_DEFAULT_SOURCE.to_string(),
+            target: ROOT_OVERLAY_DEFAULT_TARGET.to_string(),
+            flags: abi::syscall::mount_flags::MBEFORE | abi::syscall::mount_flags::MCOR,
+            wait_ms: ROOT_OVERLAY_DEFAULT_WAIT_MS,
+        }
+    }
+}
+
+fn overlay_configured_root() {
+    let spec = load_root_overlay_spec();
+    let mut waited_ms = 0;
+    while waited_ms <= spec.wait_ms {
+        if mount_table_contains(&spec.source) {
+            match stem::syscall::vfs::vfs_bind(&spec.source, &spec.target, spec.flags) {
+                Ok(()) => {
+                    info!(
+                        "SPROUT: Root overlay mounted source={} target={} flags={}",
+                        spec.source,
+                        spec.target,
+                        mount_flags_label(spec.flags)
+                    );
+                }
+                Err(err) => {
+                    warn!(
+                        "SPROUT: Failed to mount root overlay source={} target={}: {:?}",
+                        spec.source, spec.target, err
+                    );
+                }
+            }
+            return;
+        }
+        stem::sleep_ms(ROOT_OVERLAY_POLL_MS);
+        waited_ms = waited_ms.saturating_add(ROOT_OVERLAY_POLL_MS);
+    }
+
+    warn!(
+        "SPROUT: Root overlay source {} not ready after {}ms; continuing with boot modules only",
+        spec.source, spec.wait_ms
+    );
+}
+
+fn load_root_overlay_spec() -> RootOverlaySpec {
+    let mut spec = RootOverlaySpec::default();
+    let fd = match stem::syscall::vfs::vfs_open(
+        ROOT_OVERLAY_CONFIG,
+        abi::syscall::vfs_flags::O_RDONLY,
+    ) {
+        Ok(fd) => fd,
+        Err(err) => {
+            warn!(
+                "SPROUT: failed to open {}; using default root overlay: {:?}",
+                ROOT_OVERLAY_CONFIG, err
+            );
+            return spec;
+        }
+    };
+
+    let mut buf = [0u8; 1024];
+    let n = stem::syscall::vfs::vfs_read(fd, &mut buf).unwrap_or(0);
+    let _ = stem::syscall::vfs::vfs_close(fd);
+    let Ok(text) = core::str::from_utf8(&buf[..n]) else {
+        warn!("SPROUT: {} is not UTF-8; using default root overlay", ROOT_OVERLAY_CONFIG);
+        return spec;
+    };
+
+    for raw_line in text.lines() {
+        let line = raw_line.split('#').next().unwrap_or("").trim();
+        if line.is_empty() {
+            continue;
+        }
+        let Some((key, value)) = line.split_once('=') else {
+            warn!("SPROUT: ignoring malformed root overlay line '{}'", line);
+            continue;
+        };
+        let key = key.trim();
+        let value = value.trim();
+        match key {
+            "source" if !value.is_empty() => spec.source = value.to_string(),
+            "target" if !value.is_empty() => spec.target = value.to_string(),
+            "flags" => {
+                if let Some(flags) = parse_mount_flags(value) {
+                    spec.flags = flags;
+                } else {
+                    warn!("SPROUT: unknown root overlay flags '{}'", value);
+                }
+            }
+            "wait_ms" => match value.parse::<u64>() {
+                Ok(wait_ms) => spec.wait_ms = wait_ms,
+                Err(_) => warn!("SPROUT: invalid root overlay wait_ms '{}'", value),
+            },
+            _ => warn!("SPROUT: unknown root overlay key '{}'", key),
+        }
+    }
+
+    spec
+}
+
+fn parse_mount_flags(value: &str) -> Option<u32> {
+    let mut flags = abi::syscall::mount_flags::MREPL;
+    let mut saw_part = false;
+    for raw_part in value.split(|c| c == ',' || c == '|' || c == '+') {
+        let part = raw_part.trim();
+        if part.is_empty() {
+            continue;
+        }
+        saw_part = true;
+        match part {
+            "before" | "top" | "overlay" => flags |= abi::syscall::mount_flags::MBEFORE,
+            "after" | "fallback" | "lower" => flags |= abi::syscall::mount_flags::MAFTER,
+            "replace" | "repl" | "default" => {
+                flags &= !(abi::syscall::mount_flags::MBEFORE | abi::syscall::mount_flags::MAFTER);
+            }
+            "create" => flags |= abi::syscall::mount_flags::MCREATE,
+            "cor" | "copy_on_read" | "cow" => flags |= abi::syscall::mount_flags::MCOR,
+            _ => return None,
+        }
+    }
+    saw_part.then_some(flags)
+}
+
+fn append_flag_label(out: &mut String, label: &str) {
+    if !out.is_empty() {
+        out.push(',');
+    }
+    out.push_str(label);
+}
+
+fn mount_flags_label(flags: u32) -> String {
+    let mut label = String::new();
+    if flags & abi::syscall::mount_flags::MBEFORE != 0 {
+        append_flag_label(&mut label, "before");
+    } else if flags & abi::syscall::mount_flags::MAFTER != 0 {
+        append_flag_label(&mut label, "after");
+    } else {
+        append_flag_label(&mut label, "replace");
+    }
+    if flags & abi::syscall::mount_flags::MCREATE != 0 {
+        append_flag_label(&mut label, "create");
+    }
+    if flags & abi::syscall::mount_flags::MCOR != 0 {
+        append_flag_label(&mut label, "cor");
+    }
+    label
+}
+
+fn mount_table_contains(target: &str) -> bool {
+    let fd = match stem::syscall::vfs::vfs_open("/proc/mounts", abi::syscall::vfs_flags::O_RDONLY) {
+        Ok(fd) => fd,
+        Err(_) => return false,
+    };
+
+    let mut buf = [0u8; 4096];
+    let n = stem::syscall::vfs::vfs_read(fd, &mut buf).unwrap_or(0);
+    let _ = stem::syscall::vfs::vfs_close(fd);
+    let Ok(text) = core::str::from_utf8(&buf[..n]) else {
+        return false;
+    };
+
+    text.lines().filter_map(|line| line.split_whitespace().next()).any(|path| path == target)
 }
 
 fn write_active_ui(target: &str) {

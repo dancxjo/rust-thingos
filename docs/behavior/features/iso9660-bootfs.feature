@@ -8,7 +8,7 @@ Feature: ISO9660 boot filesystem mount
     And I type "cat /media/cdrom/etc/hostname" on the serial console
     Then the latest command output should contain "thingos"
 
-  Scenario: iso9660d serves multiple sequential reads correctly via parallel dispatch
+  Scenario: iso9660d serves multiple sequential reads correctly
     Given the machine is booted
     When I wait for the shell prompt
     And I type "cat /media/cdrom/etc/hostname" on the serial console
@@ -30,6 +30,17 @@ Feature: ISO9660 boot filesystem mount
     And I type "cd /media/cdrom" on the serial console
     And I type "ls" on the serial console
     Then the latest command output should contain "etc"
+    And the latest command output should contain "bin"
+    And the latest command output should contain "lib"
+    And the latest command output should contain "share"
+    And the latest command output should contain "drivers"
+
+  Scenario: boot fruit root is overlaid into the root namespace
+    Given the machine is booted
+    When I wait for the shell prompt
+    And I wait for the serial output to contain "SPROUT: Root overlay mounted source=/media/cdrom target=/ flags=before,cor"
+    And I type "cat /etc/hostname" on the serial console
+    Then the latest command output should contain "thingos"
 
   Scenario: ELF binaries are loaded correctly via the memfd bulk-transfer path
     # Exercises ReadIntoFd: the kernel injects a memfd into iso9660d's fd table

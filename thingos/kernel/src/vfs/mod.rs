@@ -39,6 +39,7 @@ pub mod port_node;
 pub mod procfs;
 pub mod provider;
 pub mod ramfs;
+pub mod subtree;
 pub mod sysfs;
 pub mod tty;
 pub mod union;

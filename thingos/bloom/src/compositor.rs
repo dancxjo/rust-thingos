@@ -102,12 +102,8 @@ pub fn cull_composition(
         }
     }
 
-    let surviving: Vec<CompositionEntry> = entries
-        .iter()
-        .zip(keep.iter())
-        .filter(|(_, &k)| k)
-        .map(|(e, _)| e.clone())
-        .collect();
+    let surviving: Vec<CompositionEntry> =
+        entries.iter().zip(keep.iter()).filter(|(_, &k)| k).map(|(e, _)| e.clone()).collect();
 
     (surviving, counters)
 }
@@ -134,7 +130,6 @@ pub fn is_fully_covered(covered: &[Rect], rect: Rect) -> bool {
     }
     covered.iter().any(|c| rect_contains(*c, rect))
 }
-
 
 // ── unit tests ────────────────────────────────────────────────────────────────
 
@@ -255,21 +250,21 @@ mod tests {
     #[test]
     fn partial_opaque_region_is_not_fully_opaque() {
         // Opaque region covers only half the surface.
-        let e = entry(1, r(0, 0, 800, 600), 800, 600, Some(r(0, 0, 400, 600)), SurfaceChrome::default());
+        let e = entry(
+            1,
+            r(0, 0, 800, 600),
+            800,
+            600,
+            Some(r(0, 0, 400, 600)),
+            SurfaceChrome::default(),
+        );
         assert!(!e.is_opaque());
     }
 
     #[test]
     fn chrome_prevents_opaque_classification() {
         let chrome = SurfaceChrome { titlebar_height: 24, frame_thickness: 4 };
-        let e = entry(
-            1,
-            r(0, 0, 800, 600),
-            800,
-            600,
-            Some(r(0, 0, 800, 600)),
-            chrome,
-        );
+        let e = entry(1, r(0, 0, 800, 600), 800, 600, Some(r(0, 0, 800, 600)), chrome);
         assert!(!e.is_opaque());
     }
 
@@ -285,10 +280,8 @@ mod tests {
     #[test]
     fn no_cover_all_planes_survive() {
         // Two non-overlapping windows.
-        let entries = alloc::vec![
-            opaque_entry(1, r(0, 0, 100, 100)),
-            opaque_entry(2, r(200, 0, 100, 100)),
-        ];
+        let entries =
+            alloc::vec![opaque_entry(1, r(0, 0, 100, 100)), opaque_entry(2, r(200, 0, 100, 100)),];
         let (surviving, counters) = cull_composition(&entries, 800, 600);
         assert_eq!(surviving.len(), 2);
         assert_eq!(counters.hidden_regions_skipped, 0);
@@ -400,13 +393,18 @@ mod tests {
     #[test]
     fn three_planes_middle_fully_covered_skipped() {
         // Background, a mid-level window, and a top-level window covering all.
-        let bg = alpha_entry(0, r(0, 0, 800, 600));  // wallpaper (no opaque region)
+        let bg = alpha_entry(0, r(0, 0, 800, 600)); // wallpaper (no opaque region)
         let mid = opaque_entry(1, r(100, 100, 200, 200));
         let top = opaque_entry(2, r(0, 0, 800, 600)); // covers everything
         let entries = alloc::vec![bg, mid, top];
         let (surviving, counters) = cull_composition(&entries, 800, 600);
         // Only the top opaque plane survives (bg and mid are hidden).
-        assert_eq!(surviving.len(), 1, "expected only top plane, got {:?}", surviving.iter().map(|e| e.z_order).collect::<alloc::vec::Vec<_>>());
+        assert_eq!(
+            surviving.len(),
+            1,
+            "expected only top plane, got {:?}",
+            surviving.iter().map(|e| e.z_order).collect::<alloc::vec::Vec<_>>()
+        );
         assert_eq!(counters.hidden_regions_skipped, 2);
         assert_eq!(counters.opaque_planes_copied, 1);
         assert_eq!(counters.alpha_blend_planes, 0);

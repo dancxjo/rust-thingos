@@ -31,10 +31,10 @@
 
 use abi::display::BufferId;
 use abi::display::accel2d::{
-    ACCEL2D_CMD_ALPHA_BLIT, ACCEL2D_CMD_CLEAR_RECT, ACCEL2D_CMD_COPY_RECT,
+    ACCEL2D_CMD_ALPHA_BLIT, ACCEL2D_CMD_BODY_SIZE, ACCEL2D_CMD_CLEAR_RECT, ACCEL2D_CMD_COPY_RECT,
     ACCEL2D_CMD_FLUSH_DAMAGE, ACCEL2D_CMD_ROUNDED_CLIP_BLIT, ACCEL2D_CMD_STRETCH_BLIT,
-    ACCEL2D_CMD_BODY_SIZE, ACCEL2D_COMMAND_SIZE, ACCEL2D_MAX_DAMAGE_RECTS, Accel2dBatch,
-    Accel2dCommand, Accel2dCommandBody, AlphaBlitCmd, ClearRectCmd, CopyRectCmd, FlushDamageCmd,
+    ACCEL2D_COMMAND_SIZE, ACCEL2D_MAX_DAMAGE_RECTS, Accel2dBatch, Accel2dCommand,
+    Accel2dCommandBody, AlphaBlitCmd, ClearRectCmd, CopyRectCmd, FlushDamageCmd,
     RoundedClipBlitCmd, ScaleFilter, StretchBlitCmd,
 };
 use abi::display_protocol::Rect;
@@ -246,8 +246,7 @@ impl Accel2dBatchBuilder {
     /// Returns `0` when `out` is too small; callers must ensure
     /// `out.len() >= MAX_BLOOM_ACCEL2D_PAYLOAD`.
     pub fn write_payload(&self, out: &mut [u8]) -> usize {
-        let needed =
-            core::mem::size_of::<Accel2dBatch>() + self.count * ACCEL2D_COMMAND_SIZE;
+        let needed = core::mem::size_of::<Accel2dBatch>() + self.count * ACCEL2D_COMMAND_SIZE;
         if out.len() < needed {
             return 0;
         }
@@ -381,8 +380,7 @@ mod tests {
         b.flush_damage(&[full_rect()]);
         let mut out = [0u8; MAX_BLOOM_ACCEL2D_PAYLOAD];
         let len = b.write_payload(&mut out);
-        let expected =
-            core::mem::size_of::<Accel2dBatch>() + 2 * ACCEL2D_COMMAND_SIZE;
+        let expected = core::mem::size_of::<Accel2dBatch>() + 2 * ACCEL2D_COMMAND_SIZE;
         assert_eq!(len, expected);
     }
 

@@ -254,6 +254,19 @@ pub fn get_driver_for_path(path: &str) -> SysResult<Arc<dyn VfsDriver>> {
 
 /// Return the VFS driver associated with `path` in `ns_id`.
 pub fn get_driver_for_path_in_namespace(ns_id: u64, path: &str) -> SysResult<Arc<dyn VfsDriver>> {
+    get_driver_and_relative_for_path_in_namespace(ns_id, path).map(|(driver, _)| driver)
+}
+
+/// Return the VFS driver associated with `path` plus the path relative to that mount.
+pub fn get_driver_and_relative_for_path(path: &str) -> SysResult<(Arc<dyn VfsDriver>, String)> {
+    get_driver_and_relative_for_path_in_namespace(current_namespace_id(), path)
+}
+
+/// Return the VFS driver associated with `path` plus the path relative to that mount.
+pub fn get_driver_and_relative_for_path_in_namespace(
+    ns_id: u64,
+    path: &str,
+) -> SysResult<(Arc<dyn VfsDriver>, String)> {
     ensure_namespace(ns_id);
     if !path.starts_with('/') {
         return Err(Errno::ENOENT);
@@ -263,9 +276,9 @@ pub fn get_driver_for_path_in_namespace(ns_id: u64, path: &str) -> SysResult<Arc
         return Err(Errno::ENOENT);
     };
     for entry in table.iter() {
-        if strip_prefix(path, &entry.prefix).is_some() {
+        if let Some(rel) = strip_prefix(path, &entry.prefix) {
             if let Some(top) = entry.stack.first() {
-                return Ok(Arc::clone(&top.driver));
+                return Ok((Arc::clone(&top.driver), rel.to_string()));
             }
         }
     }

@@ -89,7 +89,9 @@ pub fn dispatch(
         ObjKind::Callback => vec![],
         ObjKind::XdgWmBase => dispatch_xdg_wm_base(msg, client, obj_id, blossom),
         ObjKind::XdgPositioner => dispatch_xdg_positioner(msg, client, obj_id, blossom),
-        ObjKind::XdgSurface => dispatch_xdg_surface(msg, client, obj_id, blossom, cmd_write, output),
+        ObjKind::XdgSurface => {
+            dispatch_xdg_surface(msg, client, obj_id, blossom, cmd_write, output)
+        }
         ObjKind::XdgToplevel => dispatch_xdg_toplevel(msg, client, obj_id, blossom, cmd_write),
         ObjKind::XdgPopup => dispatch_xdg_popup(msg, client, obj_id, blossom),
         ObjKind::Seat => dispatch_seat(msg, client, obj_id),
@@ -1079,7 +1081,12 @@ fn dispatch_region(msg: &WireMsg, client: &mut WaylandClient, obj_id: u32) -> Ve
                     rects.push((x, y, w, h, true));
                     blossom_debug!(
                         "wayland-server: wl_region obj={} add x={} y={} w={} h={} rects={}",
-                        obj_id, x, y, w, h, rects.len()
+                        obj_id,
+                        x,
+                        y,
+                        w,
+                        h,
+                        rects.len()
                     );
                 }
             }
@@ -1095,7 +1102,12 @@ fn dispatch_region(msg: &WireMsg, client: &mut WaylandClient, obj_id: u32) -> Ve
                     rects.push((x, y, w, h, false));
                     blossom_debug!(
                         "wayland-server: wl_region obj={} subtract x={} y={} w={} h={} rects={}",
-                        obj_id, x, y, w, h, rects.len()
+                        obj_id,
+                        x,
+                        y,
+                        w,
+                        h,
+                        rects.len()
                     );
                 }
             }
@@ -1266,8 +1278,7 @@ fn dispatch_surface(
             }
         }
 
-        WL_SURFACE_SET_BUFFER_TRANSFORM
-        | WL_SURFACE_SET_BUFFER_SCALE => {
+        WL_SURFACE_SET_BUFFER_TRANSFORM | WL_SURFACE_SET_BUFFER_SCALE => {
             // Accepted as no-ops.
         }
 
@@ -1418,9 +1429,7 @@ fn handle_surface_commit(
             Some(region_id) => {
                 // Resolve the wl_region object to a bounding rect.
                 match client.objects.get(&region_id) {
-                    Some(ObjectEntry::Region { rects }) => {
-                        region_bounding_rect(rects)
-                    }
+                    Some(ObjectEntry::Region { rects }) => region_bounding_rect(rects),
                     _ => None,
                 }
             }
@@ -1481,9 +1490,7 @@ fn handle_surface_commit(
                 wl_surface_obj,
                 resolved_input_rect
             );
-            out.push(
-                ipc::encode_set_input_region(bloom_surface_id, resolved_input_rect).to_vec(),
-            );
+            out.push(ipc::encode_set_input_region(bloom_surface_id, resolved_input_rect).to_vec());
         }
     }
 
@@ -1747,7 +1754,14 @@ fn dispatch_xdg_surface(
                 Some(id) => id,
                 None => return vec![],
             };
-            match blossom.get_popup(client_id, obj_id, new_id, parent, positioner, Some((output.width as i32, output.height as i32))) {
+            match blossom.get_popup(
+                client_id,
+                obj_id,
+                new_id,
+                parent,
+                positioner,
+                Some((output.width as i32, output.height as i32)),
+            ) {
                 Ok(cmds) => {
                     stem::info!(
                         "wayland-server: xdg_popup obj={} assigned to xdg_surface={}",
@@ -2408,10 +2422,7 @@ pub fn send_blossom_commands(client: &mut WaylandClient, cmds: &[BlossomCommand]
             BlossomCommand::DismissPopup { xdg_popup, .. } => {
                 // xdg_popup.popup_done()
                 // opcode 1 (no payload, destructor)
-                blossom_debug!(
-                    "wayland-server: xdg_popup.popup_done sent to obj={}",
-                    xdg_popup
-                );
+                blossom_debug!("wayland-server: xdg_popup.popup_done sent to obj={}", xdg_popup);
                 client.send(*xdg_popup, 1, &[]);
             }
             BlossomCommand::SendPing { wm_base, serial, .. } => {
@@ -2524,7 +2535,11 @@ fn dispatch_layer_shell(
                         || subsurface_obj.is_some(),
                 ),
                 _ => {
-                    client.send_protocol_error(obj_id, ZWLR_LAYER_SHELL_ERROR_ROLE, "invalid wl_surface");
+                    client.send_protocol_error(
+                        obj_id,
+                        ZWLR_LAYER_SHELL_ERROR_ROLE,
+                        "invalid wl_surface",
+                    );
                     return vec![];
                 }
             };
@@ -2703,9 +2718,8 @@ fn dispatch_layer_surface(
             // sending a zero-everything update).  This keeps stacking sane
             // if the underlying wl_surface is later reused.
             if bloom_surface_id != 0 {
-                let cmd = ipc::encode_set_layer_surface(
-                    bloom_surface_id, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0,
-                );
+                let cmd =
+                    ipc::encode_set_layer_surface(bloom_surface_id, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0);
                 let _ = stem::syscall::port_send_all(cmd_write, &cmd);
             }
             client.destroy(obj_id);
@@ -2754,12 +2768,9 @@ fn on_layer_surface_commit(
     // Snapshot what we need without holding a borrow.
     let (config, initial_done, configured, bloom_surface_id) =
         match client.objects.get(&layer_obj_id) {
-            Some(ObjectEntry::LayerSurface { state, bloom_surface_id, .. }) => (
-                state.config,
-                state.initial_commit_done,
-                state.configured,
-                *bloom_surface_id,
-            ),
+            Some(ObjectEntry::LayerSurface { state, bloom_surface_id, .. }) => {
+                (state.config, state.initial_commit_done, state.configured, *bloom_surface_id)
+            }
             _ => return true,
         };
 
@@ -3027,11 +3038,7 @@ fn dispatch_data_offer(msg: &WireMsg, client: &mut WaylandClient, obj_id: u32) -
             } else {
                 String::new()
             };
-            blossom_debug!(
-                "wayland-server: data_offer.accept obj={} mime=\"{}\"",
-                obj_id,
-                mime
-            );
+            blossom_debug!("wayland-server: data_offer.accept obj={} mime=\"{}\"", obj_id, mime);
             client.pending_dnd_accept = Some(mime);
         }
         WL_DATA_OFFER_FINISH => {
@@ -3071,11 +3078,7 @@ const WP_PRESENTATION_FEEDBACK: u16 = 1;
 /// only events (`sync_output`, `presented`, `discarded`).  All requests are
 /// silently ignored.
 
-fn dispatch_presentation(
-    msg: &WireMsg,
-    client: &mut WaylandClient,
-    obj_id: u32,
-) -> Vec<Vec<u8>> {
+fn dispatch_presentation(msg: &WireMsg, client: &mut WaylandClient, obj_id: u32) -> Vec<Vec<u8>> {
     match msg.opcode {
         WP_PRESENTATION_DESTROY => {
             client.destroy(obj_id);
@@ -3091,10 +3094,8 @@ fn dispatch_presentation(
             // table stays consistent — even if the surface lookup fails we
             // settle the feedback immediately with `discarded`.
             client.insert(fb_id, ObjectEntry::PresentationFeedback);
-            let surface_ok = matches!(
-                client.objects.get(&surface_obj),
-                Some(ObjectEntry::Surface { .. })
-            );
+            let surface_ok =
+                matches!(client.objects.get(&surface_obj), Some(ObjectEntry::Surface { .. }));
             if surface_ok {
                 client.add_pending_presentation_feedback(surface_obj, fb_id);
                 blossom_debug!(

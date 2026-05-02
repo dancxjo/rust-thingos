@@ -17,9 +17,7 @@ use ipc_helpers::provider::{ProviderLoop, ProviderRequest, ProviderResponse};
 use iso9660::{ISO_SECTOR_SIZE, IsoFs};
 use stem::abi::module_manifest::{MANIFEST_MAGIC, ManifestHeader, ModuleKind};
 use stem::block::{BlockDevice, BlockError};
-use stem::syscall::vfs::{
-    vfs_close, vfs_mount, vfs_open, vfs_read, vfs_readdir, vfs_seek, vfs_write,
-};
+use stem::syscall::vfs::{vfs_close, vfs_mount, vfs_open, vfs_read, vfs_readdir, vfs_seek};
 use stem::syscall::{PortHandle, argv_get, port_create};
 use stem::{info, warn};
 
@@ -72,27 +70,35 @@ impl BlockDevice for VfsBlockDevice {
                 Ok(0) => break,
                 Ok(n) => total += n,
                 Err(_) => {
-                    vfs_close(fd);
+                    let _ = vfs_close(fd);
                     return Err(BlockError::IoError);
                 }
             }
         }
-        vfs_close(fd);
+        let _ = vfs_close(fd);
         if total == buf.len() { Ok(()) } else { Err(BlockError::IoError) }
     }
 }
 
 // ── Handle encoding ─────────────────────────────────────────────────────────
 
-fn encode_handle(lba: u32, size: u32) -> u64 {
-    ((lba as u64) << 32) | (size as u64)
+const HANDLE_DIR_FLAG: u32 = 1 << 31;
+
+fn encode_handle(lba: u32, size: u32, is_dir: bool) -> u64 {
+    let encoded_size = if is_dir { size | HANDLE_DIR_FLAG } else { size };
+    ((lba as u64) << 32) | (encoded_size as u64)
 }
-fn decode_handle(h: u64) -> (u32, u32) {
-    ((h >> 32) as u32, (h & 0xFFFF_FFFF) as u32)
+
+fn decode_handle(h: u64) -> (u32, u32, bool) {
+    let encoded_size = h as u32;
+    let is_dir = (encoded_size & HANDLE_DIR_FLAG) != 0;
+    let size = if is_dir { encoded_size & !HANDLE_DIR_FLAG } else { encoded_size };
+    ((h >> 32) as u32, size, is_dir)
 }
 
 const S_IFDIR: u32 = 0o040000;
 const S_IFREG: u32 = 0o100000;
+const MAX_READ_CHUNK: usize = 16 * 1024;
 
 // ── VFS RPC dispatch ────────────────────────────────────────────────────────
 
@@ -100,9 +106,9 @@ fn dispatch_request(fs: &IsoFs, dev: &VfsBlockDevice, req: &ProviderRequest) -> 
     match req.op {
         VfsRpcOp::Lookup => handle_lookup(fs, dev, &req.payload),
         VfsRpcOp::Read => handle_read(dev, &req.payload),
-        VfsRpcOp::ReadIntoFd => handle_read_into_fd(dev, &req.payload),
+        VfsRpcOp::ReadIntoFd => ProviderResponse::err(Errno::ENOSYS),
         VfsRpcOp::Readdir => handle_readdir(fs, dev, &req.payload),
-        VfsRpcOp::Stat => handle_stat(fs, dev, &req.payload),
+        VfsRpcOp::Stat => handle_stat(&req.payload),
         VfsRpcOp::Close | VfsRpcOp::SubscribeReady | VfsRpcOp::UnsubscribeReady => {
             ProviderResponse::ok_empty()
         }
@@ -118,64 +124,33 @@ fn handle_lookup(fs: &IsoFs, dev: &VfsBlockDevice, payload: &[u8]) -> ProviderRe
     let path_len = u32::from_le_bytes(payload[0..4].try_into().unwrap()) as usize;
     let path = core::str::from_utf8(&payload[4..4 + path_len]).unwrap_or("");
 
-    let (lba, size) = if path.is_empty() || path == "/" {
-        (fs.pvd.root_dir_extent, fs.pvd.root_dir_size)
+    let (lba, size, is_dir) = if path.is_empty() || path == "/" {
+        (fs.pvd.root_dir_extent, fs.pvd.root_dir_size, true)
     } else {
         match fs.lookup_path(dev, path) {
-            Some(entry) => (entry.extent_lba, entry.size),
+            Some(entry) => (entry.extent_lba, entry.size, entry.is_directory),
             None => return ProviderResponse::err(Errno::ENOENT),
         }
     };
-    ProviderResponse::ok_u64(encode_handle(lba, size))
+    ProviderResponse::ok_u64(encode_handle(lba, size, is_dir))
 }
 
 fn handle_read(dev: &VfsBlockDevice, payload: &[u8]) -> ProviderResponse {
     let handle = u64::from_le_bytes(payload[0..8].try_into().unwrap());
     let offset = u64::from_le_bytes(payload[8..16].try_into().unwrap());
     let len = u32::from_le_bytes(payload[16..20].try_into().unwrap()) as usize;
-    let (lba, size) = decode_handle(handle);
+    let (lba, size, is_dir) = decode_handle(handle);
+
+    if is_dir {
+        return ProviderResponse::err(Errno::EISDIR);
+    }
 
     if offset >= size as u64 {
         return ProviderResponse::ok_read(&[]);
     }
     let iso_file = iso9660::IsoFile { extent_lba: lba, size };
-    match iso_file.read_range(dev, offset, len) {
+    match iso_file.read_range(dev, offset, len.min(MAX_READ_CHUNK)) {
         Ok(data) => ProviderResponse::ok_read(&data),
-        Err(_) => ProviderResponse::err(Errno::EIO),
-    }
-}
-
-/// Bulk-read handler: write the entire requested range directly into the
-/// kernel-injected memfd (identified by `dest_fd`) using a single `vfs_write`
-/// syscall.
-///
-/// Because `vfs_write` has no ring-buffer size limit, the full file content
-/// travels in one shot, reducing the kernel↔provider IPC round-trips from
-/// O(file_size / 64 KiB) to O(1).
-fn handle_read_into_fd(dev: &VfsBlockDevice, payload: &[u8]) -> ProviderResponse {
-    if payload.len() < 24 {
-        return ProviderResponse::err(Errno::EINVAL);
-    }
-    let handle = u64::from_le_bytes(payload[0..8].try_into().unwrap());
-    let offset = u64::from_le_bytes(payload[8..16].try_into().unwrap());
-    let len = u32::from_le_bytes(payload[16..20].try_into().unwrap()) as usize;
-    let dest_fd = u32::from_le_bytes(payload[20..24].try_into().unwrap());
-    let (lba, size) = decode_handle(handle);
-
-    if offset >= size as u64 {
-        return ProviderResponse::ok_written(0);
-    }
-
-    let iso_file = iso9660::IsoFile { extent_lba: lba, size };
-    let data = match iso_file.read_range(dev, offset, len) {
-        Ok(d) => d,
-        Err(_) => return ProviderResponse::err(Errno::EIO),
-    };
-
-    // Write the entire data into the kernel-allocated memfd in one syscall.
-    // No IPC ring-buffer limit applies here.
-    match vfs_write(dest_fd, &data) {
-        Ok(n) => ProviderResponse::ok_written(n as u32),
         Err(_) => ProviderResponse::err(Errno::EIO),
     }
 }
@@ -184,7 +159,10 @@ fn handle_readdir(fs: &IsoFs, dev: &VfsBlockDevice, payload: &[u8]) -> ProviderR
     let handle = u64::from_le_bytes(payload[0..8].try_into().unwrap());
     let offset = u64::from_le_bytes(payload[8..16].try_into().unwrap());
     let max_bytes = u32::from_le_bytes(payload[16..20].try_into().unwrap()) as usize;
-    let (lba, size) = decode_handle(handle);
+    let (lba, size, is_dir) = decode_handle(handle);
+    if !is_dir {
+        return ProviderResponse::err(Errno::ENOTDIR);
+    }
     let entries = fs.list_dir(dev, lba, size);
 
     let mut out = Vec::new();
@@ -192,7 +170,7 @@ fn handle_readdir(fs: &IsoFs, dev: &VfsBlockDevice, payload: &[u8]) -> ProviderR
         let name = entry.name.as_bytes();
         let name_len = name.len().min(255) as u8;
         let file_type: u8 = if entry.is_directory { 4 } else { 8 };
-        let ino = encode_handle(entry.extent_lba, entry.size);
+        let ino = encode_handle(entry.extent_lba, entry.size, entry.is_directory);
         if out.len() + 10 + name_len as usize > max_bytes {
             break;
         }
@@ -204,10 +182,9 @@ fn handle_readdir(fs: &IsoFs, dev: &VfsBlockDevice, payload: &[u8]) -> ProviderR
     ProviderResponse::ok_read(&out)
 }
 
-fn handle_stat(fs: &IsoFs, dev: &VfsBlockDevice, payload: &[u8]) -> ProviderResponse {
+fn handle_stat(payload: &[u8]) -> ProviderResponse {
     let handle = u64::from_le_bytes(payload[0..8].try_into().unwrap());
-    let (lba, size) = decode_handle(handle);
-    let is_dir = lba == fs.pvd.root_dir_extent || !fs.list_dir(dev, lba, size).is_empty();
+    let (_, size, is_dir) = decode_handle(handle);
     let mode = if is_dir { S_IFDIR | 0o555 } else { S_IFREG | 0o444 };
     ProviderResponse::ok_stat(mode, size as u64, handle)
 }
@@ -300,7 +277,7 @@ fn try_scan_dir_and_mount(
     let dir_fd = vfs_open(dir_path, abi::syscall::vfs_flags::O_RDONLY).ok()?;
     let mut buf = [0u8; 4096];
     let n = vfs_readdir(dir_fd, &mut buf).unwrap_or(0);
-    vfs_close(dir_fd);
+    let _ = vfs_close(dir_fd);
 
     let mut offset = 0;
     while offset < n {

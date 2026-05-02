@@ -871,7 +871,10 @@ pub fn sys_fs_bind(
     let dst_str = core::str::from_utf8(&dst_buf).map_err(|_| Errno::EINVAL)?;
     let dst_path = resolve_path(dst_str)?;
 
-    let mut driver = vfs::mount::get_driver_for_path(&src_path)?;
+    let (mut driver, src_rel) = vfs::mount::get_driver_and_relative_for_path(&src_path)?;
+    if !src_rel.trim_matches('/').is_empty() {
+        driver = Arc::new(vfs::subtree::SubtreeFs::new(driver, &src_rel));
+    }
 
     if (flags & abi::syscall::mount_flags::MCOR) != 0 {
         driver = Arc::new(vfs::overlay::OverlayFs::new(driver));

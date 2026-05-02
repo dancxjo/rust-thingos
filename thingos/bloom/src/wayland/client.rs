@@ -478,21 +478,17 @@ impl WaylandClient {
         wl_surface_obj: u32,
         bloom_surface_id: u32,
     ) -> usize {
-        let drained: Vec<u32> = if let Some(ObjectEntry::Surface {
-            pending_presentation_feedback,
-            ..
-        }) = self.objects.get_mut(&wl_surface_obj)
-        {
-            core::mem::take(pending_presentation_feedback)
-        } else {
-            Vec::new()
-        };
+        let drained: Vec<u32> =
+            if let Some(ObjectEntry::Surface { pending_presentation_feedback, .. }) =
+                self.objects.get_mut(&wl_surface_obj)
+            {
+                core::mem::take(pending_presentation_feedback)
+            } else {
+                Vec::new()
+            };
         let n = drained.len();
         if !drained.is_empty() {
-            self.presentation_feedbacks
-                .entry(bloom_surface_id)
-                .or_default()
-                .extend(drained);
+            self.presentation_feedbacks.entry(bloom_surface_id).or_default().extend(drained);
         }
         n
     }
@@ -576,15 +572,14 @@ impl WaylandClient {
     /// against `wl_surface_obj` but were never committed (e.g. when a surface
     /// is destroyed without a final commit).
     pub fn discard_pending_presentation_feedback(&mut self, wl_surface_obj: u32) -> Vec<u32> {
-        let drained: Vec<u32> = if let Some(ObjectEntry::Surface {
-            pending_presentation_feedback,
-            ..
-        }) = self.objects.get_mut(&wl_surface_obj)
-        {
-            core::mem::take(pending_presentation_feedback)
-        } else {
-            Vec::new()
-        };
+        let drained: Vec<u32> =
+            if let Some(ObjectEntry::Surface { pending_presentation_feedback, .. }) =
+                self.objects.get_mut(&wl_surface_obj)
+            {
+                core::mem::take(pending_presentation_feedback)
+            } else {
+                Vec::new()
+            };
         for &fb in &drained {
             self.send(fb, 2, &[]);
             self.destroy(fb);

@@ -37,6 +37,36 @@ const DEFAULT_WALLPAPERS: [WallpaperSpec; 5] = [
     WallpaperSpec { file_name: "linen.bmp", variant: 3 },
 ];
 
+const ISO_ROOT_DIRS: &[&str] = &[
+    "boot",
+    "boot/limine",
+    "bin",
+    "drivers",
+    "etc",
+    "etc/roots",
+    "lib",
+    "EFI",
+    "EFI/BOOT",
+    "media",
+    "media/cdrom",
+    "mnt",
+    "dev",
+    "proc",
+    "sys",
+    "tmp",
+    "run",
+    "var",
+    "home",
+];
+
+const SHARE_ASSET_DIRS: &[(&str, &str)] = &[
+    ("assets/cursors", "cursors"),
+    ("assets/fonts", "fonts"),
+    ("assets/icons/lucide", "icons/lucide"),
+    ("assets/themes", "themes"),
+    ("assets/wallpapers", "wallpapers"),
+];
+
 /// Configuration for ISO builds.
 #[derive(Default)]
 pub struct IsoConfig<'a> {
@@ -60,13 +90,55 @@ fn ensure_default_wallpapers(root: &Path) -> Result<()> {
     Ok(())
 }
 
-fn asset_list_contains_wallpaper(assets: &[PathBuf], file_name: &str) -> bool {
-    let suffix = format!("wallpapers/{file_name}");
-    assets.iter().any(|asset| asset.to_string_lossy().replace('\\', "/").ends_with(&suffix))
+fn create_iso_root_layout(sh: &Shell, iso_root: &Path) -> Result<()> {
+    sh.create_dir(iso_root)?;
+    for dir in ISO_ROOT_DIRS {
+        sh.create_dir(iso_root.join(dir))?;
+    }
+    Ok(())
 }
 
-fn is_future_cursor_asset(clean_path: &str) -> bool {
-    clean_path.starts_with("assets/cursors/future/") && clean_path.ends_with(".svg")
+fn stage_share_assets(iso_root: &Path) -> Result<Vec<PathBuf>> {
+    let share_root = iso_root.join("share");
+    std::fs::create_dir_all(&share_root)?;
+
+    for (src, dst) in SHARE_ASSET_DIRS {
+        copy_dir_recursive(Path::new(src), &share_root.join(dst))?;
+    }
+    ensure_default_wallpapers(&share_root)?;
+
+    collect_files_under(&share_root)
+}
+
+fn copy_dir_recursive(src: &Path, dst: &Path) -> Result<()> {
+    std::fs::create_dir_all(dst)?;
+    for entry in std::fs::read_dir(src)? {
+        let entry = entry?;
+        let src_path = entry.path();
+        let dst_path = dst.join(entry.file_name());
+        let file_type = entry.file_type()?;
+        if file_type.is_dir() {
+            copy_dir_recursive(&src_path, &dst_path)?;
+        } else if file_type.is_file() {
+            if let Some(parent) = dst_path.parent() {
+                std::fs::create_dir_all(parent)?;
+            }
+            std::fs::copy(&src_path, &dst_path)?;
+        }
+    }
+    Ok(())
+}
+
+fn collect_files_under(root: &Path) -> Result<Vec<PathBuf>> {
+    let mut files = Vec::new();
+    for entry in WalkDir::new(root) {
+        let entry = entry?;
+        if entry.file_type().is_file() {
+            files.push(entry.path().to_path_buf());
+        }
+    }
+    files.sort();
+    Ok(files)
 }
 
 fn stage_default_wallpapers_hdd(sh: &Shell, hdd: &str, arch: &str) -> Result<()> {
@@ -200,7 +272,7 @@ fn wallpaper_pixel(variant: u8, x: u32, y: u32, width: u32, height: u32) -> (u8,
 }
 
 pub fn default_programs() -> Vec<ProgramConfig> {
-    vec![
+    let mut programs = vec![
         ProgramConfig {
             name: "sprout",
             is_init: true,
@@ -369,7 +441,13 @@ pub fn default_programs() -> Vec<ProgramConfig> {
         ProgramConfig { name: "attr_get", is_init: false, boot_module: true, features: vec![] },
         ProgramConfig { name: "attr_set", is_init: false, boot_module: true, features: vec![] },
         ProgramConfig { name: "attr_rm", is_init: false, boot_module: true, features: vec![] },
-    ]
+    ];
+
+    for program in &mut programs {
+        program.boot_module = is_bootstrap_boot_module(program.name);
+    }
+
+    programs
 }
 
 pub fn default_shared_libraries() -> Vec<SharedLibraryConfig> {
@@ -492,7 +570,7 @@ fn generate_limine_config(
 
 fn limine_modules(
     programs: &[ProgramConfig],
-    assets: &[PathBuf],
+    _assets: &[PathBuf],
     include_busybox: bool,
     include_default_shell: bool,
     bootfb_only: bool,
@@ -529,54 +607,8 @@ fn limine_modules(
         }
     }
 
-    if !safe_shell_only {
-        for lib in default_shared_libraries() {
-            modules.push_str(&format!("    module_path: boot():/lib/{}\n", lib.file_name));
-        }
-    }
-
-    if !safe_shell_only {
-        for asset in assets {
-            let path_str = asset.to_string_lossy();
-            let clean_path = path_str.replace('\\', "/");
-
-            let allowed = (clean_path.starts_with("assets/fonts/") && clean_path.ends_with(".ttf"))
-                || is_future_cursor_asset(&clean_path)
-                || (clean_path.starts_with("assets/icons/lucide/") && clean_path.ends_with(".svg"))
-                || clean_path.ends_with("wallpapers/flower.bmp")
-                || clean_path.ends_with("wallpapers/flower.png")
-                || clean_path.ends_with("wallpapers/clouds.bmp")
-                || clean_path.ends_with("wallpapers/leather.bmp")
-                || clean_path.ends_with("wallpapers/linen.bmp")
-                || clean_path.ends_with("themes/solarized_warm.toml")
-                || clean_path.ends_with("themes/genie_circles.wasm")
-                || clean_path.ends_with("unifont.hex");
-
-            if allowed
-                && !clean_path.ends_with("unifont.hex")
-                && !clean_path.ends_with("locale.conf")
-            {
-                let iso_path = clean_path.replace("assets/", "share/");
-                modules.push_str(&format!("    module_path: boot():/{iso_path}\n"));
-            }
-        }
-
-        for wallpaper in DEFAULT_WALLPAPERS {
-            if !asset_list_contains_wallpaper(assets, wallpaper.file_name) {
-                modules.push_str(&format!(
-                    "    module_path: boot():/share/wallpapers/{}\n",
-                    wallpaper.file_name
-                ));
-            }
-        }
-    }
-
     modules.push_str("    module_path: boot():/share/fonts/unifont.hex\n");
-    modules.push_str("    module_path: boot():/etc/locale.conf\n");
-    modules.push_str("    module_path: boot():/etc/profile\n");
-    modules.push_str("    module_path: boot():/etc/motd\n");
-    modules.push_str("    module_path: boot():/etc/fstab\n");
-    modules.push_str("    module_path: boot():/etc/hostname\n");
+    modules.push_str("    module_path: boot():/etc/roots/root\n");
     if include_default_shell && !safe_shell_only {
         modules.push_str("    module_path: boot():/etc/default/shell\n");
     }
@@ -644,32 +676,9 @@ pub fn build_iso_with_config(
     if sh.path_exists(iso_root) {
         sh.remove_path(iso_root)?;
     }
-    sh.create_dir(iso_root.join("boot"))?;
-    sh.create_dir(iso_root.join("boot/limine"))?;
-    sh.create_dir(iso_root.join("bin"))?;
-    sh.create_dir(iso_root.join("drivers"))?;
-    sh.create_dir(iso_root.join("etc"))?;
-    sh.create_dir(iso_root.join("usr/lib"))?;
-    sh.create_dir(iso_root.join("lib"))?;
-    sh.create_dir(iso_root.join("EFI/BOOT"))?;
-    sh.create_dir(iso_root.join("https"))?;
+    create_iso_root_layout(sh, iso_root)?;
 
-    cmd!(sh, "cp -r assets {iso_root_name}/share").run()?;
-    ensure_default_wallpapers(&iso_root.join("share"))?;
-
-    let mut asset_files = Vec::new();
-    for entry in WalkDir::new("assets") {
-        let entry = entry?;
-        if entry.file_type().is_file() {
-            let path = entry.path();
-            if path.to_string_lossy().contains("assets/icons")
-                && !path.to_string_lossy().contains("thingos")
-            {
-                continue;
-            }
-            asset_files.push(path.to_path_buf());
-        }
-    }
+    let mut asset_files = stage_share_assets(iso_root)?;
 
     asset_files.sort_by(|a, b| {
         let a_str = a.to_string_lossy();
@@ -725,6 +734,10 @@ pub fn build_iso_with_config(
     sh.write_file(
         iso_root.join("etc/fstab"),
         "none /net net defaults 0 0\nnone /https https defaults 0 0\nnone /media/cdrom iso9660 defaults 0 0\nnone /hosts mdns defaults 0 0\n",
+    )?;
+    sh.write_file(
+        iso_root.join("etc/roots/root"),
+        "# Thing-OS early root overlay.\nsource=/media/cdrom\ntarget=/\nflags=before,cor\nwait_ms=10000\n",
     )?;
     sh.write_file(iso_root.join("etc/hostname"), "thingos\n")?;
 
@@ -1219,12 +1232,38 @@ fn is_driver(name: &str) -> bool {
     drivers.contains(&name)
 }
 
+fn is_bootstrap_boot_module(name: &str) -> bool {
+    is_driver(name)
+        || matches!(
+            name,
+            "sprout"
+                | "sh"
+                | "echo"
+                | "cat"
+                | "ls"
+                | "terminal"
+                | "cambium"
+                | "iso9660d"
+                | "fatd"
+                | "bristle"
+                | "bloom"
+                | "wayland_hello"
+                | "clock"
+                | "leaf"
+                | "netd"
+                | "fetchd"
+                | "httpsd"
+                | "mesocarp"
+                | "virtio_netd"
+        )
+}
+
 fn is_non_bootfb_graphics_driver(name: &str) -> bool {
     (name.starts_with("display_") && name != "display_bootfb") || name == "virtio_gpu"
 }
 
 fn is_safe_shell_program(name: &str) -> bool {
-    matches!(name, "sprout" | "sh" | "terminal")
+    matches!(name, "sprout" | "sh" | "echo" | "cat" | "ls" | "terminal")
 }
 
 fn userspace_aliases(name: &str) -> &'static [&'static str] {
@@ -1285,7 +1324,7 @@ mod tests {
     }
 
     #[test]
-    fn safe_shell_entry_loads_only_sprout_sh_and_terminal() {
+    fn safe_shell_entry_loads_only_sprout_sh_echo_and_terminal() {
         let sh = Shell::new().expect("shell");
         let mut sprout = test_program("sprout");
         sprout.is_init = true;
@@ -1294,6 +1333,9 @@ mod tests {
         let programs = [
             sprout,
             shell,
+            test_program("echo"),
+            test_program("cat"),
+            test_program("ls"),
             test_program("terminal"),
             test_program("bloom"),
             test_program("bristle"),
@@ -1309,6 +1351,9 @@ mod tests {
         ));
         assert!(safe_entry.contains("module_path: boot():/bin/sprout"));
         assert!(safe_entry.contains("module_path: boot():/bin/sh"));
+        assert!(safe_entry.contains("module_path: boot():/bin/echo"));
+        assert!(safe_entry.contains("module_path: boot():/bin/cat"));
+        assert!(safe_entry.contains("module_path: boot():/bin/ls"));
         assert!(safe_entry.contains("module_path: boot():/bin/terminal"));
         assert!(!safe_entry.contains("module_path: boot():/bin/bloom"));
         assert!(!safe_entry.contains("module_path: boot():/bin/bristle"));
@@ -1321,7 +1366,7 @@ mod tests {
     }
 
     #[test]
-    fn limine_config_includes_future_cursor_variants() {
+    fn limine_config_leaves_assets_on_the_filesystem() {
         let sh = Shell::new().expect("shell");
         let programs = [test_program("bloom")];
         let assets = [
@@ -1334,10 +1379,73 @@ mod tests {
 
         let conf = generate_limine_config(&sh, &programs, &assets, None, None, false, false, false);
 
-        assert!(conf.contains("module_path: boot():/share/cursors/future/default.svg"));
-        assert!(conf.contains("module_path: boot():/share/cursors/future/fleur.svg"));
-        assert!(conf.contains("module_path: boot():/share/cursors/future/top_side.svg"));
-        assert!(conf.contains("module_path: boot():/share/cursors/future/bottom_right_corner.svg"));
+        assert!(!conf.contains("module_path: boot():/share/cursors/future/default.svg"));
+        assert!(!conf.contains("module_path: boot():/share/cursors/future/fleur.svg"));
+        assert!(!conf.contains("module_path: boot():/share/cursors/future/top_side.svg"));
+        assert!(
+            !conf.contains("module_path: boot():/share/cursors/future/bottom_right_corner.svg")
+        );
         assert!(!conf.contains("module_path: boot():/share/cursors/plain/Normal.cur"));
+    }
+
+    #[test]
+    fn iso_root_layout_is_root_shaped_without_provider_placeholders() {
+        assert!(ISO_ROOT_DIRS.contains(&"bin"));
+        assert!(ISO_ROOT_DIRS.contains(&"drivers"));
+        assert!(ISO_ROOT_DIRS.contains(&"etc"));
+        assert!(ISO_ROOT_DIRS.contains(&"etc/roots"));
+        assert!(ISO_ROOT_DIRS.contains(&"lib"));
+        assert!(!ISO_ROOT_DIRS.contains(&"share"));
+        assert!(!ISO_ROOT_DIRS.contains(&"services"));
+        assert!(!ISO_ROOT_DIRS.contains(&"session"));
+        assert!(!ISO_ROOT_DIRS.contains(&"data"));
+        assert!(!ISO_ROOT_DIRS.contains(&"net"));
+        assert!(!ISO_ROOT_DIRS.contains(&"hosts"));
+        assert!(!ISO_ROOT_DIRS.contains(&"https"));
+        assert!(!ISO_ROOT_DIRS.contains(&"usr/lib"));
+    }
+
+    #[test]
+    fn iso_share_assets_are_explicit_runtime_subtrees() {
+        assert!(SHARE_ASSET_DIRS.contains(&("assets/cursors", "cursors")));
+        assert!(SHARE_ASSET_DIRS.contains(&("assets/fonts", "fonts")));
+        assert!(SHARE_ASSET_DIRS.contains(&("assets/icons/lucide", "icons/lucide")));
+        assert!(SHARE_ASSET_DIRS.contains(&("assets/themes", "themes")));
+        assert!(SHARE_ASSET_DIRS.contains(&("assets/wallpapers", "wallpapers")));
+        assert!(!SHARE_ASSET_DIRS.iter().any(|(_, dst)| dst.starts_with("assets")));
+        assert!(!SHARE_ASSET_DIRS.iter().any(|(_, dst)| dst.starts_with("icons/chicago95")));
+        assert!(!SHARE_ASSET_DIRS.iter().any(|(_, dst)| dst.starts_with("pci")));
+    }
+
+    #[test]
+    fn default_limine_config_keeps_bootstrap_supervised_services_and_unifont() {
+        let sh = Shell::new().expect("shell");
+        let programs = default_programs();
+
+        let conf = generate_limine_config(&sh, &programs, &[], None, None, false, false, false);
+        let normal_entry = limine_entry(&conf, "ThingOS");
+
+        assert!(normal_entry.contains("module_path: boot():/bin/sprout"));
+        assert!(normal_entry.contains("module_path: boot():/bin/sh"));
+        assert!(normal_entry.contains("module_path: boot():/bin/cambium"));
+        assert!(normal_entry.contains("module_path: boot():/bin/iso9660d"));
+        assert!(normal_entry.contains("module_path: boot():/bin/echo"));
+        assert!(normal_entry.contains("module_path: boot():/bin/cat"));
+        assert!(normal_entry.contains("module_path: boot():/bin/ls"));
+        assert!(normal_entry.contains("module_path: boot():/bin/bloom"));
+        assert!(normal_entry.contains("module_path: boot():/bin/bristle"));
+        assert!(normal_entry.contains("module_path: boot():/bin/clock"));
+        assert!(normal_entry.contains("module_path: boot():/drivers/ata_disk"));
+        assert!(normal_entry.contains("module_path: boot():/drivers/ahci_disk"));
+        assert!(normal_entry.contains("module_path: boot():/share/fonts/unifont.hex"));
+        assert!(normal_entry.contains("module_path: boot():/etc/roots/root"));
+
+        assert!(!normal_entry.contains("module_path: boot():/bin/ps"));
+        assert!(!normal_entry.contains("module_path: boot():/bin/grep"));
+        assert!(!normal_entry.contains("module_path: boot():/bin/stat"));
+        assert!(!normal_entry.contains("module_path: boot():/lib/libpistil.so"));
+        assert!(!normal_entry.contains("module_path: boot():/etc/fstab"));
+        assert!(!normal_entry.contains("module_path: boot():/share/wallpapers/flower.png"));
+        assert!(!normal_entry.contains("module_path: boot():/share/wallpapers/flower.bmp"));
     }
 }

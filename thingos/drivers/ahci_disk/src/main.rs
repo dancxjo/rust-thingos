@@ -348,7 +348,7 @@ impl AhciDevice {
             return Err(BlockError::NotReady);
         }
 
-        info!(
+        trace!(
             "AHCI: issuing ATAPI READ port={} slot={} lba={} tfd={:#x} ci={:#x} sact={:#x}",
             self.port,
             slot,
@@ -358,7 +358,7 @@ impl AhciDevice {
             mmio_read32(pb, PORT_SACT)
         );
         mmio_write32(pb, PORT_CI, slot_bit);
-        info!(
+        trace!(
             "AHCI: ATAPI READ submitted port={} slot={} ci={:#x} is={:#x}",
             self.port,
             slot,
@@ -431,7 +431,7 @@ impl StorageProvider {
             VfsRpcOp::Read => {
                 let offset = u64::from_le_bytes(req.payload[8..16].try_into().unwrap());
                 let len = u32::from_le_bytes(req.payload[16..20].try_into().unwrap()) as usize;
-                info!("AHCI: Read RPC offset={} len={}", offset, len);
+                trace!("AHCI: Read RPC offset={} len={}", offset, len);
                 let sector_size = self.device.sector_size();
                 let start_lba = offset / sector_size;
                 let end_lba = if len > 0 {

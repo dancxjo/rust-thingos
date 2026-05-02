@@ -52,11 +52,8 @@ impl FrameClock {
 
     /// Update the clock's refresh rate (in milli-Hertz).
     pub fn update_refresh_rate(&mut self, refresh_mhz: u32) {
-        self.frame_interval_ns = if refresh_mhz > 0 {
-            1_000_000_000_000u64 / refresh_mhz as u64
-        } else {
-            16_666_666
-        };
+        self.frame_interval_ns =
+            if refresh_mhz > 0 { 1_000_000_000_000u64 / refresh_mhz as u64 } else { 16_666_666 };
     }
 
     /// Ask the clock to schedule a repaint.

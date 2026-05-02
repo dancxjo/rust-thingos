@@ -739,13 +739,8 @@ pub fn encode_keyboard_key(
 }
 
 pub fn encode_output_info(width: u32, height: u32, refresh_mhz: u32) -> [u8; 16] {
-    let msg = WEvtOutputInfo {
-        msg_type: WEVT_OUTPUT_INFO,
-        _pad: [0; 3],
-        width,
-        height,
-        refresh_mhz,
-    };
+    let msg =
+        WEvtOutputInfo { msg_type: WEVT_OUTPUT_INFO, _pad: [0; 3], width, height, refresh_mhz };
     let mut out = [0u8; 16];
     out.copy_from_slice(as_bytes!(msg, WEvtOutputInfo));
     out

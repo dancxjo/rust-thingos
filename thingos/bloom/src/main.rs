@@ -29,6 +29,7 @@ use loop_types::BloomLoop;
 use render::CompositorVisuals;
 use scene::Scene;
 use services::input_service::InputService;
+use services::resources::ResourceRetryService;
 use services::theme_service::{DEFAULT_THEME_CONFIG_PATH, ThemeService, ensure_theme_config};
 use services::wallpaper::{WallpaperService, ensure_wallpaper_config};
 use services::wayland::WaylandService;
@@ -121,7 +122,9 @@ fn main(_arg: usize) -> ! {
         info!("bloom: display driver supports GPU sync fences (producer/consumer sync)");
     }
     if display.supports_accel2d_gpu() {
-        info!("bloom: display driver accelerates ACCEL2D on GPU (COPY_RECT and ALPHA_BLIT dispatched to virgl)");
+        info!(
+            "bloom: display driver accelerates ACCEL2D on GPU (COPY_RECT and ALPHA_BLIT dispatched to virgl)"
+        );
     }
 
     // ── Create and publish the service port ───────────────────────────────────
@@ -160,7 +163,7 @@ fn main(_arg: usize) -> ! {
 
     info!("bloom.phase=init_cursor");
     if !minimal_mode {
-        visuals.prepare_cursor(&display);
+        stem::info!("bloom: cursor init deferred until visual resources are ready");
     } else {
         stem::info!("bloom: skipping cursor init (minimal mode)");
     }
@@ -246,6 +249,13 @@ fn main(_arg: usize) -> ! {
 
     // Wallpaper watch → WallpaperService
     bloom_loop.add_service(alloc::boxed::Box::new(WallpaperService::new(wp_watch_fd, WP_PATH)));
+
+    // Deferred fonts / wallpaper / cursor → ResourceRetryService
+    let resource_wallpaper_path = if minimal_mode { None } else { Some(WP_PATH) };
+    bloom_loop.add_service(alloc::boxed::Box::new(ResourceRetryService::new(
+        resource_wallpaper_path,
+        !minimal_mode,
+    )));
 
     // Theme watch → ThemeService
     bloom_loop.add_service(alloc::boxed::Box::new(ThemeService::new(theme_watch_fd, THEME_PATH)));

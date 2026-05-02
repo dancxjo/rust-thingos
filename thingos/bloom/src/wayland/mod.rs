@@ -515,10 +515,7 @@ impl WaylandServer {
             }
         }
 
-        info!(
-            "wayland-server: updated output0 to {}x{} @ {}mHz",
-            width, height, refresh_mhz
-        );
+        info!("wayland-server: updated output0 to {}x{} @ {}mHz", width, height, refresh_mhz);
     }
 
     // ── Main thread events ───────────────────────────────────────────────
@@ -791,8 +788,7 @@ impl WaylandServer {
                 if data.len() < 8 {
                     return;
                 }
-                let bloom_surface_id =
-                    u32::from_ne_bytes(data[4..8].try_into().unwrap_or([0; 4]));
+                let bloom_surface_id = u32::from_ne_bytes(data[4..8].try_into().unwrap_or([0; 4]));
                 for client in self.clients.values_mut() {
                     if let Some(layer_obj_id) =
                         client.layer_surface_for_bloom_surface(bloom_surface_id)
@@ -835,8 +831,7 @@ impl WaylandServer {
                     // Click landed on this popup — do not dismiss it.
                     continue;
                 }
-                if let Some(cmds) =
-                    client.blossom.dismiss_popup_for_surface(popup_bloom_surface_id)
+                if let Some(cmds) = client.blossom.dismiss_popup_for_surface(popup_bloom_surface_id)
                 {
                     dispatch::send_blossom_commands(client, &cmds, self.cmd_write);
                     info!(

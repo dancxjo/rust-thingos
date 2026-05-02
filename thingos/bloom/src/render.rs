@@ -16,6 +16,8 @@ const PREPARE_CURSOR_SYMBOL: &[u8] = b"pistil_prepare_cursor";
 const DRAW_SVG_ICON_SYMBOL: &[u8] = b"pistil_draw_svg_icon";
 const DRAW_TEXT_SYMBOL: &[u8] = b"pistil_draw_text";
 const DRAW_SYMBOL_TEXT_SYMBOL: &[u8] = b"pistil_draw_symbol_text";
+const DEFAULT_FONT_READY_SYMBOL: &[u8] = b"pistil_default_font_ready";
+const SYMBOL_FONT_READY_SYMBOL: &[u8] = b"pistil_symbol_font_ready";
 const DEFAULT_CURSOR_PATH: &str = "/share/cursors/future/default.svg";
 const MOVE_CURSOR_PATH: &str = "/share/cursors/future/fleur.svg";
 const RESIZE_N_CURSOR_PATH: &str = "/share/cursors/future/top_side.svg";
@@ -64,6 +66,7 @@ type PrepareCursorFn = extern "C" fn(
 type DrawTextFn = extern "C" fn(*const u8, *mut u32, u32, u32, u32, i32, i32, f32, u32) -> i32;
 type DrawSvgIconFn =
     extern "C" fn(*const u8, *mut u32, u32, u32, u32, i32, i32, u32, u32, u32) -> i32;
+type FontReadyFn = extern "C" fn() -> i32;
 
 pub struct CompositorVisuals {
     background: Option<ServerBuffer>,
@@ -79,6 +82,8 @@ pub struct CompositorVisuals {
     body_overlays: Vec<ChromeOverlayBuffer>,
     chrome_overlays: Vec<ChromeOverlayBuffer>,
     pistil: Option<PistilLib>,
+    default_font_ready: bool,
+    symbol_font_ready: bool,
     theme: UiTheme,
 }
 
@@ -89,6 +94,8 @@ struct PistilLib {
     draw_svg_icon: Option<DrawSvgIconFn>,
     draw_text: Option<DrawTextFn>,
     draw_symbol_text: Option<DrawTextFn>,
+    default_font_ready: Option<FontReadyFn>,
+    symbol_font_ready: Option<FontReadyFn>,
 }
 
 struct ServerBuffer {
@@ -130,6 +137,11 @@ pub struct WindowOverlayPlane {
     pub height: u32,
 }
 
+pub struct ResourceRetryStatus {
+    pub pending: bool,
+    pub improved: bool,
+}
+
 struct CursorBuffer {
     _texture: Texture,
     buffer_id: u32,
@@ -156,8 +168,6 @@ struct ChromeOverlayBuffer {
 
 impl CompositorVisuals {
     pub fn new() -> Self {
-        let pistil = load_pistil();
-
         Self {
             background: None,
             wallpaper_path: None,
@@ -166,7 +176,9 @@ impl CompositorVisuals {
             pointer_overlay: None,
             body_overlays: Vec::new(),
             chrome_overlays: Vec::new(),
-            pistil,
+            pistil: None,
+            default_font_ready: false,
+            symbol_font_ready: false,
             theme: default_theme(),
         }
     }
@@ -290,10 +302,7 @@ impl CompositorVisuals {
     /// call, so a `Some` value here implies the background buffer is loaded.
     pub fn start_background_load(&mut self, display: &DisplayBackend, wallpaper_path: &str) {
         if self.wallpaper_path.as_deref() == Some(wallpaper_path) {
-            stem::debug!(
-                "bloom: wallpaper '{}' already loaded, skipping reload",
-                wallpaper_path
-            );
+            stem::debug!("bloom: wallpaper '{}' already loaded, skipping reload", wallpaper_path);
             return;
         }
         self.prepare_background(display, wallpaper_path);
@@ -303,6 +312,79 @@ impl CompositorVisuals {
     /// thread, so there is no pending worker result to poll.
     pub fn poll_ready_background(&mut self, _display: &DisplayBackend) -> bool {
         false
+    }
+
+    pub fn retry_deferred_resources(
+        &mut self,
+        display: &DisplayBackend,
+        wallpaper_path: Option<&str>,
+        load_cursor: bool,
+    ) -> ResourceRetryStatus {
+        let mut improved = false;
+
+        if self.pistil.is_none() {
+            self.pistil = load_pistil(false);
+            if self.pistil.is_some() {
+                stem::info!("bloom: deferred pistil renderer became available");
+                improved = true;
+            }
+        }
+
+        let mut font_pending = false;
+        if let Some(ref lib) = self.pistil {
+            if lib.draw_text.is_some() {
+                match lib.default_font_ready {
+                    Some(ready) if ready() != 0 => {
+                        if !self.default_font_ready {
+                            stem::info!("bloom: deferred default font became available");
+                            improved = true;
+                        }
+                        self.default_font_ready = true;
+                    }
+                    Some(_) => font_pending = true,
+                    None => self.default_font_ready = true,
+                }
+            }
+            if lib.draw_symbol_text.is_some() {
+                match lib.symbol_font_ready {
+                    Some(ready) if ready() != 0 => {
+                        if !self.symbol_font_ready {
+                            stem::info!("bloom: deferred symbol font became available");
+                            improved = true;
+                        }
+                        self.symbol_font_ready = true;
+                    }
+                    Some(_) => font_pending = true,
+                    None => self.symbol_font_ready = true,
+                }
+            }
+        }
+
+        if let Some(path) = wallpaper_path {
+            if self.pistil.is_some() && self.wallpaper_path.as_deref() != Some(path) {
+                let before = self.wallpaper_path.clone();
+                self.start_background_load(display, path);
+                if self.wallpaper_path.as_deref() == Some(path) && before.as_deref() != Some(path) {
+                    stem::info!("bloom: deferred wallpaper became available: {}", path);
+                    improved = true;
+                }
+            }
+        }
+
+        if load_cursor && self.pistil.is_some() && self.cursor.is_none() {
+            self.prepare_cursor(display);
+            if self.cursor.is_some() {
+                improved = true;
+            }
+        }
+
+        let wallpaper_pending = wallpaper_path
+            .map(|path| self.wallpaper_path.as_deref() != Some(path))
+            .unwrap_or(false);
+        let cursor_pending = load_cursor && self.cursor.is_none();
+        let pending = self.pistil.is_none() || font_pending || wallpaper_pending || cursor_pending;
+
+        ResourceRetryStatus { pending, improved }
     }
 
     pub fn reconfigure_for_output(&mut self, display: &DisplayBackend) {
@@ -655,16 +737,20 @@ impl CompositorVisuals {
     }
 }
 
-fn load_pistil() -> Option<PistilLib> {
+fn load_pistil(log_failures: bool) -> Option<PistilLib> {
     let handle = dlopen_str(PISTIL_PATH, RTLD_NOW);
     if handle.is_null() {
-        log_dlerror("bloom: failed to load /lib/libpistil.so");
+        if log_failures {
+            log_dlerror("bloom: failed to load /lib/libpistil.so");
+        }
         return None;
     }
 
     let sym = dlsym_bytes(handle, PREPARE_BACKGROUND_SYMBOL);
     if sym.is_null() {
-        log_dlerror("bloom: failed to resolve pistil_prepare_background");
+        if log_failures {
+            log_dlerror("bloom: failed to resolve pistil_prepare_background");
+        }
         return None;
     }
 
@@ -687,6 +773,18 @@ fn load_pistil() -> Option<PistilLib> {
     } else {
         Some(unsafe { core::mem::transmute(symbol_text_sym) })
     };
+    let default_font_ready_sym = dlsym_bytes(handle, DEFAULT_FONT_READY_SYMBOL);
+    let default_font_ready = if default_font_ready_sym.is_null() {
+        None
+    } else {
+        Some(unsafe { core::mem::transmute(default_font_ready_sym) })
+    };
+    let symbol_font_ready_sym = dlsym_bytes(handle, SYMBOL_FONT_READY_SYMBOL);
+    let symbol_font_ready = if symbol_font_ready_sym.is_null() {
+        None
+    } else {
+        Some(unsafe { core::mem::transmute(symbol_font_ready_sym) })
+    };
     stem::info!("bloom: pistil background renderer loaded from {}", PISTIL_PATH);
     if draw_text.is_some() {
         stem::info!("bloom: pistil font text renderer loaded with default {}", DEFAULT_FONT_PATH);
@@ -701,6 +799,8 @@ fn load_pistil() -> Option<PistilLib> {
         draw_svg_icon,
         draw_text,
         draw_symbol_text,
+        default_font_ready,
+        symbol_font_ready,
     })
 }
 

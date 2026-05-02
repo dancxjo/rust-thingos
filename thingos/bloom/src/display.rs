@@ -5,8 +5,8 @@ use abi::device::{DeviceCall, DeviceKind};
 use abi::display::{
     BufferHandle, BufferId, CommitFlags, CommitRequest, DISPLAY_OP_ACCEL2D, DISPLAY_OP_COMMIT,
     DISPLAY_OP_GET_INFO, DISPLAY_OP_IMPORT_BUFFER, DISPLAY_OP_MOVE_CURSOR,
-    DISPLAY_OP_RELEASE_BUFFER, DISPLAY_OP_SET_CURSOR, DisplayCaps, DisplayInfo,
-    MoveCursorRequest, PlaneCommit, PlaneId, SetCursorRequest,
+    DISPLAY_OP_RELEASE_BUFFER, DISPLAY_OP_SET_CURSOR, DisplayCaps, DisplayInfo, MoveCursorRequest,
+    PlaneCommit, PlaneId, SetCursorRequest,
 };
 use abi::display_protocol::Rect;
 use abi::pixel::PixelFormat;
@@ -187,15 +187,9 @@ impl DisplayBackend {
     /// Returns `true` on success.  Only meaningful when
     /// [`Self::supports_hw_cursor`] is `true`.
     pub fn move_cursor(&self, x: i32, y: i32, visible: bool) -> bool {
-        let req = MoveCursorRequest {
-            x,
-            y,
-            visible: if visible { 1 } else { 0 },
-            _pad: 0,
-        };
+        let req = MoveCursorRequest { x, y, visible: if visible { 1 } else { 0 }, _pad: 0 };
         device_call(self.fd, DISPLAY_OP_MOVE_CURSOR, &req, None::<&mut u32>).is_some()
     }
-
 
     /// Returns `true` when the connected display driver supports blocking vsync
     /// (`DisplayCaps::VBLANK`).
@@ -668,8 +662,8 @@ impl DisplayBackend {
 
             // 2.2 Window content plane.
             if !batch.is_full() {
-                let is_scaled = entry.src_rect.w != entry.dest_rect.w
-                    || entry.src_rect.h != entry.dest_rect.h;
+                let is_scaled =
+                    entry.src_rect.w != entry.dest_rect.w || entry.src_rect.h != entry.dest_rect.h;
                 let use_rounded_clip = !entry.is_fullscreen
                     && !entry.chrome.is_empty()
                     && corner_radius > 0
@@ -749,8 +743,7 @@ impl DisplayBackend {
                 let dst_y = cursor.y.max(0) as u32;
                 let src_x = if cursor.x < 0 { cursor.x.unsigned_abs() } else { 0 };
                 let src_y = if cursor.y < 0 { cursor.y.unsigned_abs() } else { 0 };
-                let visible_w =
-                    cursor.width.saturating_sub(src_x).min(out_w.saturating_sub(dst_x));
+                let visible_w = cursor.width.saturating_sub(src_x).min(out_w.saturating_sub(dst_x));
                 let visible_h =
                     cursor.height.saturating_sub(src_y).min(out_h.saturating_sub(dst_y));
                 if visible_w > 0 && visible_h > 0 {
