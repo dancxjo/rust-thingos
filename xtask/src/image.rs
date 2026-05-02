@@ -57,8 +57,6 @@ const ISO_ROOT_DIRS: &[&str] = &[
     "public",
     "services",
     "version",
-    "EFI",
-    "EFI/BOOT",
 ];
 
 const PUBLIC_ASSET_DIRS: &[(&str, &str)] = &[
@@ -861,10 +859,7 @@ pub fn build_iso_with_config(
                 "vendor/limine/limine-uefi-cd.bin",
                 iso_root.join("boot/limine/limine-uefi-cd.bin"),
             )?;
-            sh.copy_file("vendor/limine/BOOTX64.EFI", iso_root.join("EFI/BOOT/BOOTX64.EFI"))?;
-            sh.copy_file("vendor/limine/BOOTIA32.EFI", iso_root.join("EFI/BOOT/BOOTIA32.EFI"))?;
-
-            cmd!(sh, "xorriso -as mkisofs -R -J -b boot/limine/limine-bios-cd.bin -no-emul-boot -boot-load-size 4 -boot-info-table --efi-boot boot/limine/limine-uefi-cd.bin -efi-boot-part --efi-boot-image --protective-msdos-label {iso_root_name} -o {iso_name}").run()?;
+            cmd!(sh, "xorriso -as mkisofs -R -J -b boot/limine/limine-bios-cd.bin -c boot/limine/boot.catalog -no-emul-boot -boot-load-size 4 -boot-info-table --efi-boot boot/limine/limine-uefi-cd.bin -efi-boot-part --efi-boot-image --protective-msdos-label {iso_root_name} -o {iso_name}").run()?;
             cmd!(sh, "./vendor/limine/limine bios-install {iso_name}").run()?;
 
             sh.remove_path(&iso_root_name)?;
@@ -876,9 +871,7 @@ pub fn build_iso_with_config(
                 "vendor/limine/limine-uefi-cd.bin",
                 iso_root.join("boot/limine/limine-uefi-cd.bin"),
             )?;
-            sh.copy_file("vendor/limine/BOOTAA64.EFI", iso_root.join("EFI/BOOT/BOOTAA64.EFI"))?;
-
-            cmd!(sh, "xorriso -as mkisofs -R -J --efi-boot boot/limine/limine-uefi-cd.bin -efi-boot-part --efi-boot-image --protective-msdos-label {iso_root_name} -o {iso_name}").run()?;
+            cmd!(sh, "xorriso -as mkisofs -R -J -c boot/limine/boot.catalog --efi-boot boot/limine/limine-uefi-cd.bin -efi-boot-part --efi-boot-image --protective-msdos-label {iso_root_name} -o {iso_name}").run()?;
 
             sh.remove_path(&iso_root_name)?;
             println!("ISO created: {iso_name}");
@@ -895,16 +888,15 @@ pub fn build_iso_with_config(
                 "mcopy -i {efi_img_str} vendor/limine/BOOTRISCV64.EFI ::/EFI/BOOT/BOOTRISCV64.EFI"
             )
             .run()?;
-            sh.write_file(iso_root.join("startup.nsh"), "\\EFI\\BOOT\\BOOTRISCV64.EFI\n")?;
-            let startup_nsh = iso_root.join("startup.nsh");
+            sh.write_file(
+                iso_root.join("boot/limine/startup.nsh"),
+                "\\EFI\\BOOT\\BOOTRISCV64.EFI\n",
+            )?;
+            let startup_nsh = iso_root.join("boot/limine/startup.nsh");
             let startup_nsh_str = startup_nsh.to_str().unwrap();
             cmd!(sh, "mcopy -i {efi_img_str} {startup_nsh_str} ::").run()?;
-            sh.copy_file(
-                "vendor/limine/BOOTRISCV64.EFI",
-                iso_root.join("EFI/BOOT/BOOTRISCV64.EFI"),
-            )?;
 
-            cmd!(sh, "xorriso -as mkisofs -R -J --efi-boot boot/limine/limine-uefi-riscv64.bin -efi-boot-part --efi-boot-image --protective-msdos-label {iso_root_name} -o {iso_name}").run()?;
+            cmd!(sh, "xorriso -as mkisofs -R -J -c boot/limine/boot.catalog --efi-boot boot/limine/limine-uefi-riscv64.bin -efi-boot-part --efi-boot-image --protective-msdos-label {iso_root_name} -o {iso_name}").run()?;
 
             sh.remove_path(&iso_root_name)?;
             println!("ISO created: {iso_name}");
@@ -917,16 +909,15 @@ pub fn build_iso_with_config(
             cmd!(sh, "mformat -i {efi_img_str} -f 2880 ::").run()?;
             cmd!(sh, "mmd -i {efi_img_str} ::/EFI ::/EFI/BOOT").run()?;
             cmd!(sh, "mcopy -i {efi_img_str} vendor/limine/BOOTLOONGARCH64.EFI ::/EFI/BOOT/BOOTLOONGARCH64.EFI").run()?;
-            sh.write_file(iso_root.join("startup.nsh"), "\\EFI\\BOOT\\BOOTLOONGARCH64.EFI\n")?;
-            let startup_nsh = iso_root.join("startup.nsh");
+            sh.write_file(
+                iso_root.join("boot/limine/startup.nsh"),
+                "\\EFI\\BOOT\\BOOTLOONGARCH64.EFI\n",
+            )?;
+            let startup_nsh = iso_root.join("boot/limine/startup.nsh");
             let startup_nsh_str = startup_nsh.to_str().unwrap();
             cmd!(sh, "mcopy -i {efi_img_str} {startup_nsh_str} ::").run()?;
-            sh.copy_file(
-                "vendor/limine/BOOTLOONGARCH64.EFI",
-                iso_root.join("EFI/BOOT/BOOTLOONGARCH64.EFI"),
-            )?;
 
-            cmd!(sh, "xorriso -as mkisofs -R -J --efi-boot boot/limine/limine-uefi-loongarch64.bin -efi-boot-part --efi-boot-image --protective-msdos-label {iso_root_name} -o {iso_name}").run()?;
+            cmd!(sh, "xorriso -as mkisofs -R -J -c boot/limine/boot.catalog --efi-boot boot/limine/limine-uefi-loongarch64.bin -efi-boot-part --efi-boot-image --protective-msdos-label {iso_root_name} -o {iso_name}").run()?;
 
             sh.remove_path(&iso_root_name)?;
             println!("ISO created: {iso_name}");
@@ -1327,10 +1318,7 @@ fn is_bootstrap_boot_module(name: &str) -> bool {
     is_driver(name)
         || is_bin_program(name)
         || is_service_program(name)
-        || matches!(
-            name,
-            "sprout" | "terminal" | "wayland_hello" | "clock" | "leaf" | "fetchd"
-        )
+        || matches!(name, "sprout" | "terminal" | "wayland_hello" | "clock" | "leaf" | "fetchd")
 }
 
 fn is_non_bootfb_graphics_driver(name: &str) -> bool {
@@ -1492,6 +1480,8 @@ mod tests {
         }
         assert!(ISO_ROOT_DIRS.contains(&"etc/roots"));
         assert!(ISO_ROOT_DIRS.contains(&"media/livedisk"));
+        assert!(!ISO_ROOT_DIRS.contains(&"EFI"));
+        assert!(!ISO_ROOT_DIRS.contains(&"EFI/BOOT"));
         assert!(!ISO_ROOT_DIRS.contains(&"app"));
         assert!(!ISO_ROOT_DIRS.contains(&"drv"));
         assert!(!ISO_ROOT_DIRS.contains(&"pub"));
