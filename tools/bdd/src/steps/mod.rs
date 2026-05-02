@@ -12,6 +12,7 @@ mod driver_inbox;
 mod e2e;
 mod first_run;
 pub mod helpers;
+mod ps2_stress;
 mod service_loop;
 mod shutdown;
 

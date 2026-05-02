@@ -2,6 +2,7 @@
 #![no_main]
 use alloc::string::ToString;
 use core::default::Default;
+use core::sync::atomic::{AtomicU64, Ordering};
 extern crate alloc;
 
 use abi::driver_interface::{
@@ -113,6 +114,9 @@ const IRQ_ASSIST_POLL_MS: u64 = 4;
 const INPUT_TRACE_INITIAL: u64 = 24;
 const INPUT_TRACE_INTERVAL: u64 = 128;
 
+/// Counts how many times drain_keyboard_data has found at least one scancode.
+static PS2_KBD_DRAIN_COUNT: AtomicU64 = AtomicU64::new(0);
+
 /// Driver state node kind
 const KIND_DRV_PS2_KBD: &str = "drv.Ps2Keyboard";
 
@@ -197,6 +201,19 @@ fn drain_keyboard_data(
             // Keyboard data - read and send
             let scancode = ioport_read(PS2_DATA, 1) as u8;
             bytes_read += 1;
+            // Emit "PS/2 take_scancode entry:" on the first byte of each drain
+            // burst, rate-limited to avoid log flooding.
+            if bytes_read == 1 {
+                let drain_no = PS2_KBD_DRAIN_COUNT.fetch_add(1, Ordering::Relaxed) + 1;
+                if should_log_input(drain_no) {
+                    stem::info!(
+                        "PS/2 take_scancode entry: drain={} scancode=0x{:02x} status=0x{:02x}",
+                        drain_no,
+                        scancode,
+                        status
+                    );
+                }
+            }
             stem::info!(
                 "ps2_kbd: take_scancode scancode=0x{:02x} status=0x{:02x} drain_depth={}",
                 scancode,
@@ -313,6 +330,14 @@ fn interrupt_loop(bristle_pid: u32) -> ! {
                         pending = event.value();
                         saw_irq = true;
                     }
+                }
+                if saw_irq && should_log_input(irq_wake_count) {
+                    stem::info!(
+                        "PS/2 IRQ wake entry: vector=0x{:02x} wakes={} pending={}",
+                        KBD_VECTOR,
+                        irq_wake_count,
+                        pending
+                    );
                 }
                 if !saw_irq {
                     timeout_count = timeout_count.wrapping_add(1);
