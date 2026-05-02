@@ -54,7 +54,13 @@ pub struct BootFbDriver {
 impl BootFbDriver {
     pub fn new() -> Option<Self> {
         let fb = find_framebuffer()?;
-        Some(Self { fb, buffers: BTreeMap::new(), next_buffer_id: 1, rpc_seq: 0, rpc_enter_ns: 0 })
+        Some(Self {
+            fb,
+            buffers: BTreeMap::new(),
+            next_buffer_id: 1,
+            rpc_seq: 0,
+            rpc_enter_ns: 0,
+        })
     }
 
     pub fn get_info(&self) -> DisplayInfo {
