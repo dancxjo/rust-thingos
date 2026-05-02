@@ -1,4 +1,0 @@
- [bloom] [CPU1] bloom: ENTERING MAIN
-[36548272662] [[32mINFO [0m] [bloom] [CPU1] bloom: compositor service starting
-[36564439758] [[32mINFO [0m] [cambium::catalog] [CPU1] DEVD CATALOG: registered driver '/drivers/display_virtio_gpu' name='display_virtio_gpu' class=Display kind='dev.display.Gpu' start='thingos_driver_start_safe'
-[36798217203] [[32mINFO [0m] [

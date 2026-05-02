@@ -761,11 +761,7 @@ impl XhciController {
         let pid = le16(&device_desc[10..12]);
         let config_count = device_desc[17];
         info!("usb: vid={:04x} pid={:04x}", vid, pid);
-        info!(
-            "usb: usb={}.{:02x}",
-            (usb_bcd >> 8) & 0xff,
-            usb_bcd & 0xff,
-        );
+        info!("usb: usb={}.{:02x}", (usb_bcd >> 8) & 0xff, usb_bcd & 0xff,);
         info!("usb: class={:02x} subclass={:02x} protocol={:02x}", class, subclass, protocol);
         info!("usb: configurations={}", config_count);
 
@@ -1269,10 +1265,7 @@ impl UsbMassStorage {
         let sense_key = sense[SENSE_KEY_OFFSET] & 0x0f;
         let asc = sense[SENSE_ASC_OFFSET];
         let ascq = sense[SENSE_ASCQ_OFFSET];
-        info!(
-            "ums: REQUEST SENSE key=0x{:02x} asc=0x{:02x} ascq=0x{:02x}",
-            sense_key, asc, ascq
-        );
+        info!("ums: REQUEST SENSE key=0x{:02x} asc=0x{:02x} ascq=0x{:02x}", sense_key, asc, ascq);
         Ok(())
     }
 
@@ -1426,11 +1419,11 @@ impl UsbBlockProvider {
                 ProviderResponse::ok_stat(S_IFREG | 0o444, size, 1)
             }
             VfsRpcOp::Read => {
-                if req.payload.len() < 12 {
+                if req.payload.len() < 20 {
                     return ProviderResponse::err(Errno::EINVAL);
                 }
-                let offset = u64::from_le_bytes(req.payload[0..8].try_into().unwrap());
-                let len = u32::from_le_bytes(req.payload[8..12].try_into().unwrap()) as usize;
+                let offset = u64::from_le_bytes(req.payload[8..16].try_into().unwrap());
+                let len = u32::from_le_bytes(req.payload[16..20].try_into().unwrap()) as usize;
                 if len == 0 {
                     return ProviderResponse::ok_bytes(&[]);
                 }
@@ -1471,15 +1464,13 @@ impl UsbBlockProvider {
         let part_size = lba_count * sector_size;
         match req.op {
             VfsRpcOp::Lookup => ProviderResponse::ok_u64(1),
-            VfsRpcOp::Stat => {
-                ProviderResponse::ok_stat(S_IFREG | 0o444, part_size, part_ino)
-            }
+            VfsRpcOp::Stat => ProviderResponse::ok_stat(S_IFREG | 0o444, part_size, part_ino),
             VfsRpcOp::Read => {
-                if req.payload.len() < 12 {
+                if req.payload.len() < 20 {
                     return ProviderResponse::err(Errno::EINVAL);
                 }
-                let offset = u64::from_le_bytes(req.payload[0..8].try_into().unwrap());
-                let len = u32::from_le_bytes(req.payload[8..12].try_into().unwrap()) as usize;
+                let offset = u64::from_le_bytes(req.payload[8..16].try_into().unwrap());
+                let len = u32::from_le_bytes(req.payload[16..20].try_into().unwrap()) as usize;
                 if len == 0 {
                     return ProviderResponse::ok_bytes(&[]);
                 }
@@ -1532,10 +1523,8 @@ fn parse_mbr_partitions(sector: &[u8], disk_sectors: u64) -> Vec<MbrPartition> {
         if ptype == 0 {
             continue;
         }
-        let start_lba =
-            u32::from_le_bytes(sector[off + 8..off + 12].try_into().unwrap()) as u64;
-        let lba_count =
-            u32::from_le_bytes(sector[off + 12..off + 16].try_into().unwrap()) as u64;
+        let start_lba = u32::from_le_bytes(sector[off + 8..off + 12].try_into().unwrap()) as u64;
+        let lba_count = u32::from_le_bytes(sector[off + 12..off + 16].try_into().unwrap()) as u64;
         if lba_count == 0 || start_lba >= disk_sectors {
             continue;
         }
@@ -1832,8 +1821,12 @@ fn serve_usb_block(controller: XhciController, storage: UsbMassStorage) -> ! {
         for part in partitions.iter_mut() {
             match part.ploop.try_next_request() {
                 Ok(Some(req)) => {
-                    let resp =
-                        provider.handle_partition_rpc(&req, part.start_lba, part.lba_count, part.ino);
+                    let resp = provider.handle_partition_rpc(
+                        &req,
+                        part.start_lba,
+                        part.lba_count,
+                        part.ino,
+                    );
                     let _ = part.ploop.send_response(&req, resp);
                 }
                 Ok(None) => {}

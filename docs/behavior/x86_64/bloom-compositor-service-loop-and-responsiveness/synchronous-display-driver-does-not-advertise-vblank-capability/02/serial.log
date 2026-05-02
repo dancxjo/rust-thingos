@@ -1,6 +1,0 @@
-[32mINFO [0m] [cambium::catalog] [CPU1] DEVD CATALOG: registered driver '/drivers/display_bootfb' name='display_bootfb' class=Display kind='dev.display.Gpu' start='thingos_driver_start_safe'
-[36984703998] [[32mINFO [0m] [cambium::catalog] [CPU1] DEVD CATALOG: registered driver '/drivers/display_virtio_gpu' name='display_virtio_gpu' class=Display kind='dev.display.Gpu' start='thingos_driver_start_safe'
-[36991015644] [[32mINFO [0m] [sprout::supervisor] [CPU0] SPROUT: Spawned bloom (PID=10)
-[37008470169] [[32mINFO [0m] [bloom] [CPU1] bloom: ENTERING MAIN
-[37010512440] [[32mINFO [0m] [bloom] [CPU1] bloom: compositor service starting
-[37260315873] [[32mINFO [

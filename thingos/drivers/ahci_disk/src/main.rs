@@ -201,6 +201,11 @@ fn start_port_engine(pb: u64) {
     mmio_write32(pb, PORT_CMD, cmd | PORT_CMD_ST);
 }
 
+fn find_free_cmd_slot(pb: u64) -> Option<u32> {
+    let occupied = mmio_read32(pb, PORT_SACT) | mmio_read32(pb, PORT_CI);
+    (0..32).find(|slot| occupied & (1u32 << slot) == 0)
+}
+
 struct AhciDevice {
     mmio_base: u64,
     port: u32,
@@ -252,6 +257,8 @@ impl AhciDevice {
             reserved: 0,
             dbc: (ds - 1) as u32,
         };
+        let slot = find_free_cmd_slot(pb).ok_or(BlockError::NotReady)?;
+        let slot_bit = 1u32 << slot;
 
         unsafe {
             let tbl = &mut *((self.dma_virt as usize + OFFSET_CMD_TABLE) as *mut CommandTable);
@@ -273,7 +280,10 @@ impl AhciDevice {
             tbl.acmd[8] = 1; // 1 sector
             tbl.prdt[0] = prdt;
 
-            let hdr = &mut *((self.dma_virt as usize + OFFSET_CMD_LIST) as *mut CommandHeader);
+            let hdr = &mut *((self.dma_virt as usize
+                + OFFSET_CMD_LIST
+                + slot as usize * core::mem::size_of::<CommandHeader>())
+                as *mut CommandHeader);
             hdr.cfl = 5 | 0x20; // 5 dwords + ATAPI bit
             hdr.pm = 0;
             hdr.prdtl = 1;
@@ -299,16 +309,12 @@ impl AhciDevice {
             return Err(BlockError::NotReady);
         }
 
-        if mmio_read32(pb, PORT_CI) & 1 != 0 {
-            mmio_write32(pb, PORT_CI, 0);
-        }
-
         trace!("AHCI: sending command for LBA {}", lba);
-        mmio_write32(pb, PORT_CI, 1);
+        mmio_write32(pb, PORT_CI, slot_bit);
         let mut loop_timeout = 200000;
         loop {
             let ci = mmio_read32(pb, PORT_CI);
-            if ci & 1 == 0 {
+            if ci & slot_bit == 0 {
                 break;
             }
             if mmio_read32(pb, PORT_IS) & (1 << 30) != 0 {

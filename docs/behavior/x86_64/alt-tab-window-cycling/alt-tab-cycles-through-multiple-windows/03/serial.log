@@ -1,7 +1,0 @@
-[39719919789] [[32mINFO [0m] [ps2_kbd] [CPU2] ps2_kbd: read scancode 0x47
-[39723051819] [[32mINFO [0m] [ps2_kbd] [CPU2] ps2_kbd: edge detected: Down { key: Unknown, mods: Mods(0), repeat: false }
-[39727646805] [[32mINFO [0m] [ps2_kbd] [CPU2] ps2_kbd: sent Unknown to bristle (pid=8)
-[39735044085] [[32mINFO [0m] [bristle] [CPU2] bristle: KeyDown received: Unknown
-[39747663945] [[32mINFO [0m] [ps2_mouse] [CPU3] ps2_mouse: sample rate set to 60 Hz
-lock &
-[2] 19

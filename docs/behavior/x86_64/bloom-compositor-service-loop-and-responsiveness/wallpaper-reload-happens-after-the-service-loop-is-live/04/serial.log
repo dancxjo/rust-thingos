@@ -1,6 +1,0 @@
-cho /share/wallpapers/flower.png > /sess[100951973001] [[32mINFO [0m] [bloom::services::wayland_cmd] [CPU1] bloom: registered titlebar drag zone surface=3 height=28 frame=6
-i[100969518738] [[32mINFO [0m] [bloom::wayland::dispatch] [CPU2] wayland-server: xdg_popup obj=23 assigned to xdg_surface=21
-[101010576513] [[32mINFO [0m] [bloom::wayland::dispatch] [CPU2] wayland-server: imported dmabuf wl_buffer=121 160x96 format=0x34325241
-on/deskto[101508349305] [[32mINFO [0m] [kernel::time] [CPU0] System clock tick: utc=2026-05-01 20:35:43.028733450 unix_secs=1777667743.028733450
-p/wall[101809360125] [[32mINFO [0m] [bloom::render] [CPU1] bloom: flat window overlays ready size=1280x800
-paper

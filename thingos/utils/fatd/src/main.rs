@@ -48,8 +48,8 @@ impl BlockDevice for VfsBlockDevice {
     }
 
     fn read_sectors(&self, lba: u64, count: u64, buf: &mut [u8]) -> Result<(), BlockError> {
-        let fd =
-            vfs_open(&self.path, abi::syscall::vfs_flags::O_RDONLY).map_err(|_| BlockError::IoError)?;
+        let fd = vfs_open(&self.path, abi::syscall::vfs_flags::O_RDONLY)
+            .map_err(|_| BlockError::IoError)?;
         let offset = lba * fat::FAT_SECTOR_SIZE;
         vfs_seek(fd, offset as i64, 0).map_err(|_| {
             let _ = vfs_close(fd);
@@ -98,11 +98,7 @@ const S_IFREG: u32 = 0o100000;
 
 // ── VFS RPC dispatch ──────────────────────────────────────────────────────────
 
-fn dispatch_request(
-    fs: &FatFs,
-    dev: &VfsBlockDevice,
-    req: &ProviderRequest,
-) -> ProviderResponse {
+fn dispatch_request(fs: &FatFs, dev: &VfsBlockDevice, req: &ProviderRequest) -> ProviderResponse {
     match req.op {
         VfsRpcOp::Lookup => handle_lookup(fs, dev, &req.payload),
         VfsRpcOp::Read => handle_read(fs, dev, &req.payload),
@@ -116,11 +112,7 @@ fn dispatch_request(
     }
 }
 
-fn handle_lookup(
-    fs: &FatFs,
-    dev: &VfsBlockDevice,
-    payload: &[u8],
-) -> ProviderResponse {
+fn handle_lookup(fs: &FatFs, dev: &VfsBlockDevice, payload: &[u8]) -> ProviderResponse {
     if payload.len() < 4 {
         return ProviderResponse::err(Errno::EINVAL);
     }
@@ -144,11 +136,7 @@ fn handle_lookup(
     }
 }
 
-fn handle_read(
-    fs: &FatFs,
-    dev: &VfsBlockDevice,
-    payload: &[u8],
-) -> ProviderResponse {
+fn handle_read(fs: &FatFs, dev: &VfsBlockDevice, payload: &[u8]) -> ProviderResponse {
     if payload.len() < 20 {
         return ProviderResponse::err(Errno::EINVAL);
     }
@@ -168,11 +156,7 @@ fn handle_read(
     ProviderResponse::ok_read(&data)
 }
 
-fn handle_readdir(
-    fs: &FatFs,
-    dev: &VfsBlockDevice,
-    payload: &[u8],
-) -> ProviderResponse {
+fn handle_readdir(fs: &FatFs, dev: &VfsBlockDevice, payload: &[u8]) -> ProviderResponse {
     if payload.len() < 20 {
         return ProviderResponse::err(Errno::EINVAL);
     }
@@ -253,11 +237,10 @@ fn is_usb_partition_name(name: &str) -> bool {
 /// like USB partition devices (e.g. `usb0p1`, `usb1p2`).
 fn find_usb_partitions() -> Vec<String> {
     let mut result = Vec::new();
-    let dir_fd =
-        match vfs_open("/dev/block", abi::syscall::vfs_flags::O_RDONLY) {
-            Ok(fd) => fd,
-            Err(_) => return result,
-        };
+    let dir_fd = match vfs_open("/dev/block", abi::syscall::vfs_flags::O_RDONLY) {
+        Ok(fd) => fd,
+        Err(_) => return result,
+    };
     let mut buf = [0u8; 4096];
     let n = vfs_readdir(dir_fd, &mut buf).unwrap_or(0);
     let _ = vfs_close(dir_fd);
@@ -287,11 +270,7 @@ fn try_scan_and_mount() -> Option<(FatFs, VfsBlockDevice, PortHandle)> {
     for path in &partitions {
         let dev = VfsBlockDevice { path: path.clone() };
         if let Some(fs) = FatFs::probe(&dev) {
-            info!(
-                "fatd: found {:?} filesystem on {}",
-                fs.fat_type,
-                path
-            );
+            info!("fatd: found {:?} filesystem on {}", fs.fat_type, path);
             let (w, r) = port_create(65536).ok()?;
             let _ = stem::syscall::vfs::vfs_mkdir("/media");
             if vfs_mount(w, DEFAULT_MOUNT_POINT).is_ok() {

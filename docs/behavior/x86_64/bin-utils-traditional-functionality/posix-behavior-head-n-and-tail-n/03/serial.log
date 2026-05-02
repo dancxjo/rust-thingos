@@ -1,9 +1,0 @@
-=== Command Output ===
-2
-=== End Command Output ===
-
-=== Serial Log (since step start) ===
-32mINFO [0m] [bloom::services::wallpaper] [CPU1] bloom: preparing background /share/wallpapers/flower.png
-cho -e '1\n2\n3' | head -n 2 | tail -n 1
-[?25l
-=== End Serial Log ===

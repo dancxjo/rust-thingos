@@ -1,9 +1,0 @@
-=== Command Output ===
-thingos
-=== End Command Output ===
-
-=== Serial Log (since step start) ===
-[42794456430] [[32mINFO [0m] [ps2_kbd] [CPU3] ps2_kbd: input_rate bytes_per_sec=0 total=1 irq_wakes=1 dropped=0
-t [43418196228] [[32mINFO [0m] [ps2_kbd] [CPU3] ps2_kbd: irq_wait entry vector=0x21 wakes=1 timeouts=126 input_total=1 dropped=0
-/media/cdrom/etc/hostname[44802175671]
-=== End Serial Log ===

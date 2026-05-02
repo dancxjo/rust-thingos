@@ -231,11 +231,17 @@ impl Supervisor {
         stem::info!("SPROUT: Spawning iso9660d...");
         self.spawn_iso9660d();
 
-        // Stage 4: Mount local hostname cache before netd. Mesocarp can serve
+        // Stage 4: Mount fatd (FAT VFS provider).  The daemon scans
+        // `/dev/block` until xHCI publishes USB mass-storage partitions, then
+        // mounts the first FAT volume at `/media/usb`.
+        stem::info!("SPROUT: Spawning fatd...");
+        self.spawn_fatd();
+
+        // Stage 5: Mount local hostname cache before netd. Mesocarp can serve
         // self entries from VFS state and attach its UDP socket later.
         mount_hosts_cache();
 
-        // Stage 5: Start netd only after the network driver publishes its VFS tree.
+        // Stage 6: Start netd only after the network driver publishes its VFS tree.
         stem::debug!("SPROUT: Deferring netd until {} is ready...", NETD_PROVIDER_PATH);
         stem::debug!("SPROUT: Waiting for {} before spawning netd...", NETD_PROVIDER_PATH);
 
@@ -653,6 +659,10 @@ impl Supervisor {
         spawn_iso9660d_task(self.tasks.clone());
     }
 
+    fn spawn_fatd(&mut self) {
+        spawn_fatd_task(self.tasks.clone());
+    }
+
     fn verify_netd_liveness(&mut self) {
         let current_pid = {
             let tasks = self.tasks.lock();
@@ -985,6 +995,29 @@ fn spawn_iso9660d_task(tasks: Arc<Mutex<Vec<ManagedTask>>>) {
             });
         }
         Err(e) => warn!("SPROUT: Failed to spawn iso9660d: {:?}", e),
+    }
+}
+
+fn spawn_fatd_task(tasks: Arc<Mutex<Vec<ManagedTask>>>) {
+    let path = "/bin/fatd";
+    let argv: &[&[u8]] = &[path.as_bytes()];
+    let env = alloc::collections::BTreeMap::new();
+    let inherit = stem::abi::types::stdio_mode::INHERIT;
+    let null = stem::abi::types::stdio_mode::NULL;
+    match stem::syscall::spawn_process_ex(path, argv, &env, null, inherit, inherit, 0, &[]) {
+        Ok(resp) => {
+            let pid = resp.child_tid;
+            stem::debug!("SPROUT: Spawned fatd (PID={})", pid);
+            let mut tasks = tasks.lock();
+            tasks.push(ManagedTask {
+                name: "fatd".to_string(),
+                kind: TaskKind::Service("svc.fatd".to_string()),
+                module_path: path.to_string(),
+                pid: Some(pid),
+                ..Default::default()
+            });
+        }
+        Err(e) => warn!("SPROUT: Failed to spawn fatd: {:?}", e),
     }
 }
 

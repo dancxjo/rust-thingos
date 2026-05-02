@@ -1,4 +1,0 @@
-NFO [0m] [wayland_hello] [CPU3] wayland_hello: frame callback done object=1002 data=24028
-[48067466997] [[32mINFO [0m] [wayland_hello] [CPU3] wayland_hello: wp_presentation_feedback.presented object=1003 tv=24.031657501 refresh_ns=16666666 seq=1
-loc[50989499352] [[32mINFO [0m] [kernel::time] [CPU0] System clock tick: utc=2026-05-01 20:24:09.036409533 unix_secs=1777667049.036409533
-k 

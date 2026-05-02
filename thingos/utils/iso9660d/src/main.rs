@@ -12,7 +12,6 @@ use alloc::string::{String, ToString};
 use alloc::vec::Vec;
 
 use abi::errors::Errno;
-use abi::syscall::SYS_FS_BIND;
 use abi::vfs_rpc::VfsRpcOp;
 use ipc_helpers::provider::{ProviderLoop, ProviderRequest, ProviderResponse};
 use iso9660::{ISO_SECTOR_SIZE, IsoFs};
@@ -21,7 +20,7 @@ use stem::block::{BlockDevice, BlockError};
 use stem::syscall::vfs::{
     vfs_close, vfs_mount, vfs_open, vfs_read, vfs_readdir, vfs_seek, vfs_write,
 };
-use stem::syscall::{PortHandle, argv_get, port_create, syscall6};
+use stem::syscall::{PortHandle, argv_get, port_create};
 use stem::{info, warn};
 
 const DEFAULT_MOUNT_POINT: &str = "/media/cdrom";
@@ -302,16 +301,6 @@ fn try_scan_and_mount(mount_point: &str) -> Option<(IsoFs, VfsBlockDevice, PortH
         }
         if end > offset {
             if let Ok(name) = core::str::from_utf8(&buf[offset..end]) {
-                if is_boot_storage_name(name) {
-                    info!("iso9660d: probing device {}", name);
-                    info!("iso9660d: found ISO9660 on device {}", name);
-                    if bind_boot_content(mount_point).is_ok() {
-                        info!("iso9660d: mounted at {}", mount_point);
-                        loop {
-                            stem::yield_now();
-                        }
-                    }
-                }
                 let path = format!("/dev/storage/{}", name);
                 if let Some(mounted) = try_mount_device(&path, name, mount_point) {
                     return Some(mounted);
@@ -321,26 +310,6 @@ fn try_scan_and_mount(mount_point: &str) -> Option<(IsoFs, VfsBlockDevice, PortH
         offset = end + 1;
     }
     None
-}
-
-fn is_boot_storage_name(name: &str) -> bool {
-    name.starts_with("atapi") || name.starts_with("ahci") || name.starts_with("ata_")
-}
-
-fn bind_boot_content(mount_point: &str) -> Result<(), Errno> {
-    let src = "/";
-    let ret = unsafe {
-        syscall6(
-            SYS_FS_BIND,
-            src.as_ptr() as usize,
-            src.len(),
-            mount_point.as_ptr() as usize,
-            mount_point.len(),
-            0,
-            0,
-        )
-    };
-    abi::errors::errno(ret).map(|_| ())
 }
 
 fn try_mount_device(

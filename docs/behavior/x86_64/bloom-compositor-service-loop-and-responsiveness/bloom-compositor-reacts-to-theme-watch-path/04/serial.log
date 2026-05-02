@@ -1,7 +1,0 @@
-cho Solarized Warm > /[45611280264] [[32mINFO [0m] [bloom::services::wayland_cmd] [CPU1] bloom: registered titlebar drag zone surface=3 height=28 frame=6
-[45636074748] [[32mINFO [0m] [bloom::wayland::dispatch] [CPU3] wayland-server: xdg_popup obj=23 assigned to xdg_surface=21
-s[45667351389] [[32mINFO [0m] [bloom::wayland::dispatch] [CPU3] wayland-server: imported dmabuf wl_buffer=121 160x96 format=0x34325241
-ession/de[46176516969] [[32mINFO [0m] [kernel::time] [CPU0] System clock tick: utc=2026-05-01 20:31:42.011275427 unix_secs=1777667502.011275427
-sk[46265268918] [[32mINFO [0m] [bloom::render] [CPU1] bloom: flat window overlays ready size=1280x800
-top/theme
-[?25l

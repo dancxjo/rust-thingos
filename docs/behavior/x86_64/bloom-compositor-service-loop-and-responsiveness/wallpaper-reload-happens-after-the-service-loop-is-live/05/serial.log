@@ -1,7 +1,0 @@
-[32mINFO [0m] [wayland_hello] [CPU3] wayland_hello: frame callback done object=1000 data=51931
-[103881424977] [[32mINFO [0m] [wayland_hello] [CPU3] wayland_hello: wp_presentation_feedback.presented object=1001 tv=51.936557145 refresh_ns=16666666 seq=0
-[103907674200] [[32mINFO [0m] [bloom::services::wallpaper] [CPU1] bloom: reacting to wallpaper change: /share/wallpapers/flower.png
-[104718596334] [[32mINFO [0m] [wayland_hello] [CPU3] wayland_hello: frame callback done object=1002 data=52345
-[104720353617] [[32mINFO [0m] [wayland_hello] [CPU3] wayland_hello: wp_presentation_feedback.presented object=1003 tv=52.354510824 refresh_ns=16666666 seq=1
-[104759216265] [[32mINFO [0m] [bloom::services::wallpaper] [CPU1] bloom: reacting to wallpaper change: /share/wallpapers/flower.png
-[105673507533] [

@@ -1,5 +1,0 @@
-[32mINFO [0m] [cambium::catalog] [CPU1] DEVD CATALOG: registered driver '/drivers/display_virtio_gpu' name='display_virtio_gpu' class=Display kind='dev.display.Gpu' start='thingos_driver_start_safe'
-[37656827538] [[32mINFO [0m] [bloom] [CPU1] bloom: ENTERING MAIN
-[37657821663] [[32mINFO [0m] [bloom] [CPU1] bloom: compositor service starting
-[37679627040] [[32mINFO [0m] [cambium::catalog] [CPU1] DEVD CATALOG: registered driver '/drivers/hdaudio' name='hdaudio' class=Audio kind='dev.sound.Hda' start='thingos_driver_start_safe'
-[37899823632] [[32mINFO [0
