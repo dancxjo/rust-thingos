@@ -4,7 +4,8 @@
 extern crate alloc;
 
 use petals::{
-    Color, Declaration, Description, FlexDirection, JustifyContent, Rule, Selector, UiTree,
+    AlignItems, Clock, Color, Declaration, Description, FlexDirection, JustifyContent,
+    ResolvedStyle, Rule, Selector, UiTree,
 };
 use taffy::prelude::{AvailableSpace, Size};
 
@@ -98,6 +99,74 @@ fn run_demo() -> i32 {
             Err(err) => stem::println!("petals_demo: node={} layout error: {:?}", node.id, err),
         }
     }
+
+    if run_clock_petal_demo() != 0 {
+        return 1;
+    }
+
     stem::println!("petals_demo: PASS");
+    0
+}
+
+fn run_clock_petal_demo() -> i32 {
+    let clock = Clock::new();
+    let state = clock.update_from_parts(2026, 5, 2, 21, 41);
+    let time = clock.time_text(&state);
+    let date = clock.date_text(&state);
+
+    stem::println!(
+        "petals_demo: clock petal time={} {} date={}",
+        time,
+        clock.am_pm_text(&state),
+        date
+    );
+
+    let (mut tree, nodes) = match clock.build_tree(&state) {
+        Ok(value) => value,
+        Err(err) => {
+            stem::println!("petals_demo: clock tree failed: {:?}", err);
+            return 1;
+        }
+    };
+
+    let root = tree.root();
+    if let Err(err) = tree
+        .apply_style(
+            root,
+            ResolvedStyle {
+                width: Some(320.0),
+                height: Some(200.0),
+                flex_direction: Some(FlexDirection::Column),
+                justify_content: Some(JustifyContent::Center),
+                align_items: Some(AlignItems::Center),
+                ..ResolvedStyle::default()
+            },
+        )
+        .and_then(|_| {
+            tree.compute_layout(Size {
+                width: AvailableSpace::Definite(320.0),
+                height: AvailableSpace::Definite(200.0),
+            })
+        })
+    {
+        stem::println!("petals_demo: clock layout failed: {:?}", err);
+        return 1;
+    }
+
+    match tree.global_layout_box(nodes.root) {
+        Ok(b) => stem::println!(
+            "petals_demo: clock root box=({}, {}) {}x{}",
+            b.x as i32,
+            b.y as i32,
+            b.width as i32,
+            b.height as i32
+        ),
+        Err(err) => {
+            stem::println!("petals_demo: clock root layout error: {:?}", err);
+            return 1;
+        }
+    }
+
+    stem::println!("petals_demo: clock petal PASS");
     0
 }

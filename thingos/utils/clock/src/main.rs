@@ -8,6 +8,10 @@ use alloc::vec::Vec;
 use core::convert::TryInto;
 
 use libdl::{RTLD_NOW, dlerror, dlopen_str, dlsym_bytes};
+use petals::{
+    AlignItems, AvailableSpace, Clock, ClockState, Color, FlexDirection, JustifyContent,
+    ResolvedStyle, Size,
+};
 use stem::abi::syscall::{PollHandle, poll_flags};
 use stem::info;
 use stem::syscall::socket::{connect, sendmsg, socket};
@@ -35,16 +39,11 @@ const SERIAL_TICK_INTERVAL_NS: u64 = 37_000_000_000;
 const TZ_REFRESH_INTERVAL_NS: u64 = 60_000_000_000;
 const CLOCK_PRIORITY_LOW: usize = 1;
 const IDLE_SLEEP_MS: u64 = 250;
-const CLOCK_GOLD: u32 = 0xFFFFB900;
-const CLOCK_GOLD_GHOST: u32 = 0x12FFB900;
-const CLOCK_GOLD_GLOW: u32 = 0x30FFB900;
-const CLOCK_GREEN: u32 = 0xFF06D6A0;
-
 type DrawTextFn = extern "C" fn(*const u8, *mut u32, u32, u32, u32, i32, i32, f32, u32) -> i32;
 
 struct TextRenderer {
     _handle: *mut core::ffi::c_void,
-    draw_dseg7_text: DrawTextFn,
+    _draw_dseg7_text: DrawTextFn,
     draw_text: DrawTextFn,
 }
 
@@ -56,7 +55,7 @@ struct BufferState {
     ptr: *mut u8,
     width: u32,
     height: u32,
-    stride: u32,
+    _stride: u32,
 }
 
 struct PendingSurface {
@@ -83,6 +82,7 @@ fn main(_arg: usize) -> ! {
 
     let fd = connect_wayland();
     let text_renderer = load_text_renderer();
+    let clock = Clock::new();
 
     send_get_registry(fd, REGISTRY_ID);
     read_initial_globals(fd);
@@ -106,9 +106,9 @@ fn main(_arg: usize) -> ! {
     let mut tz_offset = get_tz_offset();
     let mut last_tz_refresh_ns = stem::time::monotonic_ns();
     let mut last_serial_tick_ns = 0u64;
-    let mut last_time = String::new();
-    let mut last_date = String::new();
-    let mut last_am_pm = String::new();
+    let mut last_state: Option<ClockState> = None;
+    let mut last_waiting_text = String::new();
+    let mut petal_render_logged = false;
 
     loop {
         read_events(fd, &mut pending, &mut pending_frame_callbacks);
@@ -120,23 +120,12 @@ fn main(_arg: usize) -> ! {
         }
 
         let realtime = local_datetime(tz_offset);
-        let (time_text, date_text, am_pm_text) = match realtime {
-            Some((dt, _, _)) => {
-                let hour12 = if dt.hour == 0 {
-                    12
-                } else if dt.hour > 12 {
-                    dt.hour - 12
-                } else {
-                    dt.hour
-                };
-                let am_pm = if dt.hour < 12 { "AM" } else { "PM" };
-                (
-                    format!("{:02}:{:02}", hour12, dt.minute),
-                    format!("{:04}-{:02}-{:02} UTC{:+}", dt.year, dt.month, dt.day, tz_offset),
-                    String::from(am_pm),
-                )
-            }
-            None => ("00:00".into(), format!("WAITING FOR RTC UTC{:+}", tz_offset), "--".into()),
+        let (clock_state, waiting_text) = match realtime {
+            Some((dt, _, _)) => (
+                Some(clock.update_from_parts(dt.year, dt.month, dt.day, dt.hour, dt.minute)),
+                String::new(),
+            ),
+            None => (None, format!("Waiting for RTC UTC{:+}", tz_offset)),
         };
 
         if now_ns.saturating_sub(last_serial_tick_ns) >= SERIAL_TICK_INTERVAL_NS {
@@ -162,12 +151,10 @@ fn main(_arg: usize) -> ! {
             last_serial_tick_ns = now_ns;
         }
 
-        let time_changed =
-            time_text != last_time || date_text != last_date || am_pm_text != last_am_pm;
+        let time_changed = clock_state != last_state || waiting_text != last_waiting_text;
         if time_changed {
-            last_time = time_text;
-            last_date = date_text;
-            last_am_pm = am_pm_text;
+            last_state = clock_state;
+            last_waiting_text = waiting_text;
         }
 
         let should_render = pending.configured && (pending.dirty || time_changed);
@@ -180,7 +167,17 @@ fn main(_arg: usize) -> ! {
                 pending.width,
                 pending.height,
             );
-            render_clock(buf, &last_time, &last_date, &last_am_pm, text_renderer.as_ref());
+            let petal_rendered = render_clock(
+                buf,
+                &clock,
+                last_state.as_ref(),
+                &last_waiting_text,
+                text_renderer.as_ref(),
+            );
+            if petal_rendered && !petal_render_logged {
+                info!("clock: petal perspective rendering date+time");
+                petal_render_logged = true;
+            }
             if pending.dirty {
                 ack_configure(fd, XDG_SURFACE_ID, pending.serial.unwrap_or(0));
                 pending.dirty = false;
@@ -321,19 +318,26 @@ fn ensure_buffer(
     create_pool(fd, shm_id, pool_id, fd_buf, size);
     create_buffer(fd, pool_id, buffer_id, width, height, stride);
 
-    let out =
-        BufferState { _pool_id: pool_id, buffer_id, _handle: fd_buf, ptr, width, height, stride };
+    let out = BufferState {
+        _pool_id: pool_id,
+        buffer_id,
+        _handle: fd_buf,
+        ptr,
+        width,
+        height,
+        _stride: stride,
+    };
     *current = Some(out);
     out
 }
 
 fn render_clock(
     buffer: BufferState,
-    time_text: &str,
-    date_text: &str,
-    am_pm: &str,
+    clock: &Clock,
+    state: Option<&ClockState>,
+    waiting_text: &str,
     text_renderer: Option<&TextRenderer>,
-) {
+) -> bool {
     unsafe {
         let pixels = core::slice::from_raw_parts_mut(
             buffer.ptr as *mut u32,
@@ -341,43 +345,33 @@ fn render_clock(
         );
         pixels.fill(0);
 
-        let px_size = (buffer.width as f32 / 8.8).clamp(42.0, 50.0);
-        let estimated_w = (time_text.len() as f32 * px_size * 0.55) as i32;
-        let text_x = ((buffer.width as i32 - estimated_w) / 2).max(12);
-        let body_top = 36i32;
-        let body_h = buffer.height.saturating_sub(body_top as u32).saturating_sub(10);
-        let text_y = body_top + ((body_h as f32 * 0.58) as i32);
-
-        draw_dseg7_text(
-            text_renderer,
-            pixels,
-            buffer.width,
-            buffer.height,
-            text_x,
-            text_y,
-            px_size,
-            "88:88",
-            CLOCK_GOLD_GHOST,
-        );
-        for (dx, dy, color) in [
-            (-1, 0, CLOCK_GOLD_GLOW),
-            (1, 0, CLOCK_GOLD_GLOW),
-            (0, -1, CLOCK_GOLD_GLOW),
-            (0, 1, CLOCK_GOLD_GLOW),
-        ] {
-            draw_dseg7_text(
+        let Some(state) = state else {
+            draw_generic_text(
                 text_renderer,
                 pixels,
                 buffer.width,
                 buffer.height,
-                text_x + dx,
-                text_y + dy,
-                px_size,
-                time_text,
-                color,
+                18,
+                buffer.height as i32 / 2,
+                18.0,
+                waiting_text,
+                0xFF8E9895,
             );
+            return false;
+        };
+
+        if render_clock_petal(buffer, pixels, clock, state, text_renderer).is_ok() {
+            return true;
         }
-        draw_dseg7_text(
+
+        let time_text = clock.time_text(state);
+        let date_text = clock.date_text(state);
+        let px_size = 32.0;
+        let estimated_w = (time_text.len() as f32 * px_size * 0.58) as i32;
+        let text_x = ((buffer.width as i32 - estimated_w) / 2).max(12);
+        let text_y = (buffer.height as i32 / 2).saturating_sub(4);
+
+        draw_generic_text(
             text_renderer,
             pixels,
             buffer.width,
@@ -385,119 +379,112 @@ fn render_clock(
             text_x,
             text_y,
             px_size,
-            time_text,
-            CLOCK_GOLD,
+            &time_text,
+            0xFFF2EFE8,
         );
-
-        let am_pm_x = text_x + estimated_w + 12;
         draw_generic_text(
             text_renderer,
             pixels,
             buffer.width,
             buffer.height,
-            am_pm_x,
+            text_x + estimated_w + 10,
             text_y,
-            20.0,
-            am_pm,
-            CLOCK_GREEN,
-        );
-
-        let dot_y = body_top + 9;
-        fill_rect(pixels, buffer.width, buffer.height, 22, dot_y, 4, 4, CLOCK_GOLD);
-        fill_rect(
-            pixels,
-            buffer.width,
-            buffer.height,
-            buffer.width as i32 - 26,
-            dot_y,
-            4,
-            4,
-            CLOCK_GOLD,
+            12.0,
+            clock.am_pm_text(state),
+            0xFFB0B8B6,
         );
         draw_generic_text(
             text_renderer,
             pixels,
             buffer.width,
             buffer.height,
-            18,
-            body_top + 26,
-            20.0,
-            "ALARM",
-            0xFF586E75,
-        );
-        draw_generic_text(
-            text_renderer,
-            pixels,
-            buffer.width,
-            buffer.height,
-            16,
-            buffer.height as i32 - 18,
-            20.0,
-            date_text,
-            0xD1586E75,
+            text_x,
+            text_y + 26,
+            14.0,
+            &date_text,
+            0xFF8E9895,
         );
     }
+    false
 }
 
-fn fill_rect(
+fn render_clock_petal(
+    buffer: BufferState,
     pixels: &mut [u32],
-    width: u32,
-    height: u32,
-    x: i32,
-    y: i32,
-    rect_w: u32,
-    rect_h: u32,
-    color: u32,
-) {
-    let x0 = x.max(0) as u32;
-    let y0 = y.max(0) as u32;
-    let x1 = (x + rect_w as i32).max(0).min(width as i32) as u32;
-    let y1 = (y + rect_h as i32).max(0).min(height as i32) as u32;
-    for py in y0..y1 {
-        let row = py as usize * width as usize;
-        for px in x0..x1 {
-            pixels[row + px as usize] = color;
-        }
-    }
-}
-
-fn draw_dseg7_text(
+    clock: &Clock,
+    state: &ClockState,
     text_renderer: Option<&TextRenderer>,
-    pixels: &mut [u32],
-    width: u32,
-    height: u32,
-    x: i32,
-    y: i32,
-    px_size: f32,
-    text: &str,
-    color: u32,
-) {
-    let Some(renderer) = text_renderer else {
-        return;
-    };
+) -> Result<(), ()> {
+    let (mut tree, nodes) = clock.build_tree(state).map_err(|_| ())?;
+    tree.apply_style(
+        tree.root(),
+        ResolvedStyle {
+            width: Some(buffer.width as f32),
+            height: Some(buffer.height as f32),
+            flex_direction: Some(FlexDirection::Column),
+            justify_content: Some(JustifyContent::Center),
+            align_items: Some(AlignItems::Center),
+            ..ResolvedStyle::default()
+        },
+    )
+    .map_err(|_| ())?;
+    tree.compute_layout(Size {
+        width: AvailableSpace::Definite(buffer.width as f32),
+        height: AvailableSpace::Definite(buffer.height as f32),
+    })
+    .map_err(|_| ())?;
 
-    let mut text_c = [0u8; 128];
-    let bytes = text.as_bytes();
-    if bytes.len() >= text_c.len() {
-        stem::warn!("clock: text too long for pistil text call");
-        return;
-    }
-    text_c[..bytes.len()].copy_from_slice(bytes);
+    let time = tree.node(nodes.time).ok_or(())?;
+    let am_pm = tree.node(nodes.am_pm).ok_or(())?;
+    let time_text = clock.time_text(state);
+    let time_box = tree.global_layout_box(nodes.time).map_err(|_| ())?;
+    let am_pm_box = tree.global_layout_box(nodes.am_pm).map_err(|_| ())?;
 
-    let rc = (renderer.draw_dseg7_text)(
-        text_c.as_ptr(),
-        pixels.as_mut_ptr(),
-        width,
-        height,
-        width,
-        x,
-        y,
-        px_size,
-        color,
+    draw_generic_text(
+        text_renderer,
+        pixels,
+        buffer.width,
+        buffer.height,
+        time_box.x as i32,
+        (time_box.y + time.style.font_size.unwrap_or(32.0)) as i32,
+        time.style.font_size.unwrap_or(32.0),
+        &time_text,
+        argb(time.style.color.unwrap_or(Color::rgb(242, 239, 232))),
     );
-    if rc != 0 {
-        stem::warn!("clock: pistil_draw_dseg7_text failed: {}", rc);
+    draw_generic_text(
+        text_renderer,
+        pixels,
+        buffer.width,
+        buffer.height,
+        am_pm_box.x as i32,
+        (am_pm_box.y + am_pm.style.font_size.unwrap_or(12.0)) as i32,
+        am_pm.style.font_size.unwrap_or(12.0),
+        clock.am_pm_text(state),
+        argb(am_pm.style.color.unwrap_or(Color::rgb(176, 184, 182))),
+    );
+
+    if let Some(date_id) = nodes.date {
+        let date = tree.node(date_id).ok_or(())?;
+        let date_text = clock.date_text(state);
+        let date_box = tree.global_layout_box(date_id).map_err(|_| ())?;
+        draw_generic_text(
+            text_renderer,
+            pixels,
+            buffer.width,
+            buffer.height,
+            date_box.x as i32,
+            (date_box.y + date.style.font_size.unwrap_or(14.0)) as i32,
+            date.style.font_size.unwrap_or(14.0),
+            &date_text,
+            argb(date.style.color.unwrap_or(Color::rgb(142, 152, 149))),
+        );
     }
+
+    Ok(())
+}
+
+fn argb(color: Color) -> u32 {
+    ((color.a as u32) << 24) | ((color.r as u32) << 16) | ((color.g as u32) << 8) | color.b as u32
 }
 
 fn draw_generic_text(
@@ -562,7 +549,7 @@ fn load_text_renderer() -> Option<TextRenderer> {
     let draw_text: DrawTextFn = unsafe { core::mem::transmute(sym_text) };
     info!("clock: pistil DSEG7 text renderer loaded with {}", DSEG7_FONT_PATH);
     info!("clock: pistil generic text renderer loaded with /public/fonts/Inter-Regular.ttf");
-    Some(TextRenderer { _handle: handle, draw_dseg7_text, draw_text })
+    Some(TextRenderer { _handle: handle, _draw_dseg7_text: draw_dseg7_text, draw_text })
 }
 
 fn log_dlerror(prefix: &str) {

@@ -158,6 +158,8 @@ pub struct WindowOverlayPlane {
 pub struct ResourceRetryStatus {
     pub pending: bool,
     pub improved: bool,
+    pub wallpaper_pending: bool,
+    pub cursor_pending: bool,
 }
 
 struct CursorBuffer {
@@ -390,20 +392,22 @@ impl CompositorVisuals {
             }
         }
 
-        if load_cursor && self.pistil.is_some() && self.needs_asset_cursor() {
+        let wallpaper_pending = wallpaper_path
+            .map(|path| self.wallpaper_path.as_deref() != Some(path))
+            .unwrap_or(false);
+        let wallpaper_settled = !wallpaper_pending;
+
+        if load_cursor && wallpaper_settled && self.pistil.is_some() && self.needs_asset_cursor() {
             self.prepare_cursor(display);
             if !self.needs_asset_cursor() {
                 improved = true;
             }
         }
 
-        let wallpaper_pending = wallpaper_path
-            .map(|path| self.wallpaper_path.as_deref() != Some(path))
-            .unwrap_or(false);
         let cursor_pending = load_cursor && self.needs_asset_cursor();
         let pending = self.pistil.is_none() || font_pending || wallpaper_pending || cursor_pending;
 
-        ResourceRetryStatus { pending, improved }
+        ResourceRetryStatus { pending, improved, wallpaper_pending, cursor_pending }
     }
 
     pub fn reconfigure_for_output(&mut self, display: &DisplayBackend) {

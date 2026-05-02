@@ -160,6 +160,26 @@ pub fn spawn_bristle() -> Option<u64> {
     }
 }
 
+pub fn spawn_chime() -> Option<u64> {
+    let path = "/bin/chime";
+    let argv: [&[u8]; 1] = [path.as_bytes()];
+    let env = BTreeMap::new();
+    let null = abi::types::stdio_mode::NULL;
+
+    match stem::syscall::spawn_process_ex(path, &argv, &env, null, null, null, 0, &[]) {
+        Ok(resp) => {
+            let pid = resp.child_tid;
+            info!("SPROUT: spawned startup chime (PID={})", pid);
+            let _ = stem::thread::set_priority(pid, 3);
+            Some(pid)
+        }
+        Err(err) => {
+            warn!("SPROUT: failed to spawn startup chime: {:?}", err);
+            None
+        }
+    }
+}
+
 pub fn spawn_bloom() -> Option<u64> {
     let path = "/services/bloom";
     let argv: [&[u8]; 1] = [path.as_bytes()];

@@ -10,7 +10,9 @@ use stem::service_loop::{ServiceEvent, ServiceLoop};
 use stem::syscall::message::{KindId, msg_send};
 use stem::{info, warn};
 
-use crate::pipelines::{kernel_terminal_requested, spawn_bloom, spawn_bristle, spawn_shell};
+use crate::pipelines::{
+    kernel_terminal_requested, spawn_bloom, spawn_bristle, spawn_chime, spawn_shell,
+};
 
 const SHELL_HEADSTART_MS: u64 = 50;
 const INBOX_MAX_PAYLOAD: usize = 256;
@@ -28,6 +30,7 @@ impl Supervisor {
 
         let kernel_terminal = kernel_terminal_requested();
         let shell_pid = spawn_shell();
+        let _chime_pid = spawn_chime();
         stem::sleep_ms(SHELL_HEADSTART_MS);
 
         let cambium_pid = if kernel_terminal {

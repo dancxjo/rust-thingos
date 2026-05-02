@@ -6,4 +6,10 @@ pub enum Description {
     Scrollable,
     Container,
     ChromeButton,
+    Perspective,
+    Clock,
+    ClockFace,
+    ClockTime,
+    ClockAmPm,
+    ClockDate,
 }

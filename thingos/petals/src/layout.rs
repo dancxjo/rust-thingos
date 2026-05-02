@@ -136,6 +136,21 @@ impl UiTree {
         })
     }
 
+    pub fn global_layout_box(&self, id: NodeId) -> Result<LayoutBox, taffy::TaffyError> {
+        let mut out = self.layout_box(id)?;
+        let mut current = id;
+        while current != self.root {
+            let Some(parent) = self.parent_of(current) else {
+                break;
+            };
+            let parent_box = self.layout_box(parent)?;
+            out.x += parent_box.x;
+            out.y += parent_box.y;
+            current = parent;
+        }
+        Ok(out)
+    }
+
     pub fn set_state(&mut self, id: NodeId, state: State, enabled: bool) {
         if let Some(node) = self.node_mut(id) {
             if enabled {
@@ -144,6 +159,13 @@ impl UiTree {
                 node.states.remove(state);
             }
         }
+    }
+
+    fn parent_of(&self, id: NodeId) -> Option<NodeId> {
+        self.nodes
+            .iter()
+            .find(|node| node.children.iter().any(|child| *child == id))
+            .map(|node| node.id)
     }
 }
 

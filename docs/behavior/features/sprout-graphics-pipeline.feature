@@ -26,6 +26,7 @@ Feature: Sprout desktop session orchestration
     Then the serial output should contain "SPROUT: Spawned clock" within 180s
     And the serial output should contain "clock: connected to /run/wayland-0" within 180s
     And the serial output should contain "clock: pistil DSEG7 text renderer loaded with /share/fonts/DSEG7Classic-Regular.ttf" within 180s
+    And the serial output should contain "clock: petal perspective rendering date+time" within 180s
     And the serial output should contain "RTC: claimed /sys/devices/isa-0070" within 180s
     And the serial output should contain "RTC: System clock anchored" within 180s
     And the serial output should contain "System clock anchored:" within 180s

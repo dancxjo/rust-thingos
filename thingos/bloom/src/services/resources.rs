@@ -13,11 +13,12 @@ pub struct ResourceRetryService {
     wallpaper_config_path: Option<&'static str>,
     load_cursor: bool,
     ready_logged: bool,
+    all_settled_logged: bool,
 }
 
 impl ResourceRetryService {
     pub fn new(wallpaper_config_path: Option<&'static str>, load_cursor: bool) -> Self {
-        Self { wallpaper_config_path, load_cursor, ready_logged: false }
+        Self { wallpaper_config_path, load_cursor, ready_logged: false, all_settled_logged: false }
     }
 
     fn arm_retry_timer() -> LoopAction {
@@ -66,6 +67,14 @@ impl BloomService for ResourceRetryService {
 
         if status.improved {
             world.damage.mark_full(world.primary.width, world.primary.height);
+        }
+
+        let tracks_wallpaper_or_cursor = self.wallpaper_config_path.is_some() || self.load_cursor;
+        let wallpaper_and_cursor_settled =
+            tracks_wallpaper_or_cursor && !status.wallpaper_pending && !status.cursor_pending;
+        if wallpaper_and_cursor_settled && !self.all_settled_logged {
+            stem::info!("bloom: wallpaper and cursor all settled");
+            self.all_settled_logged = true;
         }
 
         if status.pending {
