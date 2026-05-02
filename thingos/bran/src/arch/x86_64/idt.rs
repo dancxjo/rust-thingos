@@ -1301,6 +1301,10 @@ fn trigger_pause_dump(snapshot: Option<&IrqRegisterSnapshot>) -> ! {
         wait_for_pause_cpu_snapshots(current_cpu, cpu_total);
 
         kinfo!("PS/2 hotkey Alt+F12 detected on CPU {}; forcing kernel pause", current_cpu);
+
+        // Dump the last-progress-marker ring so freeze analysis can see recent activity.
+        kernel::trace::progress_ring::dump();
+
         render_pause_dump_screen(snapshot);
         kernel::kprint!(
             " Press F12 to reboot immediately.                                             \n\n"
@@ -1356,6 +1360,15 @@ fn print_irq_trace_summary() {
             }
             TraceEvent::PreemptDisable { depth, timestamp } => {
                 kernel::kprint!("  preempt depth={}  t={}\n", depth, timestamp);
+            }
+            TraceEvent::Heartbeat { cpu, tid, runq_len, timestamp } => {
+                kernel::kprint!("  heartbeat cpu={} tid={} runq={} t={}\n", cpu, tid, runq_len, timestamp);
+            }
+            TraceEvent::SchedSwitch { cpu, from_tid, to_tid, timestamp } => {
+                kernel::kprint!("  sched_switch cpu={} {} -> {} t={}\n", cpu, from_tid, to_tid, timestamp);
+            }
+            TraceEvent::VfsRpc { enter, op_tag, timestamp } => {
+                kernel::kprint!("  vfs_rpc enter={} op={} t={}\n", enter, op_tag, timestamp);
             }
         }
     }
@@ -1515,6 +1528,16 @@ pub extern "C" fn rust_irq_handler(vector: u64, irq_snapshot: *const IrqRegister
         return;
     }
 
+    // Record IRQ entry in the progress ring for freeze post-mortems.
+    let irq_entry_ns = kernel::trace::now_or_zero();
+    let irq_cpu = kernel::runtime_base().current_cpu_index();
+    kernel::trace::progress_ring::push(
+        kernel::trace::progress_ring::ProgressTag::IrqEntry,
+        irq_cpu,
+        resolved as u64,
+        irq_entry_ns,
+    );
+
     let mut pause_dump = false;
     let mut f12_press = false;
     let mut ctrl_alt_del = false;
@@ -1614,6 +1637,14 @@ pub extern "C" fn rust_irq_handler(vector: u64, irq_snapshot: *const IrqRegister
     if resolved == 0x21 || resolved == 0x2C {
         ps2_irq_trace_exit(resolved, ps2_irq_count, ps2_irq_start_ticks);
     }
+
+    // Record IRQ exit in the progress ring.
+    kernel::trace::progress_ring::push(
+        kernel::trace::progress_ring::ProgressTag::IrqExit,
+        irq_cpu,
+        resolved as u64,
+        kernel::trace::now_or_zero(),
+    );
 }
 
 #[unsafe(no_mangle)]

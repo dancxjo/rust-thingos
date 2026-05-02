@@ -213,6 +213,17 @@ impl ProviderRpc {
         crate::kdebug!("VFS_RPC: request op={:?} len={} tid={}", op, payload.len(), tid);
         let req_id = self.next_req_id.fetch_add(1, Ordering::SeqCst);
 
+        // Record VFS RPC entry in the progress ring for freeze diagnostics.
+        // A RAII guard records the matching exit on all return paths.
+        let rpc_entry_ns = crate::trace::now_or_zero();
+        crate::trace::progress_ring::push(
+            crate::trace::progress_ring::ProgressTag::VfsRpcEntry,
+            0,
+            op as u64,
+            rpc_entry_ns,
+        );
+        let _rpc_exit_guard = crate::trace::progress_ring::VfsRpcExitGuard::new(op as u64);
+
         let mut msg = Vec::with_capacity(7 + payload.len());
         msg.extend_from_slice(&self.resp_write_handle.to_le_bytes());
         msg.push(op as u8);

@@ -3,6 +3,7 @@
 //! All timing in the kernel derives from the `BootRuntimeBase::mono_ticks()` source.
 
 pub mod irq_ring;
+pub mod progress_ring;
 
 /// Returns the current monotonic time in nanoseconds.
 ///

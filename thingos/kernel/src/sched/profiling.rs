@@ -6,6 +6,34 @@ use super::{state, types};
 /// Global tick counter for debugging scheduler health
 pub static TICK_COUNT: AtomicU64 = AtomicU64::new(0);
 
+/// Monotonic nanosecond timestamp of the most recent timer interrupt (on any CPU).
+///
+/// Updated in `on_tick` immediately on ISR entry.  A stale value here means
+/// timer interrupts have stopped firing.
+pub static LAST_TIMER_IRQ_MONO_NS: AtomicU64 = AtomicU64::new(0);
+
+/// Per-CPU snapshot of `context_switches` at the last heartbeat emission.
+/// Used to compute per-interval delta values shown in the heartbeat log line.
+pub static SNAPSHOT_CTXSW_PER_CPU: [AtomicU64; types::MAX_CPUS] = {
+    #[allow(clippy::declare_interior_mutable_const)]
+    const ZERO: AtomicU64 = AtomicU64::new(0);
+    [ZERO; types::MAX_CPUS]
+};
+
+/// Per-CPU snapshot of `timer_interrupts` at the last heartbeat emission.
+pub static SNAPSHOT_TICK_PER_CPU: [AtomicU64; types::MAX_CPUS] = {
+    #[allow(clippy::declare_interior_mutable_const)]
+    const ZERO: AtomicU64 = AtomicU64::new(0);
+    [ZERO; types::MAX_CPUS]
+};
+
+/// Per-CPU snapshot of `wakeups` at the last heartbeat emission.
+pub static SNAPSHOT_WAKE_PER_CPU: [AtomicU64; types::MAX_CPUS] = {
+    #[allow(clippy::declare_interior_mutable_const)]
+    const ZERO: AtomicU64 = AtomicU64::new(0);
+    [ZERO; types::MAX_CPUS]
+};
+
 pub static PROF_RESCHED_TRYLOCK_MISS: AtomicU64 = AtomicU64::new(0);
 
 // Diagnostic counters for IPI delivery chain
