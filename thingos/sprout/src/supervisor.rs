@@ -18,7 +18,10 @@ use core::sync::atomic::{AtomicU8, Ordering};
 use abi::display_driver_protocol;
 use abi::supervisor_protocol::{self, classes};
 use spin::Mutex;
-use stem::kinds::{DriverReadyV1, KIND_ID_THINGOS_DRIVER_READY};
+use stem::kinds::{
+    DriverReadyV1, KIND_ID_THINGOS_DRIVER_READY, KIND_ID_THINGOS_SHUTDOWN_READY,
+    KIND_ID_THINGOS_SHUTDOWN_REQUEST, ShutdownReadyV1, ShutdownRequestV1,
+};
 use stem::service_loop::{ServiceEvent, ServiceLoop};
 use stem::syscall::message::{KindId, msg_send};
 use stem::time::Duration;
@@ -196,14 +199,12 @@ impl Supervisor {
     }
 
     pub fn run_forever(&mut self) -> ! {
-        info!("SPROUT: Supervisor session started (FULL PIPELINE MODE)");
-
-        // Ensure canonical device directories exist.
-        let _ = stem::syscall::vfs::vfs_mkdir("/dev/display");
+        info!("SPROUT: Supervisor session started (MINIMAL BOOT MODE)");
 
         // Stage 1: Launch Serial Shell
         stem::info!("SPROUT: Launching serial shell...");
         setup_serial_shell(self.tasks.clone());
+        let shell_pid = self.serial_shell_pid();
         stem::info!(
             "SPROUT: Serial shell launched; yielding {}ms so the prompt can take the foreground",
             SERIAL_SHELL_HEADSTART_MS
@@ -211,26 +212,44 @@ impl Supervisor {
         stem::sleep_ms(SERIAL_SHELL_HEADSTART_MS);
         stem::info!("SPROUT: Continuing supervisor startup");
 
-        if self.config.safe_shell_only {
-            stem::info!("SPROUT: Safe shell mode active; launching only serial sh and terminal");
-            self.spawn_safe_terminal_if_needed();
-            stem::info!("SPROUT: Entering safe shell supervisor loop");
-            match ServiceLoop::new(INBOX_MAX_PAYLOAD) {
-                Ok(svc) => self.run_service_loop(svc),
-                Err(err) => {
-                    warn!(
-                        "SPROUT: failed to construct ServiceLoop ({:?}); falling back to legacy supervisor loop",
-                        err
-                    );
-                    self.run_legacy_supervisor_loop();
-                }
-            }
-        }
+        // Stage 2: Start bristle so input drivers have a broker to publish to.
+        stem::info!("SPROUT: Spawning bristle for early input brokerage...");
+        self.spawn_bristle_if_needed();
 
-        // Stage 2: Start cambium for driver discovery.
+        // Stage 3: Start cambium for driver discovery.
         stem::info!("SPROUT: Spawning cambium for driver discovery...");
         self.spawn_cambium();
 
+        stem::info!(
+            "SPROUT: Minimal boot mode active; only sh, bristle, and cambium were launched"
+        );
+        match shell_pid {
+            Some(pid) => {
+                stem::info!("SPROUT: Waiting for serial shell PID {} to exit", pid);
+                match stem::syscall::waitpid(pid as i64, 0) {
+                    Ok((reaped_pid, status)) => {
+                        stem::info!(
+                            "SPROUT: Serial shell PID {} exited with status {:#x}; halting",
+                            reaped_pid,
+                            status
+                        );
+                    }
+                    Err(err) => {
+                        warn!(
+                            "SPROUT: waitpid for serial shell PID {} failed: {:?}; halting",
+                            pid, err
+                        );
+                    }
+                }
+            }
+            None => {
+                warn!("SPROUT: Serial shell did not spawn; halting");
+            }
+        }
+        self.request_cambium_shutdown_and_wait();
+        stem::shutdown();
+
+        /*
         // Stage 3: Mount iso9660d (ISO9660 VFS provider).  The daemon scans
         // `/dev/storage` until ATA/AHCI publishes the boot CD-ROM, then mounts
         // the first ISO9660 volume at `/media/cdrom`.
@@ -280,6 +299,7 @@ impl Supervisor {
                 self.run_legacy_supervisor_loop();
             }
         }
+        */
     }
 
     /// Inbox-backed Layer 3 service loop.  Wakes on:
@@ -652,6 +672,109 @@ impl Supervisor {
 
     fn spawn_cambium(&mut self) {
         spawn_cambium_task(self.tasks.clone());
+    }
+
+    fn serial_shell_pid(&self) -> Option<u64> {
+        let tasks = self.tasks.lock();
+        tasks.iter().find(|task| task.name == "shell").and_then(|task| task.pid)
+    }
+
+    fn cambium_pid(&self) -> Option<u64> {
+        let tasks = self.tasks.lock();
+        tasks.iter().find(|task| task.name == "cambium").and_then(|task| task.pid)
+    }
+
+    fn request_cambium_shutdown_and_wait(&mut self) {
+        let Some(cambium_pid) = self.cambium_pid() else {
+            warn!("SPROUT: Cambium is not running; halting without shutdown handshake");
+            return;
+        };
+
+        let request = ShutdownRequestV1::new(stem::syscall::getpid(), 0);
+        stem::info!("SPROUT: Sending shutdown request to cambium PID {}", cambium_pid);
+        if let Err(err) = msg_send(
+            cambium_pid as u32,
+            KindId(KIND_ID_THINGOS_SHUTDOWN_REQUEST),
+            request.as_bytes(),
+        ) {
+            warn!(
+                "SPROUT: Failed to send shutdown request to cambium PID {}: {:?}; halting",
+                cambium_pid, err
+            );
+            return;
+        }
+
+        let mut svc = match ServiceLoop::new(INBOX_MAX_PAYLOAD) {
+            Ok(svc) => svc,
+            Err(err) => {
+                warn!(
+                    "SPROUT: Cannot wait for cambium shutdown-ready message ({:?}); halting",
+                    err
+                );
+                return;
+            }
+        };
+
+        loop {
+            match svc.next_event(None) {
+                Ok(ServiceEvent::Message { kind, payload, .. }) => {
+                    if kind.0 == KIND_ID_THINGOS_SHUTDOWN_READY {
+                        let Some(ready) = ShutdownReadyV1::from_bytes(payload) else {
+                            warn!(
+                                "SPROUT: Ignoring malformed shutdown-ready payload ({} bytes)",
+                                payload.len()
+                            );
+                            continue;
+                        };
+                        if ready.pid as u64 != cambium_pid {
+                            stem::debug!(
+                                "SPROUT: Ignoring shutdown-ready from unexpected PID {}",
+                                ready.pid
+                            );
+                            continue;
+                        }
+                        stem::info!(
+                            "SPROUT: Cambium ready to shutdown status={} active_children={}",
+                            ready.status,
+                            ready.active_children
+                        );
+                        break;
+                    } else if kind.0 == KIND_ID_THINGOS_DRIVER_READY {
+                        self.handle_driver_ready(payload);
+                    } else {
+                        stem::debug!(
+                            "SPROUT: Waiting for cambium shutdown-ready; ignored inbox kind={:?}",
+                            kind
+                        );
+                    }
+                }
+                Ok(ServiceEvent::Ready { token, event }) => {
+                    stem::debug!(
+                        "SPROUT: Waiting for cambium shutdown-ready; secondary ready token={:?} flags=0x{:x}",
+                        token,
+                        event.flags()
+                    );
+                }
+                Ok(ServiceEvent::Timeout) => {}
+                Ok(ServiceEvent::InboxClosed) => {
+                    warn!("SPROUT: Inbox closed while waiting for cambium shutdown-ready");
+                    return;
+                }
+                Err(err) => {
+                    warn!("SPROUT: Error waiting for cambium shutdown-ready: {:?}", err);
+                    return;
+                }
+            }
+        }
+
+        match stem::syscall::waitpid(cambium_pid as i64, 0) {
+            Ok((pid, status)) => {
+                stem::info!("SPROUT: Cambium PID {} exited with status {:#x}", pid, status);
+            }
+            Err(err) => {
+                warn!("SPROUT: waitpid for cambium PID {} failed: {:?}", cambium_pid, err);
+            }
+        }
     }
 
     fn spawn_netd_if_ready(&mut self) {

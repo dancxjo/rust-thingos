@@ -531,3 +531,101 @@ impl DriverReadyV1 {
         }
     }
 }
+
+/// Shutdown request — sent by a supervisor to a service inbox when the system
+/// is moving toward poweroff and the service should stop spawning work,
+/// quiesce children, and report when it is ready for final halt.
+///
+/// The constant value is a randomly generated UUID v4:
+/// `734d4498-124f-4768-9a8e-51ed65a4ec9f`.
+pub const KIND_ID_THINGOS_SHUTDOWN_REQUEST: [u8; 16] = [
+    0x73, 0x4d, 0x44, 0x98, 0x12, 0x4f, 0x47, 0x68, 0x9a, 0x8e, 0x51, 0xed, 0x65, 0xa4, 0xec, 0x9f,
+];
+
+/// Shutdown-ready response — sent back to the requester once the service has
+/// completed its own shutdown preparation.
+///
+/// The constant value is a randomly generated UUID v4:
+/// `da199445-70b2-4ef8-8bea-47e717d4a0a1`.
+pub const KIND_ID_THINGOS_SHUTDOWN_READY: [u8; 16] = [
+    0xda, 0x19, 0x94, 0x45, 0x70, 0xb2, 0x4e, 0xf8, 0x8b, 0xea, 0x47, 0xe7, 0x17, 0xd4, 0xa0, 0xa1,
+];
+
+#[repr(C)]
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub struct ShutdownRequestV1 {
+    pub version: u16,
+    pub flags: u16,
+    pub requester_pid: u32,
+    pub reason: u32,
+    pub reserved: u32,
+}
+
+impl ShutdownRequestV1 {
+    pub fn new(requester_pid: u32, reason: u32) -> Self {
+        Self { version: 1, flags: 0, requester_pid, reason, reserved: 0 }
+    }
+
+    pub fn from_bytes(bytes: &[u8]) -> Option<Self> {
+        if bytes.len() < core::mem::size_of::<Self>() {
+            return None;
+        }
+        // SAFETY: `Self` is `#[repr(C)]` integer fields only; unaligned inbox
+        // payloads are accepted with `read_unaligned`.
+        let v: Self = unsafe { core::ptr::read_unaligned(bytes.as_ptr() as *const Self) };
+        if v.version != 1 {
+            return None;
+        }
+        Some(v)
+    }
+
+    pub fn as_bytes(&self) -> &[u8] {
+        // SAFETY: `Self` is `#[repr(C)]`; the slice covers exactly the struct.
+        unsafe {
+            core::slice::from_raw_parts(
+                self as *const Self as *const u8,
+                core::mem::size_of::<Self>(),
+            )
+        }
+    }
+}
+
+#[repr(C)]
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub struct ShutdownReadyV1 {
+    pub version: u16,
+    pub flags: u16,
+    pub pid: u32,
+    pub status: i32,
+    pub active_children: u32,
+    pub reserved: u32,
+}
+
+impl ShutdownReadyV1 {
+    pub fn new(pid: u32, status: i32, active_children: u32) -> Self {
+        Self { version: 1, flags: 0, pid, status, active_children, reserved: 0 }
+    }
+
+    pub fn from_bytes(bytes: &[u8]) -> Option<Self> {
+        if bytes.len() < core::mem::size_of::<Self>() {
+            return None;
+        }
+        // SAFETY: `Self` is `#[repr(C)]` integer fields only; unaligned inbox
+        // payloads are accepted with `read_unaligned`.
+        let v: Self = unsafe { core::ptr::read_unaligned(bytes.as_ptr() as *const Self) };
+        if v.version != 1 {
+            return None;
+        }
+        Some(v)
+    }
+
+    pub fn as_bytes(&self) -> &[u8] {
+        // SAFETY: `Self` is `#[repr(C)]`; the slice covers exactly the struct.
+        unsafe {
+            core::slice::from_raw_parts(
+                self as *const Self as *const u8,
+                core::mem::size_of::<Self>(),
+            )
+        }
+    }
+}

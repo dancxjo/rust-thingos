@@ -2,10 +2,10 @@ extern crate alloc;
 use alloc::string::{String, ToString};
 
 use abi::driver_interface::DriverEntryCtx;
-use abi::types::TaskStatus;
+use abi::signal::{SIGKILL, SIGTERM};
 use stem::kinds::{DriverReadyV1, KIND_ID_THINGOS_DRIVER_READY};
 use stem::syscall::message::{KindId, msg_send};
-use stem::syscall::{task_poll, vfs_umount};
+use stem::syscall::{kill, vfs_umount};
 use stem::time::monotonic_ns;
 use stem::{debug, warn};
 
@@ -251,6 +251,59 @@ impl ManagedDriver {
         if device_present(&self.slot) {
             self.schedule_restart();
             self.ensure_running();
+        }
+    }
+
+    pub fn request_shutdown(&self) {
+        if let Some(pid) = self.pid {
+            match kill(pid as i32, SIGTERM) {
+                Ok(()) => debug!("CAMBIUM: sent SIGTERM to driver pid {} for {}", pid, self.slot),
+                Err(err) => warn!(
+                    "CAMBIUM: failed to send SIGTERM to driver pid {} for {}: {:?}",
+                    pid, self.slot, err
+                ),
+            }
+        }
+    }
+
+    pub fn force_shutdown(&self) {
+        if let Some(pid) = self.pid {
+            match kill(pid as i32, SIGKILL) {
+                Ok(()) => debug!("CAMBIUM: sent SIGKILL to driver pid {} for {}", pid, self.slot),
+                Err(err) => warn!(
+                    "CAMBIUM: failed to send SIGKILL to driver pid {} for {}: {:?}",
+                    pid, self.slot, err
+                ),
+            }
+        }
+    }
+
+    pub fn poll_shutdown(&mut self) -> bool {
+        let Some(pid) = self.pid else {
+            return true;
+        };
+
+        match stem::syscall::waitpid(pid as i64, abi::types::system::waitpid_flags::WNOHANG) {
+            Ok((child_pid, status)) if child_pid > 0 => {
+                let code = abi::signal::w_exit_status(status as u8);
+                warn!(
+                    "CAMBIUM: driver for {} exited during shutdown with code {}",
+                    self.slot, code
+                );
+                self.pid = None;
+                self.cleanup_mount();
+                true
+            }
+            Ok(_) => false,
+            Err(err) => {
+                warn!(
+                    "CAMBIUM: treating driver pid {} for {} as gone during shutdown: {:?}",
+                    pid, self.slot, err
+                );
+                self.pid = None;
+                self.cleanup_mount();
+                true
+            }
         }
     }
 

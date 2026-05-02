@@ -1263,7 +1263,7 @@ fn is_non_bootfb_graphics_driver(name: &str) -> bool {
 }
 
 fn is_safe_shell_program(name: &str) -> bool {
-    matches!(name, "sprout" | "sh" | "echo" | "cat" | "ls" | "terminal")
+    matches!(name, "sprout" | "sh" | "echo" | "cat" | "ls" | "terminal" | "bristle")
 }
 
 fn userspace_aliases(name: &str) -> &'static [&'static str] {
@@ -1324,7 +1324,7 @@ mod tests {
     }
 
     #[test]
-    fn safe_shell_entry_loads_only_sprout_sh_echo_and_terminal() {
+    fn safe_shell_entry_loads_only_sprout_sh_bristle_echo_and_terminal() {
         let sh = Shell::new().expect("shell");
         let mut sprout = test_program("sprout");
         sprout.is_init = true;
@@ -1355,8 +1355,8 @@ mod tests {
         assert!(safe_entry.contains("module_path: boot():/bin/cat"));
         assert!(safe_entry.contains("module_path: boot():/bin/ls"));
         assert!(safe_entry.contains("module_path: boot():/bin/terminal"));
+        assert!(safe_entry.contains("module_path: boot():/bin/bristle"));
         assert!(!safe_entry.contains("module_path: boot():/bin/bloom"));
-        assert!(!safe_entry.contains("module_path: boot():/bin/bristle"));
         assert!(!safe_entry.contains("module_path: boot():/bin/busybox"));
         assert!(!safe_entry.contains("module_path: boot():/bin/ash"));
         assert!(!safe_entry.contains("module_path: boot():/etc/default/shell"));

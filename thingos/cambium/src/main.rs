@@ -19,11 +19,14 @@ use abi::vfs_watch::{flags as watch_flags, mask as watch_mask};
 use binding::{match_binding, mount_hint};
 use catalog::Catalog;
 use spawn::ManagedDriver;
-use stem::kinds::KIND_ID_THINGOS_JOB_EXIT;
+use stem::kinds::{
+    KIND_ID_THINGOS_JOB_EXIT, KIND_ID_THINGOS_SHUTDOWN_READY, KIND_ID_THINGOS_SHUTDOWN_REQUEST,
+    ShutdownReadyV1, ShutdownRequestV1,
+};
 use stem::service_loop::{ServiceEvent, ServiceLoop};
-use stem::syscall::message::KindId;
+use stem::syscall::message::{KindId, msg_recv, msg_send};
 use stem::syscall::vfs::{vfs_close, vfs_open, vfs_read, vfs_watch_path, vfs_write};
-use stem::time::Duration;
+use stem::time::{Duration, monotonic_ns};
 use stem::{debug, error, warn};
 use sysfs::{SysDevice, scan_devices};
 
@@ -46,6 +49,9 @@ const JOB_EXIT_CODE_BYTES: usize = 4;
 const JOB_EXIT_STATE_EXITED: u8 = 2;
 const SPROUT_EARLY_AUDIO_MARKER: &str = "/run/sprout/audio-early";
 const DISPLAY_INPUT_ISOLATION: bool = true;
+const SHUTDOWN_TERM_GRACE_MS: u64 = 1_000;
+const SHUTDOWN_KILL_GRACE_MS: u64 = 1_000;
+const SHUTDOWN_POLL_MS: u64 = 25;
 
 #[stem::main]
 fn main(_arg: usize) -> ! {
@@ -245,7 +251,11 @@ fn run_daemon_mode() -> ! {
         match svc.next_event(timeout) {
             Ok(ServiceEvent::Message { kind, payload, .. }) => {
                 stem::debug!("CAMBIUM: ServiceLoop wake — inbox message");
-                handle_job_exit_message(&mut drivers, &mut observed_pids, kind, payload);
+                if kind.0 == KIND_ID_THINGOS_SHUTDOWN_REQUEST {
+                    handle_shutdown_request_and_exit(&mut drivers, payload);
+                } else {
+                    handle_job_exit_message(&mut drivers, &mut observed_pids, kind, payload);
+                }
                 messages_drained = true;
             }
             Ok(ServiceEvent::Ready { token, event }) => {
@@ -281,7 +291,11 @@ fn run_daemon_mode() -> ! {
         // the original "drain inbox per wake" semantics.
         if messages_drained {
             let _ = svc.drain_inbox(|kind, payload| {
-                handle_job_exit_message(&mut drivers, &mut observed_pids, kind, payload);
+                if kind.0 == KIND_ID_THINGOS_SHUTDOWN_REQUEST {
+                    handle_shutdown_request_and_exit(&mut drivers, payload);
+                } else {
+                    handle_job_exit_message(&mut drivers, &mut observed_pids, kind, payload);
+                }
                 ControlFlow::Continue(())
             });
             register_observers_for_running(&mut drivers, &mut observed_pids);
@@ -304,6 +318,15 @@ fn run_daemon_mode() -> ! {
 /// the original degraded path so behavior is preserved end-to-end.
 fn run_degraded_monitor_loop(drivers: &mut BTreeMap<String, ManagedDriver>) -> ! {
     loop {
+        let mut kind = KindId([0u8; 16]);
+        let mut payload = [0u8; INBOX_MAX_PAYLOAD];
+        match msg_recv(&mut kind, &mut payload) {
+            Ok(len) if kind.0 == KIND_ID_THINGOS_SHUTDOWN_REQUEST => {
+                handle_shutdown_request_and_exit(drivers, &payload[..len]);
+            }
+            Ok(_) | Err(Errno::EAGAIN) => {}
+            Err(err) => warn!("CAMBIUM: degraded loop inbox receive failed: {:?}", err),
+        }
         for managed in drivers.values_mut() {
             managed.monitor();
         }
@@ -373,6 +396,72 @@ fn handle_job_exit_message(
             managed.handle_exit(code);
             break;
         }
+    }
+}
+
+fn handle_shutdown_request_and_exit(
+    drivers: &mut BTreeMap<String, ManagedDriver>,
+    payload: &[u8],
+) -> ! {
+    let requester_pid = match ShutdownRequestV1::from_bytes(payload) {
+        Some(request) => request.requester_pid,
+        None => {
+            warn!(
+                "CAMBIUM: malformed shutdown request payload ({} bytes); replying to parent",
+                payload.len()
+            );
+            stem::syscall::getppid()
+        }
+    };
+
+    stem::info!(
+        "CAMBIUM: shutdown requested by PID {}; quiescing {} managed drivers",
+        requester_pid,
+        drivers.len()
+    );
+
+    for managed in drivers.values() {
+        managed.request_shutdown();
+    }
+    let mut remaining = wait_for_driver_shutdown(drivers, SHUTDOWN_TERM_GRACE_MS);
+    if remaining > 0 {
+        warn!("CAMBIUM: {} drivers still running after SIGTERM grace; forcing shutdown", remaining);
+        for managed in drivers.values() {
+            managed.force_shutdown();
+        }
+        remaining = wait_for_driver_shutdown(drivers, SHUTDOWN_KILL_GRACE_MS);
+    }
+
+    let status = if remaining == 0 { 0 } else { 1 };
+    let ready = ShutdownReadyV1::new(stem::syscall::getpid(), status, remaining);
+    match msg_send(requester_pid, KindId(KIND_ID_THINGOS_SHUTDOWN_READY), ready.as_bytes()) {
+        Ok(()) => stem::info!(
+            "CAMBIUM: sent shutdown-ready to PID {} status={} active_children={}",
+            requester_pid,
+            status,
+            remaining
+        ),
+        Err(err) => {
+            warn!("CAMBIUM: failed to send shutdown-ready to PID {}: {:?}", requester_pid, err)
+        }
+    }
+
+    stem::syscall::exit(status);
+}
+
+fn wait_for_driver_shutdown(drivers: &mut BTreeMap<String, ManagedDriver>, grace_ms: u64) -> u32 {
+    let deadline_ns = monotonic_ns().saturating_add(grace_ms.saturating_mul(1_000_000));
+    loop {
+        let mut remaining = 0u32;
+        for managed in drivers.values_mut() {
+            if !managed.poll_shutdown() {
+                remaining = remaining.saturating_add(1);
+            }
+        }
+        if remaining == 0 || monotonic_ns() >= deadline_ns {
+            return remaining;
+        }
+        stem::time::sleep_ms(SHUTDOWN_POLL_MS);
     }
 }
 
