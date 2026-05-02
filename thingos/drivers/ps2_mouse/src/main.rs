@@ -117,6 +117,8 @@ const MOUSE_ENABLE: u8 = 0xF4;
 const MOUSE_VECTOR: u8 = 0x2C;
 const POLLING_INTERVAL_MS: u64 = 8;
 const IRQ_ASSIST_POLL_MS: u64 = 4;
+const INPUT_TRACE_INITIAL: u64 = 24;
+const INPUT_TRACE_INTERVAL: u64 = 128;
 const POINTER_MOTION_MIN_INTERVAL_NS: u64 = 16_666_666;
 const POINTER_MOTION_MAX_DELTA_PER_EVENT: i32 = 20;
 const POINTER_MOTION_MAX_PENDING_DELTA: i32 = 40;
@@ -583,7 +585,9 @@ fn drain_mouse_data(
     idx: &mut usize,
     drop_counter: &mut u32,
 ) -> usize {
+    let start_ns = stem::monotonic_ns();
     let mut bytes_read = 0usize;
+    let mut packets_sent = 0usize;
     for _ in 0..16 {
         let status = ioport_read(PS2_STATUS, 1);
 
@@ -594,6 +598,13 @@ fn drain_mouse_data(
         if status & STATUS_AUX_DATA != 0 {
             let byte = ioport_read(PS2_DATA, 1) as u8;
             bytes_read += 1;
+            stem::info!(
+                "ps2_mouse: take_scancode byte=0x{:02x} status=0x{:02x} packet_idx={} drain_depth={}",
+                byte,
+                status,
+                *idx,
+                bytes_read
+            );
 
             // First byte must have bit 3 set and overflow bits clear.
             if *idx == 0 && !mouse::is_packet_start(byte) {
@@ -606,6 +617,7 @@ fn drain_mouse_data(
             if *idx == 3 {
                 if mouse::packet_plausible(packet) {
                     send_mouse_events(bristle_pid, state, motion, packet, drop_counter);
+                    packets_sent += 1;
                     *idx = 0;
                 } else if mouse::is_packet_start(packet[1]) {
                     packet[0] = packet[1];
@@ -623,6 +635,17 @@ fn drain_mouse_data(
             // Consuming them here makes keyboard input appear dead.
             break;
         }
+    }
+    if bytes_read != 0 {
+        let elapsed_ns = stem::monotonic_ns().saturating_sub(start_ns);
+        stem::info!(
+            "ps2_mouse: drain exit bytes={} packets={} pending_idx={} elapsed_ns={} dropped={}",
+            bytes_read,
+            packets_sent,
+            *idx,
+            elapsed_ns,
+            *drop_counter
+        );
     }
     bytes_read
 }
@@ -654,8 +677,21 @@ fn interrupt_loop(bristle_pid: u32) -> ! {
     let mut drop_counter = 0u32;
     let mut irq_wake_count = 0u64;
     let mut timeout_count = 0u64;
+    let mut input_count = 0u64;
+    let mut rate_window_start_ns = stem::monotonic_ns();
+    let mut rate_window_input = 0u64;
 
     loop {
+        if should_log_input(irq_wake_count + timeout_count + 1) {
+            stem::info!(
+                "ps2_mouse: irq_wait entry vector=0x{:02x} wakes={} timeouts={} input_total={} dropped={}",
+                MOUSE_VECTOR,
+                irq_wake_count,
+                timeout_count,
+                input_count,
+                drop_counter
+            );
+        }
         match waitset.wait(Some(Duration::from_millis(IRQ_ASSIST_POLL_MS))) {
             Ok(events) => {
                 let mut saw_irq = false;
@@ -667,6 +703,14 @@ fn interrupt_loop(bristle_pid: u32) -> ! {
                 }
                 if !saw_irq {
                     timeout_count = timeout_count.wrapping_add(1);
+                }
+                if saw_irq && should_log_input(irq_wake_count) {
+                    stem::info!(
+                        "ps2_mouse: irq_wait exit vector=0x{:02x} wakes={} timeouts={}",
+                        MOUSE_VECTOR,
+                        irq_wake_count,
+                        timeout_count
+                    );
                 }
             }
             Err(e) => {
@@ -687,6 +731,22 @@ fn interrupt_loop(bristle_pid: u32) -> ! {
             &mut drop_counter,
         );
         flush_motion_if_due(bristle_pid, &mut motion, &mut drop_counter);
+        input_count = input_count.wrapping_add(drained as u64);
+        rate_window_input = rate_window_input.wrapping_add(drained as u64);
+        let now_ns = stem::monotonic_ns();
+        let window_ns = now_ns.saturating_sub(rate_window_start_ns);
+        if window_ns >= 1_000_000_000 {
+            stem::info!(
+                "ps2_mouse: input_rate bytes_per_sec={} total={} irq_wakes={} poll_timeouts={} dropped={}",
+                rate_window_input,
+                input_count,
+                irq_wake_count,
+                timeout_count,
+                drop_counter
+            );
+            rate_window_start_ns = now_ns;
+            rate_window_input = 0;
+        }
 
         if (irq_wake_count + timeout_count) % 256 == 0 {
             trace!(
@@ -696,6 +756,10 @@ fn interrupt_loop(bristle_pid: u32) -> ! {
         }
     }
     polling_loop(bristle_pid)
+}
+
+fn should_log_input(count: u64) -> bool {
+    count <= INPUT_TRACE_INITIAL || count % INPUT_TRACE_INTERVAL == 0
 }
 
 /// Fallback polling loop – used only when IRQ subscription or wait fails.

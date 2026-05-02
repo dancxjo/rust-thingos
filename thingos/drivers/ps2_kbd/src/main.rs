@@ -107,6 +107,8 @@ const KBD_VECTOR: u8 = 0x21;
 /// subscription fails.  25 ms is sufficient to catch any stray scancodes that
 /// arrive without an interrupt and low enough to avoid noticeable latency.
 const POLLING_INTERVAL_MS: u64 = 25;
+const INPUT_TRACE_INITIAL: u64 = 24;
+const INPUT_TRACE_INTERVAL: u64 = 128;
 
 /// Driver state node kind
 const KIND_DRV_PS2_KBD: &str = "drv.Ps2Keyboard";
@@ -172,7 +174,14 @@ use abi::hid::{
 use thigmonasty::{KeyEdge, KeyboardState};
 
 /// Drain all pending keyboard data from the controller
-fn drain_keyboard_data(bristle_pid: u32, state: &mut KeyboardState, drop_counter: &mut u32) {
+fn drain_keyboard_data(
+    bristle_pid: u32,
+    state: &mut KeyboardState,
+    drop_counter: &mut u32,
+) -> usize {
+    let start_ns = stem::monotonic_ns();
+    let mut bytes_read = 0usize;
+    let mut events_sent = 0usize;
     // Read while data is available (handle burst of scancodes)
     for _ in 0..16 {
         let status = ioport_read(PS2_STATUS, 1);
@@ -184,10 +193,17 @@ fn drain_keyboard_data(bristle_pid: u32, state: &mut KeyboardState, drop_counter
         if status & STATUS_AUX_DATA == 0 {
             // Keyboard data - read and send
             let scancode = ioport_read(PS2_DATA, 1) as u8;
-            stem::info!("ps2_kbd: read scancode 0x{:02x}", scancode);
+            bytes_read += 1;
+            stem::info!(
+                "ps2_kbd: take_scancode scancode=0x{:02x} status=0x{:02x} drain_depth={}",
+                scancode,
+                status,
+                bytes_read
+            );
             if let Some(edge) = state.process_ps2(scancode) {
                 stem::info!("ps2_kbd: edge detected: {:?}", edge);
                 send_key_event(bristle_pid, edge, drop_counter);
+                events_sent += 1;
             }
         } else {
             // If aux data (mouse), stop draining - let ps2_mouse handle it
@@ -195,6 +211,17 @@ fn drain_keyboard_data(bristle_pid: u32, state: &mut KeyboardState, drop_counter
             break;
         }
     }
+    let elapsed_ns = stem::monotonic_ns().saturating_sub(start_ns);
+    if bytes_read != 0 {
+        stem::info!(
+            "ps2_kbd: drain exit bytes={} events={} elapsed_ns={} dropped={}",
+            bytes_read,
+            events_sent,
+            elapsed_ns,
+            *drop_counter
+        );
+    }
+    bytes_read
 }
 
 fn send_key_event(bristle_pid: u32, edge: KeyEdge, drop_counter: &mut u32) {
@@ -243,10 +270,47 @@ fn interrupt_loop(bristle_pid: u32) -> ! {
     stem::debug!("ps2_kbd: using interrupt-driven loop (IRQ vector 0x{:02x})", KBD_VECTOR);
     let mut state = KeyboardState::new();
     let mut drop_counter = 0u32;
+    let mut irq_wake_count = 0u64;
+    let mut input_count = 0u64;
+    let mut rate_window_start_ns = stem::monotonic_ns();
+    let mut rate_window_input = 0u64;
     loop {
+        if should_log_input(irq_wake_count + 1) {
+            stem::info!(
+                "ps2_kbd: irq_wait entry vector=0x{:02x} wakes={} input_total={} dropped={}",
+                KBD_VECTOR,
+                irq_wake_count,
+                input_count,
+                drop_counter
+            );
+        }
         match irq_wait(KBD_VECTOR) {
-            Ok(_pending) => {
-                drain_keyboard_data(bristle_pid, &mut state, &mut drop_counter);
+            Ok(pending) => {
+                irq_wake_count = irq_wake_count.wrapping_add(1);
+                if should_log_input(irq_wake_count) {
+                    stem::info!(
+                        "ps2_kbd: irq_wait exit vector=0x{:02x} wakes={} pending={}",
+                        KBD_VECTOR,
+                        irq_wake_count,
+                        pending
+                    );
+                }
+                let drained = drain_keyboard_data(bristle_pid, &mut state, &mut drop_counter);
+                input_count = input_count.wrapping_add(drained as u64);
+                rate_window_input = rate_window_input.wrapping_add(drained as u64);
+                let now_ns = stem::monotonic_ns();
+                let window_ns = now_ns.saturating_sub(rate_window_start_ns);
+                if window_ns >= 1_000_000_000 {
+                    stem::info!(
+                        "ps2_kbd: input_rate bytes_per_sec={} total={} irq_wakes={} dropped={}",
+                        rate_window_input,
+                        input_count,
+                        irq_wake_count,
+                        drop_counter
+                    );
+                    rate_window_start_ns = now_ns;
+                    rate_window_input = 0;
+                }
             }
             Err(e) => {
                 // irq_wait should not fail once subscribed; if it does, fall
@@ -257,6 +321,10 @@ fn interrupt_loop(bristle_pid: u32) -> ! {
         }
     }
     polling_loop(bristle_pid)
+}
+
+fn should_log_input(count: u64) -> bool {
+    count <= INPUT_TRACE_INITIAL || count % INPUT_TRACE_INTERVAL == 0
 }
 
 /// Fallback polling loop – used only when IRQ subscription is unavailable.

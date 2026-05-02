@@ -6,6 +6,7 @@ use super::helpers::{
     StepError, capture_failure_diagnostics, color_close, default_timeout_secs,
     verify_cursor_pixels, wait_for_clock_pixels, wait_for_clock_ticks, wait_for_perf_report,
 };
+use crate::input::{qmp_key, qmp_mouse_rel};
 use crate::world::{ThingOsWorld, shell_prompt_present, strip_ansi};
 
 // ===== Regex Pattern Matching Steps =====
@@ -877,6 +878,42 @@ async fn when_move_mouse_times(world: &mut ThingOsWorld, count: u32) -> Result<(
         tokio::time::sleep(std::time::Duration::from_millis(10)).await;
     }
     tokio::time::sleep(std::time::Duration::from_millis(200)).await;
+    Ok(())
+}
+
+#[when(regex = r#"^I stress PS/2 input with (\d+) high-frequency events$"#)]
+async fn stress_ps2_input_events(world: &mut ThingOsWorld, count: u32) -> Result<(), StepError> {
+    if world.qmp_control.is_none() {
+        return Err(StepError("No QMP connection for PS/2 input stress".to_string()));
+    }
+
+    let keys = ["a", "s", "d", "f"];
+    for i in 0..count {
+        if i % 2 == 0 {
+            let key = keys[(i as usize / 2) % keys.len()];
+            world
+                .execute_qmp_control(&qmp_key(key, true))
+                .await
+                .map_err(|e| StepError(format!("QMP key-down stress failed: {}", e)))?;
+            world
+                .execute_qmp_control(&qmp_key(key, false))
+                .await
+                .map_err(|e| StepError(format!("QMP key-up stress failed: {}", e)))?;
+        } else {
+            let dx = if i % 4 == 1 { 6 } else { -5 };
+            let dy = if i % 6 == 3 { 4 } else { -3 };
+            world
+                .execute_qmp_control(&qmp_mouse_rel(dx, dy))
+                .await
+                .map_err(|e| StepError(format!("QMP mouse stress failed: {}", e)))?;
+        }
+
+        if i % 32 == 31 {
+            tokio::task::yield_now().await;
+        }
+    }
+
+    tokio::time::sleep(std::time::Duration::from_millis(250)).await;
     Ok(())
 }
 

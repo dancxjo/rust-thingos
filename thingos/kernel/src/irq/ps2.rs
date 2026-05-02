@@ -1,5 +1,5 @@
 use core::cell::UnsafeCell;
-use core::sync::atomic::{AtomicBool, AtomicUsize, Ordering};
+use core::sync::atomic::{AtomicBool, AtomicU64, AtomicUsize, Ordering};
 
 const PS2_QUEUE_CAPACITY: usize = 64;
 const PS2_STATUS_OUTPUT_FULL: u8 = 0x01;
@@ -7,6 +7,9 @@ const PS2_STATUS_OUTPUT_FULL: u8 = 0x01;
 struct Ps2Queue {
     head: AtomicUsize,
     tail: AtomicUsize,
+    pushed: AtomicU64,
+    popped: AtomicU64,
+    overwritten: AtomicU64,
     buf: UnsafeCell<[u16; PS2_QUEUE_CAPACITY]>,
 }
 
@@ -15,8 +18,17 @@ impl Ps2Queue {
         Self {
             head: AtomicUsize::new(0),
             tail: AtomicUsize::new(0),
+            pushed: AtomicU64::new(0),
+            popped: AtomicU64::new(0),
+            overwritten: AtomicU64::new(0),
             buf: UnsafeCell::new([0; PS2_QUEUE_CAPACITY]),
         }
+    }
+
+    fn depth(&self) -> usize {
+        let head = self.head.load(Ordering::Acquire);
+        let tail = self.tail.load(Ordering::Acquire);
+        if head >= tail { head - tail } else { PS2_QUEUE_CAPACITY - tail + head }
     }
 
     fn is_empty(&self) -> bool {
@@ -29,12 +41,14 @@ impl Ps2Queue {
         let tail = self.tail.load(Ordering::Acquire);
 
         if next == tail {
+            self.overwritten.fetch_add(1, Ordering::Relaxed);
             self.tail.store((tail + 1) % PS2_QUEUE_CAPACITY, Ordering::Release);
         }
 
         unsafe {
             (*self.buf.get())[head] = val;
         }
+        self.pushed.fetch_add(1, Ordering::Relaxed);
         self.head.store(next, Ordering::Release);
     }
 
@@ -47,6 +61,7 @@ impl Ps2Queue {
 
         let val = unsafe { (*self.buf.get())[tail] };
         self.tail.store((tail + 1) % PS2_QUEUE_CAPACITY, Ordering::Release);
+        self.popped.fetch_add(1, Ordering::Relaxed);
         Some(val)
     }
 
@@ -78,6 +93,8 @@ static CTRL_DOWN: AtomicBool = AtomicBool::new(false);
 static CAPS_LOCK: AtomicBool = AtomicBool::new(false);
 
 static INPUT_QUEUE: Ps2Queue = Ps2Queue::new();
+static BUFFER_LOGS: AtomicU64 = AtomicU64::new(0);
+static TAKE_LOGS: AtomicU64 = AtomicU64::new(0);
 
 pub fn set_fb_input_enabled(enabled: bool) {
     FB_INPUT_ENABLED.store(enabled, Ordering::Release);
@@ -95,6 +112,19 @@ const SCANCODE_MAP_SHIFT: &[u8] =
 pub fn buffer_scancode(byte: u8, is_aux: bool) -> bool {
     let val = byte as u16 | ((is_aux as u16) << 8);
     PS2_QUEUE.push(val);
+    let pushed = PS2_QUEUE.pushed.load(Ordering::Relaxed);
+    let depth = PS2_QUEUE.depth();
+    let overwritten = PS2_QUEUE.overwritten.load(Ordering::Relaxed);
+    if should_log_counter(&BUFFER_LOGS, pushed, 16, 256) {
+        crate::kinfo!(
+            "PS/2 buffer_scancode: byte=0x{:02x} is_aux={} total={} depth={} overwritten={}",
+            byte,
+            is_aux,
+            pushed,
+            depth,
+            overwritten
+        );
+    }
     if is_aux {
         return false;
     }
@@ -102,13 +132,50 @@ pub fn buffer_scancode(byte: u8, is_aux: bool) -> bool {
 }
 
 pub fn take_scancode() -> Option<u8> {
+    let before_depth = PS2_QUEUE.depth();
+    if should_log_counter(&TAKE_LOGS, PS2_QUEUE.popped.load(Ordering::Relaxed) + 1, 16, 256) {
+        crate::kinfo!(
+            "PS/2 take_scancode entry: depth={} pushed={} popped={} overwritten={}",
+            before_depth,
+            PS2_QUEUE.pushed.load(Ordering::Relaxed),
+            PS2_QUEUE.popped.load(Ordering::Relaxed),
+            PS2_QUEUE.overwritten.load(Ordering::Relaxed)
+        );
+    }
     let res = PS2_QUEUE.pop();
     if let Some(val) = res {
         let byte = val as u8;
-        crate::ktrace!("PS/2 take_scancode: popped 0x{:02x} (is_aux={})", byte, (val >> 8) != 0);
+        let popped = PS2_QUEUE.popped.load(Ordering::Relaxed);
+        if should_log_counter(&TAKE_LOGS, popped, 16, 256) {
+            crate::kinfo!(
+                "PS/2 take_scancode exit: byte=0x{:02x} is_aux={} depth={} popped={}",
+                byte,
+                (val >> 8) != 0,
+                PS2_QUEUE.depth(),
+                popped
+            );
+        } else {
+            crate::ktrace!(
+                "PS/2 take_scancode: popped 0x{:02x} (is_aux={})",
+                byte,
+                (val >> 8) != 0
+            );
+        }
         Some(byte)
     } else {
+        if before_depth != 0 {
+            crate::kinfo!("PS/2 take_scancode exit: empty after observed depth={}", before_depth);
+        }
         None
+    }
+}
+
+fn should_log_counter(logs: &AtomicU64, count: u64, initial: u64, interval: u64) -> bool {
+    if count <= initial || (interval != 0 && count % interval == 0) {
+        logs.fetch_add(1, Ordering::Relaxed);
+        true
+    } else {
+        false
     }
 }
 

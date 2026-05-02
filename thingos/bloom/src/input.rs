@@ -1,4 +1,4 @@
-use core::sync::atomic::{AtomicU32, Ordering};
+use core::sync::atomic::{AtomicU32, AtomicU64, Ordering};
 
 use abi::KindId;
 use abi::hid::{
@@ -32,8 +32,11 @@ static CURSOR_SMOOTHING_LOGS: AtomicU32 = AtomicU32::new(0);
 static COALESCE_PRE: AtomicU32 = AtomicU32::new(0);
 /// Limits how many times coalesce-flush stats are logged.
 static COALESCE_FLUSH_LOGS: AtomicU32 = AtomicU32::new(0);
+static BLOOM_HANDLE_EVENT_COUNT: AtomicU64 = AtomicU64::new(0);
 /// Maximum number of times per-category debug stats are logged at startup.
 const MAX_STARTUP_LOGS: u32 = 8;
+const INPUT_TRACE_INITIAL: u64 = 24;
+const INPUT_TRACE_INTERVAL: u64 = 128;
 
 pub struct InputState {
     /// Latest logical pointer position from Bristle input. Clients and focus
@@ -263,9 +266,13 @@ impl InputState {
         let Ok(header) = BristleEventHeader::from_bytes(&hdr_bytes) else {
             return false;
         };
+        let event_type = header.event_type;
+        let timestamp_ns = header.timestamp_ns;
+        let event_no = BLOOM_HANDLE_EVENT_COUNT.fetch_add(1, Ordering::Relaxed) + 1;
+        let _trace = BloomInputTrace::new(event_no, event_type);
         let payload = &bytes[BristleEventHeader::SIZE..];
 
-        match EventType::from_raw(header.event_type) {
+        match EventType::from_raw(event_type) {
             Ok(EventType::PointerMove) if payload.len() >= PointerMovePayload::SIZE => {
                 let mut p = [0u8; PointerMovePayload::SIZE];
                 p.copy_from_slice(&payload[..PointerMovePayload::SIZE]);
@@ -290,7 +297,7 @@ impl InputState {
                     self.pointer_grab,
                     Some(PointerGrab { kind: PointerGrabKind::Move { .. }, .. })
                 ) {
-                    self.pending_motion_ts = Some(header.timestamp_ns);
+                    self.pending_motion_ts = Some(timestamp_ns);
                     return true;
                 }
                 if self.update_pointer_grab(scene, damage, wayland_evt_write) {
@@ -301,7 +308,7 @@ impl InputState {
                 // Coalesce: keep only the latest timestamp; focus lookup and
                 // client delivery are deferred to flush_pointer_motion() which
                 // is called once per frame boundary.
-                self.pending_motion_ts = Some(header.timestamp_ns);
+                self.pending_motion_ts = Some(timestamp_ns);
                 COALESCE_PRE.fetch_add(1, Ordering::Relaxed);
                 if POINTER_MOVE_LOGS.fetch_add(1, Ordering::Relaxed) < MAX_STARTUP_LOGS {
                     stem::trace!(
@@ -408,7 +415,7 @@ impl InputState {
                             button: btn.button,
                             pressed: pressed_flag(true),
                             _pad: [0; 2],
-                            timestamp_ns: header.timestamp_ns,
+                            timestamp_ns,
                         };
                         send_client_event(scene, client_id, KIND_POINTER_BUTTON, &to_vec(&ev));
                         send_wayland_pointer_button(
@@ -416,7 +423,7 @@ impl InputState {
                             surface_id,
                             btn.button,
                             true,
-                            header.timestamp_ns,
+                            timestamp_ns,
                         );
                     }
                 } else if btn.button == 0 {
@@ -428,7 +435,7 @@ impl InputState {
                         0,
                         btn.button,
                         true,
-                        header.timestamp_ns,
+                        timestamp_ns,
                     );
                 }
                 mark_cursor_damage(
@@ -475,7 +482,7 @@ impl InputState {
                             button: btn.button,
                             pressed: pressed_flag(false),
                             _pad: [0; 2],
-                            timestamp_ns: header.timestamp_ns,
+                            timestamp_ns,
                         };
                         send_client_event(scene, client_id, KIND_POINTER_BUTTON, &to_vec(&ev));
                         send_wayland_pointer_button(
@@ -483,7 +490,7 @@ impl InputState {
                             surface_id,
                             btn.button,
                             false,
-                            header.timestamp_ns,
+                            timestamp_ns,
                         );
                     }
                 }
@@ -506,7 +513,7 @@ impl InputState {
                             surface_id,
                             scroll.dx,
                             scroll.dy,
-                            header.timestamp_ns,
+                            timestamp_ns,
                         );
                     }
                 }
@@ -587,7 +594,7 @@ impl InputState {
                             modifiers: key.mods,
                             repeat: if key.is_repeat() { 1 } else { 0 },
                             _pad: [0; 3],
-                            timestamp_ns: header.timestamp_ns,
+                            timestamp_ns,
                         };
                         send_client_event(scene, client_id, KIND_KEYBOARD_KEY, &to_vec(&ev));
                         send_wayland_keyboard_key(
@@ -597,7 +604,7 @@ impl InputState {
                             true,
                             key.mods,
                             key.is_repeat(),
-                            header.timestamp_ns,
+                            timestamp_ns,
                         );
                     }
                 }
@@ -620,7 +627,7 @@ impl InputState {
                             modifiers: key.mods,
                             repeat: if key.is_repeat() { 1 } else { 0 },
                             _pad: [0; 3],
-                            timestamp_ns: header.timestamp_ns,
+                            timestamp_ns,
                         };
                         send_client_event(scene, client_id, KIND_KEYBOARD_KEY, &to_vec(&ev));
                         send_wayland_keyboard_key(
@@ -630,7 +637,7 @@ impl InputState {
                             false,
                             key.mods,
                             key.is_repeat(),
-                            header.timestamp_ns,
+                            timestamp_ns,
                         );
                     }
                 }
@@ -1217,6 +1224,61 @@ pub fn send_wayland_close_layer_surface(wayland_evt_write: Option<u32>, surface_
     };
     let msg = ipc::encode_close_layer_surface(surface_id);
     let _ = port_send_all(evt_write, &msg);
+}
+
+struct BloomInputTrace {
+    event_no: u64,
+    event_type: u16,
+    start_ns: u64,
+    enabled: bool,
+}
+
+impl BloomInputTrace {
+    fn new(event_no: u64, event_type: u16) -> Self {
+        let enabled = should_log_input(event_no);
+        let start_ns = stem::monotonic_ns();
+        if enabled {
+            stem::info!(
+                "bloom: handle_bristle_event entry event={} type={} start_ns={}",
+                event_no,
+                event_type_name(event_type),
+                start_ns
+            );
+        }
+        Self { event_no, event_type, start_ns, enabled }
+    }
+}
+
+impl Drop for BloomInputTrace {
+    fn drop(&mut self) {
+        if self.enabled {
+            let end_ns = stem::monotonic_ns();
+            stem::info!(
+                "bloom: handle_bristle_event exit event={} type={} elapsed_ns={}",
+                self.event_no,
+                event_type_name(self.event_type),
+                end_ns.saturating_sub(self.start_ns)
+            );
+        }
+    }
+}
+
+fn should_log_input(count: u64) -> bool {
+    count <= INPUT_TRACE_INITIAL || count % INPUT_TRACE_INTERVAL == 0
+}
+
+fn event_type_name(raw: u16) -> &'static str {
+    match EventType::from_raw(raw) {
+        Ok(EventType::KeyDown) => "KeyDown",
+        Ok(EventType::KeyUp) => "KeyUp",
+        Ok(EventType::PointerMove) => "PointerMove",
+        Ok(EventType::PointerButtonDown) => "PointerButtonDown",
+        Ok(EventType::PointerButtonUp) => "PointerButtonUp",
+        Ok(EventType::Scroll) => "Scroll",
+        Ok(EventType::DeviceAdded) => "DeviceAdded",
+        Ok(EventType::DeviceRemoved) => "DeviceRemoved",
+        _ => "Unknown",
+    }
 }
 
 fn send_wayland_pointer_enter(wayland_evt_write: Option<u32>, surface_id: u32, x: i32, y: i32) {

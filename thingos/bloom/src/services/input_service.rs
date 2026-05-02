@@ -3,10 +3,11 @@
 
 use alloc::vec;
 use alloc::vec::Vec;
+use core::sync::atomic::{AtomicU64, Ordering};
 
 use abi::KindId;
 use abi::hid::{
-    BRISTLE_EVENT_CLASS_ALL, BRISTLE_SINK_TAG_BLOOM, BristleEventHeader,
+    BRISTLE_EVENT_CLASS_ALL, BRISTLE_SINK_TAG_BLOOM, BristleEventHeader, EventType,
     KIND_BRISTLE_REGISTER_SINK, encode_register_sink_with_mask,
 };
 use abi::syscall::vfs_flags::O_RDONLY;
@@ -20,6 +21,10 @@ const REGISTER_TIMER_ID: u64 = 1;
 const BRISTLE_PID_PATH: &str = "/run/bristle/pid";
 const INPUT_READ_CHUNK: usize = 64;
 const MAX_READS_PER_WAKE: usize = 4;
+const INPUT_TRACE_INITIAL: u64 = 24;
+const INPUT_TRACE_INTERVAL: u64 = 128;
+static BLOOM_INPUT_READ_COUNT: AtomicU64 = AtomicU64::new(0);
+static BLOOM_INPUT_EVENT_COUNT: AtomicU64 = AtomicU64::new(0);
 
 /// Handles normalized HID events forwarded by the bristle input service.
 ///
@@ -78,6 +83,17 @@ impl BloomService for InputService {
             LoopEvent::FdReady(_) => {
                 let mut buf = [0u8; INPUT_READ_CHUNK];
                 let mut handled = false;
+                let read_wake = BLOOM_INPUT_READ_COUNT.fetch_add(1, Ordering::Relaxed) + 1;
+                let start_ns = stem::monotonic_ns();
+
+                if should_log_input(read_wake) {
+                    stem::info!(
+                        "bloom: input fd wake entry wake={} accum_depth={} event_total={}",
+                        read_wake,
+                        self.accum_len,
+                        BLOOM_INPUT_EVENT_COUNT.load(Ordering::Relaxed)
+                    );
+                }
 
                 for _ in 0..MAX_READS_PER_WAKE {
                     match vfs_read(self.fd, &mut buf) {
@@ -90,6 +106,15 @@ impl BloomService for InputService {
                         }
                         Err(_) => break,
                     }
+                }
+                if should_log_input(read_wake) {
+                    stem::info!(
+                        "bloom: input fd wake exit wake={} handled={} accum_depth={} elapsed_ns={}",
+                        read_wake,
+                        handled,
+                        self.accum_len,
+                        stem::monotonic_ns().saturating_sub(start_ns)
+                    );
                 }
 
                 if handled {
@@ -143,7 +168,9 @@ impl InputService {
                     continue;
                 };
 
-                let total_len = BristleEventHeader::SIZE + header.payload_len as usize;
+                let event_type = header.event_type;
+                let payload_len = header.payload_len;
+                let total_len = BristleEventHeader::SIZE + payload_len as usize;
                 if total_len > self.event_accum.len() {
                     self.resync_accumulator();
                     continue;
@@ -152,7 +179,26 @@ impl InputService {
                     break;
                 }
 
+                let event_no = BLOOM_INPUT_EVENT_COUNT.fetch_add(1, Ordering::Relaxed) + 1;
+                if should_log_input(event_no) {
+                    stem::info!(
+                        "bloom: input event entry event={} type={} payload_len={} accum_depth={}",
+                        event_no,
+                        event_type_name(event_type),
+                        payload_len,
+                        self.accum_len
+                    );
+                }
                 handled |= world.handle_bristle_event(&self.event_accum[..total_len]);
+                if should_log_input(event_no) {
+                    stem::info!(
+                        "bloom: input event exit event={} type={} handled={} accum_depth={}",
+                        event_no,
+                        event_type_name(event_type),
+                        handled,
+                        self.accum_len
+                    );
+                }
 
                 self.accum_len -= total_len;
                 if self.accum_len > 0 {
@@ -194,4 +240,20 @@ fn parse_u32(bytes: &[u8]) -> Option<u32> {
         value = value.checked_mul(10)?.checked_add((b - b'0') as u32)?;
     }
     if saw_digit { Some(value) } else { None }
+}
+
+fn should_log_input(count: u64) -> bool {
+    count <= INPUT_TRACE_INITIAL || count % INPUT_TRACE_INTERVAL == 0
+}
+
+fn event_type_name(raw: u16) -> &'static str {
+    match EventType::from_raw(raw) {
+        Ok(EventType::KeyDown) => "KeyDown",
+        Ok(EventType::KeyUp) => "KeyUp",
+        Ok(EventType::PointerMove) => "PointerMove",
+        Ok(EventType::PointerButtonDown) => "PointerButtonDown",
+        Ok(EventType::PointerButtonUp) => "PointerButtonUp",
+        Ok(EventType::Scroll) => "Scroll",
+        _ => "Unknown",
+    }
 }

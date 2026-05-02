@@ -20,6 +20,8 @@
 #![no_main]
 extern crate alloc;
 
+use core::sync::atomic::{AtomicU64, Ordering};
+
 use abi::hid::{
     BRISTLE_EVENT_CLASS_KEYBOARD, BRISTLE_EVENT_CLASS_POINTER, BRISTLE_SINK_TAG_BLOOM,
     BRISTLE_SINK_TAG_ECHO, BristleEventHeader, EventType, KIND_BRISTLE_DEVICE_EVENT,
@@ -34,6 +36,11 @@ use stem::syscall::vfs::{
 use stem::syscall::{port_close, port_create, port_send_all};
 use stem::wait_set::WaitToken;
 use stem::{debug, info, trace, warn};
+
+const INPUT_TRACE_INITIAL: u64 = 24;
+const INPUT_TRACE_INTERVAL: u64 = 128;
+static BRISTLE_DISPATCH_COUNT: AtomicU64 = AtomicU64::new(0);
+static BRISTLE_FORWARD_DROP_COUNT: AtomicU64 = AtomicU64::new(0);
 
 fn ensure_session_roots() {
     let _ = vfs_mkdir("/session");
@@ -187,6 +194,7 @@ fn main(_arg: usize) -> ! {
                     };
                     accumulate_and_dispatch(
                         payload,
+                        "inbox",
                         event_accum,
                         accum_len,
                         bloom_sink,
@@ -227,6 +235,7 @@ fn main(_arg: usize) -> ! {
                         };
                         accumulate_and_dispatch(
                             &recv_buf[..n],
+                            if is_mouse { "mouse_fd" } else { "kbd_fd" },
                             event_accum,
                             accum_len,
                             bloom_sink,
@@ -313,13 +322,17 @@ fn handle_register_sink(
 /// apply hotkey handling, and forward to registered sinks.
 fn accumulate_and_dispatch(
     input: &[u8],
+    source: &str,
     event_accum: &mut [u8; 64],
     accum_len: &mut usize,
     bloom_sink: Option<Sink>,
     echo_sink: Option<Sink>,
     drop_counter: &mut u32,
 ) {
+    let start_ns = stem::monotonic_ns();
+    let entry_depth = *accum_len;
     let mut cursor = 0;
+    let mut dispatched = 0u64;
     while cursor < input.len() {
         let to_copy = (input.len() - cursor).min(64 - *accum_len);
         event_accum[*accum_len..*accum_len + to_copy]
@@ -332,12 +345,27 @@ fn accumulate_and_dispatch(
             header_bytes.copy_from_slice(&event_accum[..BristleEventHeader::SIZE]);
 
             if let Ok(header) = BristleEventHeader::from_bytes(&header_bytes) {
-                let total_len = BristleEventHeader::SIZE + header.payload_len as usize;
+                let event_type = header.event_type;
+                let payload_len = header.payload_len;
+                let total_len = BristleEventHeader::SIZE + payload_len as usize;
                 if *accum_len >= total_len {
                     let event_bytes = &event_accum[..total_len];
+                    let event_no = BRISTLE_DISPATCH_COUNT.fetch_add(1, Ordering::Relaxed) + 1;
+                    dispatched = dispatched.wrapping_add(1);
+                    if should_log_input(event_no) {
+                        stem::info!(
+                            "bristle: dispatch entry source={} event={} type={} payload_len={} accum_depth={} input_len={}",
+                            source,
+                            event_no,
+                            event_type,
+                            payload_len,
+                            *accum_len,
+                            input.len()
+                        );
+                    }
 
                     // Hotkey handling
-                    if header.event_type == EventType::KeyDown as u16 && header.payload_len >= 4 {
+                    if event_type == EventType::KeyDown as u16 && payload_len >= 4 {
                         let mut p = [0u8; 4];
                         p.copy_from_slice(&event_bytes[20..24]);
                         let payload = KeyEventPayload::from_bytes(&p);
@@ -365,12 +393,13 @@ fn accumulate_and_dispatch(
                     }
 
                     // Forward to registered sinks.
-                    let event_class = event_class(header.event_type);
+                    let event_class = event_class(event_type);
                     if let Some(sink) = bloom_sink {
                         if sink.accepts(event_class)
                             && port_send_all(sink.handle, event_bytes).is_err()
                         {
                             *drop_counter += 1;
+                            BRISTLE_FORWARD_DROP_COUNT.fetch_add(1, Ordering::Relaxed);
                         }
                     }
                     if let Some(sink) = echo_sink {
@@ -378,7 +407,18 @@ fn accumulate_and_dispatch(
                             && port_send_all(sink.handle, event_bytes).is_err()
                         {
                             *drop_counter += 1;
+                            BRISTLE_FORWARD_DROP_COUNT.fetch_add(1, Ordering::Relaxed);
                         }
+                    }
+                    if should_log_input(event_no) {
+                        stem::info!(
+                            "bristle: dispatch exit source={} event={} class={} accum_depth={} drops={}",
+                            source,
+                            event_no,
+                            event_class,
+                            *accum_len,
+                            *drop_counter
+                        );
                     }
 
                     // Shift remaining bytes to the start of the accumulator.
@@ -396,6 +436,22 @@ fn accumulate_and_dispatch(
                     event_accum.copy_within(1..1 + *accum_len, 0);
                 }
             }
+        }
+    }
+    if dispatched != 0 {
+        let total = BRISTLE_DISPATCH_COUNT.load(Ordering::Relaxed);
+        if should_log_input(total) {
+            stem::info!(
+                "bristle: input_rate source={} bytes={} events={} total_events={} entry_depth={} exit_depth={} elapsed_ns={} drops={}",
+                source,
+                input.len(),
+                dispatched,
+                total,
+                entry_depth,
+                *accum_len,
+                stem::monotonic_ns().saturating_sub(start_ns),
+                BRISTLE_FORWARD_DROP_COUNT.load(Ordering::Relaxed)
+            );
         }
     }
 }
@@ -417,4 +473,8 @@ fn event_class(event_type: u16) -> u8 {
         ) => BRISTLE_EVENT_CLASS_POINTER,
         _ => 0,
     }
+}
+
+fn should_log_input(count: u64) -> bool {
+    count <= INPUT_TRACE_INITIAL || count % INPUT_TRACE_INTERVAL == 0
 }
