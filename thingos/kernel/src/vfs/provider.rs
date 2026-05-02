@@ -46,7 +46,10 @@ use alloc::vec::Vec;
 use core::sync::atomic::{AtomicU16, Ordering};
 
 use abi::device::DeviceKind;
-use abi::display::ioctl::DISPLAY_OP_IMPORT_BUFFER;
+use abi::display::ioctl::{
+    DISPLAY_OP_ACCEL2D, DISPLAY_OP_COMMIT, DISPLAY_OP_GET_INFO, DISPLAY_OP_IMPORT_BUFFER,
+    DISPLAY_OP_MOVE_CURSOR, DISPLAY_OP_RELEASE_BUFFER, DISPLAY_OP_SET_CURSOR,
+};
 use abi::display::types::BufferHandle;
 use abi::errors::{Errno, SysResult};
 use abi::vfs_rpc::{VFS_RPC_MAX_DATA, VfsRpcOp, VfsRpcReqHeader};
@@ -275,7 +278,8 @@ impl ProviderRpc {
 
             let now_ns = crate::time::monotonic_now_ns();
             if now_ns >= deadline_ns {
-                crate::kdebug!("VFS RPC: tid={} req_id={} op={:?} TIMEOUT", tid, req_id, op);
+                // Upgrade to warn for VFS RPC timeouts — these stall the calling thread.
+                crate::kwarn!("VFS RPC: TIMEOUT tid={} req_id={} op={:?}", tid, req_id, op);
                 let mut state = self.state.lock();
                 state.waiters.remove(&req_id);
                 state.ops.remove(&req_id);
@@ -396,6 +400,20 @@ fn parse_response_handle(resp: &[u8]) -> SysResult<u64> {
         return Err(Errno::EIO);
     }
     Ok(u64::from_le_bytes([resp[0], resp[1], resp[2], resp[3], resp[4], resp[5], resp[6], resp[7]]))
+}
+
+/// Map a raw display op code to a human-readable name for log messages.
+fn display_op_name(op: u32) -> &'static str {
+    match op {
+        DISPLAY_OP_GET_INFO => "GET_INFO",
+        DISPLAY_OP_IMPORT_BUFFER => "IMPORT_BUFFER",
+        DISPLAY_OP_RELEASE_BUFFER => "RELEASE_BUFFER",
+        DISPLAY_OP_COMMIT => "COMMIT",
+        DISPLAY_OP_SET_CURSOR => "SET_CURSOR",
+        DISPLAY_OP_MOVE_CURSOR => "MOVE_CURSOR",
+        DISPLAY_OP_ACCEL2D => "ACCEL2D",
+        _ => "UNKNOWN",
+    }
 }
 
 // ── ProviderNode ─────────────────────────────────────────────────────────────
@@ -795,7 +813,56 @@ impl VfsNode for ProviderNode {
             }
         }
 
+        // For Display device calls, emit entry/exit tracing and per-RPC watchdog.
+        let is_display = call.kind == DeviceKind::Display;
+        let caller_tid = if is_display {
+            unsafe { crate::sched::current_tid_current() }
+        } else {
+            0
+        };
+        let provider_pid = if is_display { self.rpc.provider_pid() } else { 0 };
+        let enter_ns = if is_display { crate::time::monotonic_now_ns() } else { 0 };
+        if is_display {
+            crate::kdebug!(
+                "VFS_RPC: display device_call.enter op={} caller_tid={} provider_pid={}",
+                display_op_name(call.op),
+                caller_tid,
+                provider_pid,
+            );
+        }
+
         let resp = self.rpc.rpc(VfsRpcOp::DeviceCall, &payload)?;
+
+        if is_display {
+            let duration_ms =
+                crate::time::monotonic_now_ns().saturating_sub(enter_ns) / 1_000_000;
+            crate::kdebug!(
+                "VFS_RPC: display device_call.exit op={} caller_tid={} provider_pid={} duration_ms={}",
+                display_op_name(call.op),
+                caller_tid,
+                provider_pid,
+                duration_ms,
+            );
+            // Per-RPC watchdog: upgrade to warn on high-latency or stalled calls.
+            if duration_ms >= 1000 {
+                crate::kwarn!(
+                    "VFS_RPC: display device_call.stall op={} duration_ms={} caller_tid={} provider_pid={}",
+                    display_op_name(call.op),
+                    duration_ms,
+                    caller_tid,
+                    provider_pid,
+                );
+            } else if duration_ms >= 200 {
+                crate::kwarn!(
+                    "VFS_RPC: display device_call.slow op={} duration_ms={} caller_tid={} provider_pid={}",
+                    display_op_name(call.op),
+                    duration_ms,
+                    caller_tid,
+                    provider_pid,
+                );
+            }
+        }
+
         if resp.len() < 8 {
             return Err(Errno::EIO);
         }

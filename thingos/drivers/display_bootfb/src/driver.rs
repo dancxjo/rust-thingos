@@ -43,12 +43,18 @@ pub struct BootFbDriver {
     pub fb: Framebuffer,
     pub buffers: BTreeMap<BufferId, MappedBuffer>,
     pub next_buffer_id: u32,
+    /// Monotonically increasing sequence number for display DeviceCall RPCs.
+    /// Used as the correlation ID in entry/exit traces.
+    pub rpc_seq: u64,
+    /// Monotonic timestamp (ns) recorded at the most recent DeviceCall entry.
+    /// Used to compute per-RPC duration for the watchdog.
+    pub rpc_enter_ns: u64,
 }
 
 impl BootFbDriver {
     pub fn new() -> Option<Self> {
         let fb = find_framebuffer()?;
-        Some(Self { fb, buffers: BTreeMap::new(), next_buffer_id: 1 })
+        Some(Self { fb, buffers: BTreeMap::new(), next_buffer_id: 1, rpc_seq: 0, rpc_enter_ns: 0 })
     }
 
     pub fn get_info(&self) -> DisplayInfo {
