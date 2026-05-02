@@ -79,6 +79,30 @@ impl WaylandPointerButton {
     }
 }
 
+/// Wayland IPC pointer axis payload (scroll)
+#[repr(C, packed)]
+#[derive(Clone, Copy)]
+pub struct WaylandPointerAxis {
+    pub axis: u8, // 0 = vertical, 1 = horizontal
+    pub _pad: [u8; 3],
+    pub value: i32,
+}
+
+impl WaylandPointerAxis {
+    pub const SIZE: usize = 8;
+    pub fn to_bytes(&self) -> [u8; 8] {
+        let mut buf = [0u8; 8];
+        buf[0] = self.axis;
+        buf[4..8].copy_from_slice(&self.value.to_le_bytes());
+        buf
+    }
+    pub fn from_bytes(bytes: &[u8; 8]) -> Self {
+        let mut b = [0u8; 4];
+        b.copy_from_slice(&bytes[4..8]);
+        Self { axis: bytes[0], _pad: [0; 3], value: i32::from_le_bytes(b) }
+    }
+}
+
 /// Bristle event header (20 bytes) - LEGACY
 #[repr(C, packed)]
 #[derive(Clone, Copy)]

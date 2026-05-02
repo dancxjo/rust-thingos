@@ -69,3 +69,14 @@ Feature: USB storage through the xHCI userspace driver
     Then the command output should contain "usb0"
     When I type "ls /dev/storage/usb0" on the serial console
     Then the command output should not contain "No such file"
+
+  @timeout-180s
+  Scenario: USB-backed livedisk reads do not stall VFS clients
+    When I wait for the shell prompt
+    Then the serial output should contain "iso9660d: mounted at /media/livedisk" within 120s
+    When I type "ls /media/livedisk/bin" on the serial console
+    Then the command output should contain "sh"
+    And the latest serial output should not contain "VFS RPC: TIMEOUT"
+    When I type "cat /media/livedisk/etc/fstab" on the serial console
+    Then the latest command output should contain "/media/livedisk"
+    And the latest serial output should not contain "VFS RPC: TIMEOUT"

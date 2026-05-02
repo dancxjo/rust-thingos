@@ -74,10 +74,27 @@ fn publish_pid() {
     let _ = vfs_mkdir("/run/bristle");
     let pid = stem::syscall::getpid();
     if let Ok(fd) = vfs_open("/run/bristle/pid", O_RDWR | O_CREAT | O_TRUNC) {
-        let text = alloc::format!("{}\n", pid);
-        let _ = vfs_write(fd, text.as_bytes());
+        let mut buf = [0u8; 32];
+        let mut idx = buf.len();
+        let mut n = pid as u32;
+        
+        buf[idx - 1] = b'\n';
+        idx -= 1;
+        
+        if n == 0 {
+            buf[idx - 1] = b'0';
+            idx -= 1;
+        } else {
+            while n > 0 {
+                idx -= 1;
+                buf[idx] = b'0' + (n % 10) as u8;
+                n /= 10;
+            }
+        }
+        
+        let _ = vfs_write(fd, &buf[idx..]);
         let _ = vfs_close(fd);
-        info!("bristle: published pid {} to /run/bristle/pid", pid);
+        stem::info!("bristle: published pid {} to /run/bristle/pid", pid);
     }
 }
 
@@ -85,8 +102,25 @@ fn publish_pid() {
 /// open the file and convert the handle to their own VFS FD.
 fn publish_device_handle(path: &str, handle: u32) {
     if let Ok(fd) = vfs_open(path, O_RDWR | O_CREAT | O_TRUNC) {
-        let text = alloc::format!("{}\n", handle);
-        let _ = vfs_write(fd, text.as_bytes());
+        let mut buf = [0u8; 32];
+        let mut idx = buf.len();
+        let mut n = handle;
+        
+        buf[idx - 1] = b'\n';
+        idx -= 1;
+        
+        if n == 0 {
+            buf[idx - 1] = b'0';
+            idx -= 1;
+        } else {
+            while n > 0 {
+                idx -= 1;
+                buf[idx] = b'0' + (n % 10) as u8;
+                n /= 10;
+            }
+        }
+        
+        let _ = vfs_write(fd, &buf[idx..]);
         let _ = vfs_close(fd);
     }
 }
@@ -280,10 +314,13 @@ fn main(_arg: usize) -> ! {
                     if n > 0 {
                         if is_control {
                             if n == 8 {
-                                let w =
-                                    u32::from_le_bytes(recv_buf[0..4].try_into().unwrap()) as i32;
-                                let h =
-                                    u32::from_le_bytes(recv_buf[4..8].try_into().unwrap()) as i32;
+                                let mut w_bytes = [0u8; 4];
+                                w_bytes.copy_from_slice(&recv_buf[0..4]);
+                                let w = u32::from_le_bytes(w_bytes) as i32;
+                                
+                                let mut h_bytes = [0u8; 4];
+                                h_bytes.copy_from_slice(&recv_buf[4..8]);
+                                let h = u32::from_le_bytes(h_bytes) as i32;
                                 screen_w = w;
                                 screen_h = h;
                                 stem::info!("bristle: updated screen resolution to {}x{}", w, h);
@@ -308,11 +345,21 @@ fn main(_arg: usize) -> ! {
                                 screen_h,
                             );
                         }
+                    } else {
+                        // EOF
+                        stem::warn!("bristle: fd EOF (is_kbd={}, is_mouse={}, is_control={})", is_kbd, is_mouse, is_control);
+                        stem::time::sleep_ms(100);
                     }
+                } else {
+                    stem::warn!("bristle: fd read error: {:?}", n_result);
+                    stem::time::sleep_ms(100);
                 }
             }
 
-            ServiceEvent::Ready { .. } => {}
+            ServiceEvent::Ready { event, token } => {
+                stem::warn!("bristle: unhandled Ready event={:?} tok={:?}", event, token);
+                stem::time::sleep_ms(100);
+            }
 
             ServiceEvent::InboxClosed => {
                 warn!("bristle: inbox closed — entering degraded loop");
@@ -505,9 +552,50 @@ fn accumulate_and_dispatch(
                         wayland_buf[0..8].copy_from_slice(&wayland_header.to_bytes());
                         wayland_buf[8..10].copy_from_slice(&wayland_payload.to_bytes());
                         out_len = 10;
+                    } else if event_type == EventType::Scroll as u16
+                        && payload_len >= abi::hid::ScrollPayload::SIZE as u32
+                    {
+                        // Scroll events
+                        let mut p = [0u8; abi::hid::ScrollPayload::SIZE];
+                        p.copy_from_slice(&event_bytes[20..20 + abi::hid::ScrollPayload::SIZE]);
+                        let scroll = abi::hid::ScrollPayload::from_bytes(&p);
+
+                        // Vertical scroll (axis = 0)
+                        if scroll.dy != 0 {
+                            let wayland_payload = abi::hid::WaylandPointerAxis {
+                                axis: 0,
+                                _pad: [0; 3],
+                                value: scroll.dy as i32,
+                            };
+                            let wayland_header = abi::hid::WaylandIpcHeader {
+                                object_id: 1,
+                                size_and_opcode: (((8 + 8) as u32) << 16) | event_type as u32,
+                            };
+                            wayland_buf[0..8].copy_from_slice(&wayland_header.to_bytes());
+                            wayland_buf[8..16].copy_from_slice(&wayland_payload.to_bytes());
+                            out_len = 16;
+                            // If we also have dx, we will send two messages?
+                            // For simplicity, we just send one for now, or if both, send dy then dx.
+                            // Actually, let's just do dy for now as it's the most common.
+                        }
+
+                        // Horizontal scroll (axis = 1)
+                        if scroll.dx != 0 && scroll.dy == 0 {
+                            let wayland_payload = abi::hid::WaylandPointerAxis {
+                                axis: 1,
+                                _pad: [0; 3],
+                                value: scroll.dx as i32,
+                            };
+                            let wayland_header = abi::hid::WaylandIpcHeader {
+                                object_id: 1,
+                                size_and_opcode: (((8 + 8) as u32) << 16) | event_type as u32,
+                            };
+                            wayland_buf[0..8].copy_from_slice(&wayland_header.to_bytes());
+                            wayland_buf[8..16].copy_from_slice(&wayland_payload.to_bytes());
+                            out_len = 16;
+                        }
                     } else {
-                        // Other events: just forward them as-is, but we can't if we switched the whole protocol.
-                        // We will just drop them for now, since scroll isn't heavily used or we can wrap them similarly.
+                        // Other events: drop
                     }
 
                     // Forward to registered sinks.

@@ -304,8 +304,9 @@ pub struct Accel2dBatch {
 
 #[cfg(test)]
 mod tests {
-    use super::*;
     use core::mem::size_of;
+
+    use super::*;
 
     #[test]
     fn flush_damage_cmd_is_largest_variant() {

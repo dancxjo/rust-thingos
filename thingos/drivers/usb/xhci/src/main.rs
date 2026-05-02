@@ -128,6 +128,8 @@ const EVENT_RING_TRBS: usize = 256;
 const TRANSFER_RING_TRBS: usize = 256;
 const DMA_BUFFER_BYTES: usize = 64 * 1024;
 const MAX_ENDPOINT_ID: usize = 31;
+const IRQ_TRANSFER_EVENT_POLLS: usize = 500_000;
+const POLLING_TRANSFER_EVENT_POLLS: usize = 3_000;
 
 const CAP_CAPLENGTH: usize = 0x00;
 const CAP_HCIVERSION: usize = 0x02;
@@ -1060,7 +1062,9 @@ impl XhciController {
     }
 
     fn wait_transfer_event(&mut self, slot_id: u8, endpoint_id: u8) -> Result<Trb, &'static str> {
-        for _ in 0..500_000 {
+        let max_polls =
+            if self.irq_enabled { IRQ_TRANSFER_EVENT_POLLS } else { POLLING_TRANSFER_EVENT_POLLS };
+        for _ in 0..max_polls {
             while let Some(ev) = self.next_event() {
                 match event_type(ev.control) {
                     TRB_TYPE_TRANSFER_EVENT => {
@@ -1081,6 +1085,10 @@ impl XhciController {
             }
             self.wait_for_event_delay();
         }
+        warn!(
+            "xhci: transfer timeout slot={} ep={} irq_enabled={} polls={}",
+            slot_id, endpoint_id, self.irq_enabled, max_polls
+        );
         Err("transfer timeout")
     }
 

@@ -613,6 +613,12 @@ fn limine_modules(
     modules.push_str("    module_path: boot():/public/wallpapers/flower.png\n");
     modules.push_str("    module_path: boot():/public/cursors/future/default.svg\n");
     modules.push_str("    module_path: boot():/etc/roots/boot\n");
+    if !safe_shell_only {
+        modules.push_str("    module_path: boot():/lib/libpistil.so\n");
+        modules.push_str("    module_path: boot():/public/fonts/Inter-Regular.ttf\n");
+        modules.push_str("    module_path: boot():/public/fonts/NotoSansSymbol2-Regular.ttf\n");
+        modules.push_str("    module_path: boot():/public/fonts/DSEG7Classic-Regular.ttf\n");
+    }
     if include_default_shell && !safe_shell_only {
         modules.push_str("    module_path: boot():/etc/default/shell\n");
     }
@@ -741,7 +747,7 @@ pub fn build_iso_with_config(
     )?;
     sh.write_file(
         iso_root.join("etc/roots/boot"),
-        "# Thing-OS livedisk root overlay.\ntype=iso9660\ndevice=none\nsource=/media/livedisk\ntarget=/\nflags=before,cor\nwait_ms=10000\n",
+        "# Thing-OS livedisk root overlay.\ntype=iso9660\ndevice=none\nsource=/media/livedisk\ntarget=/\nflags=after\nwait_ms=10000\n",
     )?;
     sh.write_file(iso_root.join("etc/hostname"), "thingos\n")?;
 
@@ -1429,12 +1435,55 @@ mod tests {
         assert!(safe_entry.contains("module_path: boot():/applications/terminal"));
         assert!(safe_entry.contains("module_path: boot():/services/bristle"));
         assert!(!safe_entry.contains("module_path: boot():/services/bloom"));
+        assert!(!safe_entry.contains("module_path: boot():/lib/libpistil.so"));
         assert!(!safe_entry.contains("module_path: boot():/bin/busybox"));
         assert!(!safe_entry.contains("module_path: boot():/bin/ash"));
         assert!(!safe_entry.contains("module_path: boot():/etc/default/shell"));
         assert!(!safe_entry.contains("module_path: boot():/drivers/display_bootfb"));
         assert!(!safe_entry.contains("module_path: boot():/drivers/display_virtio_gpu"));
         assert_eq!(safe_entry.matches("module_cmdline: init").count(), 1);
+    }
+
+    #[test]
+    fn graphical_boot_entries_load_pistil_as_a_boot_module() {
+        let sh = Shell::new().expect("shell");
+        let mut sprout = test_program("sprout");
+        sprout.is_init = true;
+        let programs = [
+            sprout,
+            test_program("bloom"),
+            test_program("bristle"),
+            test_program("display_bootfb"),
+            test_program("display_virtio_gpu"),
+        ];
+
+        let conf = generate_limine_config(&sh, &programs, &[], None, None, false, false, false);
+        let normal_entry = limine_entry(&conf, "ThingOS");
+        let bootfb_entry = limine_entry(&conf, "ThingOS (BootFB Fallback)");
+        let safe_entry = limine_entry(&conf, "ThingOS (Safe Shell)");
+
+        assert!(normal_entry.contains("module_path: boot():/lib/libpistil.so"));
+        assert!(normal_entry.contains("module_path: boot():/public/fonts/Inter-Regular.ttf"));
+        assert!(
+            normal_entry.contains("module_path: boot():/public/fonts/NotoSansSymbol2-Regular.ttf")
+        );
+        assert!(
+            normal_entry.contains("module_path: boot():/public/fonts/DSEG7Classic-Regular.ttf")
+        );
+        assert!(bootfb_entry.contains("module_path: boot():/lib/libpistil.so"));
+        assert!(bootfb_entry.contains("module_path: boot():/public/fonts/Inter-Regular.ttf"));
+        assert!(
+            bootfb_entry.contains("module_path: boot():/public/fonts/NotoSansSymbol2-Regular.ttf")
+        );
+        assert!(
+            bootfb_entry.contains("module_path: boot():/public/fonts/DSEG7Classic-Regular.ttf")
+        );
+        assert!(!safe_entry.contains("module_path: boot():/lib/libpistil.so"));
+        assert!(!safe_entry.contains("module_path: boot():/public/fonts/Inter-Regular.ttf"));
+        assert!(
+            !safe_entry.contains("module_path: boot():/public/fonts/NotoSansSymbol2-Regular.ttf")
+        );
+        assert!(!safe_entry.contains("module_path: boot():/public/fonts/DSEG7Classic-Regular.ttf"));
     }
 
     #[test]
@@ -1567,10 +1616,11 @@ mod tests {
         assert!(normal_entry.contains("module_path: boot():/drivers/ahci_disk"));
         assert!(normal_entry.contains("module_path: boot():/public/fonts/unifont.hex"));
         assert!(normal_entry.contains("module_path: boot():/etc/roots/boot"));
+        assert!(normal_entry.contains("module_path: boot():/lib/libpistil.so"));
+        assert!(normal_entry.contains("module_path: boot():/public/fonts/Inter-Regular.ttf"));
 
         assert!(!normal_entry.contains("module_path: boot():/bin/ps"));
         assert!(!normal_entry.contains("module_path: boot():/bin/grep"));
-        assert!(!normal_entry.contains("module_path: boot():/lib/libpistil.so"));
         assert!(!normal_entry.contains("module_path: boot():/etc/fstab"));
         assert!(!normal_entry.contains("module_path: boot():/public/wallpapers/flower.png"));
         assert!(!normal_entry.contains("module_path: boot():/public/wallpapers/flower.bmp"));

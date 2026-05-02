@@ -14,5 +14,5 @@ path = "src/lib.rs"
 diagnostic-apps = []
 
 [dependencies]
-stem = { path = "../stem", features = ["rt"] }
+stem = { path = "../stem", features = ["rt", "global-alloc"] }
 abi = { path = "../abi" }

@@ -47,8 +47,8 @@ pub const BRISTLE_EVENT_MAGIC: u32 = 0x48494445;
 pub const BRISTLE_EVENT_VERSION: u16 = 0;
 
 pub use bristle::{
-    BristleEventHeader, KeyEventPayload, KeyboardMessage, WaylandIpcHeader, WaylandPointerButton,
-    WaylandPointerMotion,
+    BristleEventHeader, KeyEventPayload, KeyboardMessage, WaylandIpcHeader, WaylandPointerAxis,
+    WaylandPointerButton, WaylandPointerMotion,
 };
 pub use event::{EventType, HidParseError};
 pub use input::{InputDeviceKind, Ps2KeyPayload, RawInputEnvelope};

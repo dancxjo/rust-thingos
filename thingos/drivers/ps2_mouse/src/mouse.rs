@@ -2,9 +2,7 @@
 //!
 //! Parses PS/2 mouse packets and emits pointer events.
 #![no_std]
-use alloc::string::ToString;
 use core::default::Default;
-extern crate alloc;
 
 const PACKET_MAX_RAW_DELTA: i16 = 40;
 

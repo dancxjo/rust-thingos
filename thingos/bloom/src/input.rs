@@ -552,17 +552,19 @@ impl InputState {
                     self.pointer_y,
                 );
             }
-            Ok(EventType::Scroll) if payload.len() >= ScrollPayload::SIZE => {
-                let mut p = [0u8; ScrollPayload::SIZE];
-                p.copy_from_slice(&payload[..ScrollPayload::SIZE]);
-                let scroll = ScrollPayload::from_bytes(&p);
+            Ok(EventType::Scroll) if payload.len() >= abi::hid::WaylandPointerAxis::SIZE => {
+                let mut p = [0u8; abi::hid::WaylandPointerAxis::SIZE];
+                p.copy_from_slice(&payload[..abi::hid::WaylandPointerAxis::SIZE]);
+                let axis = abi::hid::WaylandPointerAxis::from_bytes(&p);
                 if let Some(surface_id) = scene.pointer_focus {
                     if scene.surface_client(surface_id).is_some() {
+                        let dx = if axis.axis == 1 { axis.value as i16 } else { 0 };
+                        let dy = if axis.axis == 0 { axis.value as i16 } else { 0 };
                         send_wayland_pointer_scroll(
                             wayland_evt_write,
                             surface_id,
-                            scroll.dx,
-                            scroll.dy,
+                            dx,
+                            dy,
                             timestamp_ns,
                         );
                     }

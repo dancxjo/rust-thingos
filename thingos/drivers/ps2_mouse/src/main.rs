@@ -5,10 +5,8 @@
 //! virtual hardware or interrupt routing fails to deliver IRQ12.
 #![no_std]
 #![no_main]
-use alloc::string::ToString;
 use core::default::Default;
 use core::sync::atomic::{AtomicU64, Ordering};
-extern crate alloc;
 
 use abi::driver_interface::{
     DRIVER_DESCRIPTOR_ABI_VERSION, DeviceInfo, DriverClass, DriverDescriptor, DriverEntryCtx,

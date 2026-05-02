@@ -8,5 +8,5 @@ name = "ps2_mouse"
 path = "src/main.rs"
 
 [dependencies]
-stem = { path = "../../stem", features = ["rt"] }
+stem = { path = "../../stem", features = ["rt", "global-alloc"] }
 abi = { path = "../../abi" }

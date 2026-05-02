@@ -264,9 +264,7 @@ impl DisplayBufferDesc {
     /// 3. `modifier == 0` (linear).
     pub const fn is_valid_accel2d_src(&self) -> bool {
         let bpp = self.format.bytes_per_pixel();
-        bpp == 4
-            && self.stride as usize >= self.width as usize * bpp
-            && self.modifier == 0
+        bpp == 4 && self.stride as usize >= self.width as usize * bpp && self.modifier == 0
     }
 }
 
