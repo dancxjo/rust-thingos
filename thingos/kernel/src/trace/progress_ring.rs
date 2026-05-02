@@ -148,18 +148,21 @@ pub fn dump() {
 /// taken (normal response, error, timeout, or interrupt).
 pub struct VfsRpcExitGuard {
     op_tag: u64,
+    /// CPU index captured at the call site so the exit event correctly
+    /// identifies the CPU that made the RPC.
+    cpu: usize,
 }
 
 impl VfsRpcExitGuard {
-    /// Create a new exit guard for the given VFS RPC opcode.
+    /// Create a new exit guard for the given VFS RPC opcode and CPU index.
     #[inline]
-    pub fn new(op_tag: u64) -> Self {
-        Self { op_tag }
+    pub fn new(op_tag: u64, cpu: usize) -> Self {
+        Self { op_tag, cpu }
     }
 }
 
 impl Drop for VfsRpcExitGuard {
     fn drop(&mut self) {
-        push(ProgressTag::VfsRpcExit, 0, self.op_tag, crate::trace::now_or_zero());
+        push(ProgressTag::VfsRpcExit, self.cpu, self.op_tag, crate::trace::now_or_zero());
     }
 }

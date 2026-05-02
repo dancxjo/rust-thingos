@@ -216,13 +216,14 @@ impl ProviderRpc {
         // Record VFS RPC entry in the progress ring for freeze diagnostics.
         // A RAII guard records the matching exit on all return paths.
         let rpc_entry_ns = crate::trace::now_or_zero();
+        let rpc_cpu = crate::runtime_base().current_cpu_index();
         crate::trace::progress_ring::push(
             crate::trace::progress_ring::ProgressTag::VfsRpcEntry,
-            0,
+            rpc_cpu,
             op as u64,
             rpc_entry_ns,
         );
-        let _rpc_exit_guard = crate::trace::progress_ring::VfsRpcExitGuard::new(op as u64);
+        let _rpc_exit_guard = crate::trace::progress_ring::VfsRpcExitGuard::new(op as u64, rpc_cpu);
 
         let mut msg = Vec::with_capacity(7 + payload.len());
         msg.extend_from_slice(&self.resp_write_handle.to_le_bytes());

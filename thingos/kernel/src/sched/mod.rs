@@ -1381,8 +1381,10 @@ fn emit_debug_summary<R: BootRuntime>(caller_cpu: usize) {
         let delta_wake = s.wake.saturating_sub(prev_wake);
 
         // Record a heartbeat entry in the progress ring for post-mortem
-        // analysis of freeze events.
-        let curr_tid = s.curr.unwrap_or(u64::MAX);
+        // analysis of freeze events.  Use `NO_CURRENT_TASK` as the sentinel
+        // when no task is running on this CPU (e.g. before scheduler init).
+        const NO_CURRENT_TASK: u64 = u64::MAX;
+        let curr_tid = s.curr.unwrap_or(NO_CURRENT_TASK);
         crate::trace::progress_ring::push(
             crate::trace::progress_ring::ProgressTag::TimerHeartbeat,
             s.i,
