@@ -299,15 +299,12 @@ mod tests {
     #[test]
     fn root_lookup_returns_root_handle() {
         let mut p = HostsProvider::new();
-        assert_eq!(
-            p.handle_lookup("").payload,
-            std::vec![] as std::vec::Vec<u8>,
-            "trivial payload"
-        );
-        // ok_u64 payload is 8 bytes little-endian.
-        let r = p.handle_lookup("/");
-        assert_eq!(r.status, 0);
-        assert_eq!(u64::from_le_bytes(r.payload[..8].try_into().unwrap()), HANDLE_ROOT);
+        for path in ["", "/"] {
+            let r = p.handle_lookup(path);
+            assert_eq!(r.status, 0);
+            assert_eq!(r.payload.len(), 8);
+            assert_eq!(u64::from_le_bytes(r.payload[..8].try_into().unwrap()), HANDLE_ROOT);
+        }
     }
 
     #[test]

@@ -1,5 +1,5 @@
-#![no_std]
-#![no_main]
+#![cfg_attr(not(test), no_std)]
+#![cfg_attr(not(test), no_main)]
 extern crate alloc;
 
 mod cache;
@@ -902,23 +902,28 @@ fn run_handle_worker(
 
 // ── Entry points ───────────────────────────────────────────────────────────
 
+#[cfg(not(test))]
 #[stem::main]
 fn main(_arg: usize) -> ! {
     let (fixed_host, mount_point) = parse_args();
     run_provider(fixed_host, &mount_point)
 }
 
+#[cfg(not(test))]
 #[used]
 static KEEP_THINGOS_VFS_MOUNT_V1: extern "C" fn(usize) -> ! = thingos_vfs_mount_v1;
 
+#[cfg(not(test))]
 #[used]
 static KEEP_THINGOS_VFS_UNMOUNT_V1: extern "C" fn(usize) -> i32 = thingos_vfs_unmount_v1;
 
+#[cfg(not(test))]
 #[no_mangle]
 pub extern "C" fn thingos_vfs_mount_v1(arg: usize) -> ! {
     unsafe { stem::rt::entry_impl(arg) }
 }
 
+#[cfg(not(test))]
 #[no_mangle]
 pub extern "C" fn thingos_vfs_unmount_v1(_arg: usize) -> i32 {
     let (_fixed_host, mount_point) = parse_args();
@@ -1618,6 +1623,6 @@ mod tests {
     #[test]
     fn ensure_cached_entry_returns_ebadf_for_unknown_handle() {
         let mut provider = new_provider();
-        assert_eq!(provider.ensure_cached_entry(9999), Err(Errno::EBADF));
+        assert!(matches!(provider.ensure_cached_entry(9999), Err(Errno::EBADF)));
     }
 }

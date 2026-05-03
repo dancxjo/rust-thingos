@@ -25,7 +25,7 @@ pub mod memory;
 
 /// Platform Abstraction Layer - explicit platform contract
 pub mod pal;
-#[cfg(all(feature = "rt", not(feature = "std")))]
+#[cfg(all(feature = "rt", not(feature = "std"), target_os = "thingos"))]
 #[panic_handler]
 fn panic(info: &core::panic::PanicInfo) -> ! {
     crate::error!("PANIC: {}", info);

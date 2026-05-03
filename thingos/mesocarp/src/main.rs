@@ -25,8 +25,8 @@
 //! The program is spawned by `mount -t mdns <target>` (see `utils/mount`),
 //! which forwards the mount point as `argv[1]`.
 
-#![no_std]
-#![no_main]
+#![cfg_attr(not(test), no_std)]
+#![cfg_attr(not(test), no_main)]
 extern crate alloc;
 
 use alloc::string::{String, ToString};
@@ -124,16 +124,20 @@ pub static THINGOS_SEED: Seed = Seed {
     ],
 };
 
+#[cfg(not(test))]
 #[used]
 static KEEP_THINGOS_VFS_MOUNT_V1: extern "C" fn(usize) -> ! = thingos_vfs_mount_v1;
+#[cfg(not(test))]
 #[used]
 static KEEP_THINGOS_VFS_UNMOUNT_V1: extern "C" fn(usize) -> i32 = thingos_vfs_unmount_v1;
 
+#[cfg(not(test))]
 #[no_mangle]
 pub extern "C" fn thingos_vfs_mount_v1(arg: usize) -> ! {
     unsafe { stem::rt::entry_impl(arg) }
 }
 
+#[cfg(not(test))]
 #[no_mangle]
 pub extern "C" fn thingos_vfs_unmount_v1(_arg: usize) -> i32 {
     let mount_point = mount_point_from_args();
@@ -143,6 +147,7 @@ pub extern "C" fn thingos_vfs_unmount_v1(_arg: usize) -> i32 {
     }
 }
 
+#[cfg(not(test))]
 #[stem::main]
 fn main(_arg: usize) -> ! {
     let mount_point = mount_point_from_args();

@@ -273,9 +273,10 @@ impl HttpsCache {
         // Trim bodies first (cheapest to drop), then whole entries if we are
         // still over budget.
         if self.body_bytes > self.body_cap {
-            let mut victims: Vec<usize> = self.lru.iter().rev().copied().collect();
-            while self.body_bytes > self.body_cap {
-                let Some(idx) = victims.pop() else { break };
+            for idx in self.lru.iter().rev().copied() {
+                if self.body_bytes <= self.body_cap {
+                    break;
+                }
                 if idx >= self.entries.len() {
                     continue;
                 }
