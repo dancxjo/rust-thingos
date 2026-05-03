@@ -607,8 +607,11 @@ fn draw_png_cover_into(
     dst_w: usize,
     dst_h: usize,
 ) -> Result<(), i32> {
+    let t_read_start = stem::time::monotonic_ns();
     let data = read_vfs_file(path)?;
+    let t_decode_start = stem::time::monotonic_ns();
     let pixmap = Pixmap::decode_png(&data).map_err(|_| -3)?;
+    let t_blit_start = stem::time::monotonic_ns();
     let src_w = pixmap.width() as usize;
     let src_h = pixmap.height() as usize;
     if src_w == 0 || src_h == 0 || dst_w == 0 || dst_h == 0 {
@@ -616,6 +619,14 @@ fn draw_png_cover_into(
     }
 
     blit_cover_tiny_skia(dst, dst_stride_pixels, dst_w, dst_h, &pixmap);
+    let t_done = stem::time::monotonic_ns();
+    stem::debug!(
+        "Wallpaper PNG phases: read={}ms decode={}ms blit={}ms ({}x{} -> {}x{})",
+        (t_decode_start - t_read_start) / 1_000_000,
+        (t_blit_start - t_decode_start) / 1_000_000,
+        (t_done - t_blit_start) / 1_000_000,
+        src_w, src_h, dst_w, dst_h,
+    );
     Ok(())
 }
 
