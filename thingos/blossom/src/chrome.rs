@@ -85,9 +85,9 @@ fn theme_control_rects(buttons: [(ChromeButton, Rect); 3]) -> [Option<ThemeContr
 
 fn to_theme_control(button: ChromeButton) -> ThemeControl {
     match button {
-        ChromeButton::Shade => ThemeControl::Shade,
+        ChromeButton::Minimize | ChromeButton::Shade => ThemeControl::Shade,
         ChromeButton::Fullscreen | ChromeButton::Maximize => ThemeControl::Fullscreen,
-        ChromeButton::Close | ChromeButton::Minimize => ThemeControl::Close,
+        ChromeButton::Close => ThemeControl::Close,
     }
 }
 
@@ -100,7 +100,7 @@ mod tests {
     use super::*;
 
     #[test]
-    fn chrome_plan_contains_frame_title_and_button_glyphs() {
+    fn chrome_plan_contains_frame_title_and_control_pads() {
         let plan = window_chrome_plan(
             Rect::new(0, 0, 320, 240),
             SurfaceChrome { titlebar_height: 28, frame_thickness: 4 },
@@ -120,7 +120,8 @@ mod tests {
         assert!(
             plan.commands.iter().any(|cmd| matches!(cmd, PaintCommand::VerticalGradient { .. }))
         );
+        assert!(plan.commands.iter().any(|cmd| matches!(cmd, PaintCommand::Shadow { .. })));
         assert!(plan.commands.iter().any(|cmd| matches!(cmd, PaintCommand::Text { .. })));
-        assert!(plan.commands.iter().any(|cmd| matches!(cmd, PaintCommand::Icon { .. })));
+        assert!(plan.commands.iter().any(|cmd| matches!(cmd, PaintCommand::FillRect { .. })));
     }
 }

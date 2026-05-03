@@ -1708,13 +1708,17 @@ fn execute_blossom_chrome_plan(
     pistil_draw_svg_icon: Option<DrawSvgIconFn>,
     pistil_draw_text: Option<DrawTextFn>,
 ) {
+    let mut clip_stack: Vec<Option<ThemeRect>> = Vec::new();
+    let mut clip: Option<ThemeRect> = None;
     for command in &plan.commands {
-        match *command {
+        match command {
             PaintCommand::FillRect { rect, color } => {
-                fill_rect_i32(dst, stride, height, rect.x, rect.y, rect.w, rect.h, color);
+                if let Some(rect) = clipped_rect(*rect, clip) {
+                    fill_rect_i32(dst, stride, height, rect.x, rect.y, rect.w, rect.h, *color);
+                }
             }
             PaintCommand::VerticalGradient { rect, top, bottom } => {
-                if rect.w > 0 && rect.h > 0 {
+                if let Some(rect) = clipped_rect(*rect, clip) {
                     fill_vertical_gradient(
                         dst,
                         stride,
@@ -1723,13 +1727,13 @@ fn execute_blossom_chrome_plan(
                         rect.y,
                         rect.w as u32,
                         rect.h as u32,
-                        top,
-                        bottom,
+                        *top,
+                        *bottom,
                     );
                 }
             }
             PaintCommand::HorizontalGradient { rect, left, center, right } => {
-                if rect.w > 0 && rect.h > 0 {
+                if let Some(rect) = clipped_rect(*rect, clip) {
                     fill_horizontal_gradient(
                         dst,
                         stride,
@@ -1738,14 +1742,17 @@ fn execute_blossom_chrome_plan(
                         rect.y,
                         rect.w as u32,
                         rect.h as u32,
-                        left,
-                        center,
-                        right,
+                        *left,
+                        *center,
+                        *right,
                     );
                 }
             }
             PaintCommand::StrokeRect { rect, thickness, color } => {
-                if rect.w > 0 && rect.h > 0 && thickness > 0 {
+                if let Some(rect) = clipped_rect(*rect, clip) {
+                    if *thickness <= 0 {
+                        continue;
+                    }
                     draw_rect_stroke(
                         dst,
                         stride,
@@ -1754,33 +1761,65 @@ fn execute_blossom_chrome_plan(
                         rect.y,
                         rect.w as u32,
                         rect.h as u32,
-                        thickness as u32,
-                        color,
+                        *thickness as u32,
+                        *color,
                     );
                 }
             }
+            PaintCommand::Shadow { rect, offset_x, offset_y, blur_radius, color } => {
+                draw_theme_shadow(
+                    dst,
+                    stride,
+                    height,
+                    *rect,
+                    *offset_x,
+                    *offset_y,
+                    *blur_radius,
+                    *color,
+                    clip,
+                );
+            }
+            PaintCommand::PushClip { rect } => {
+                clip_stack.push(clip);
+                clip = match clip {
+                    Some(current) => intersect_theme_rect(current, *rect),
+                    None => clipped_rect(*rect, None),
+                };
+            }
+            PaintCommand::PopClip => {
+                clip = clip_stack.pop().unwrap_or(None);
+            }
             PaintCommand::Text { x, y, px_size_bits, text, color } => {
+                if let Some(clip) = clip {
+                    if *x < clip.x || *x >= clip.x + clip.w || *y < clip.y || *y >= clip.y + clip.h
+                    {
+                        continue;
+                    }
+                }
                 draw_overlay_text_bold(
                     pistil_draw_text,
                     dst,
                     stride,
                     height,
-                    x,
-                    y,
-                    f32::from_bits(px_size_bits),
-                    text,
-                    color,
+                    *x,
+                    *y,
+                    f32::from_bits(*px_size_bits),
+                    text.as_ref(),
+                    *color,
                 );
             }
             PaintCommand::Icon { rect, icon, color } => {
+                let Some(rect) = clipped_rect(*rect, clip) else {
+                    continue;
+                };
                 if draw_theme_svg_icon(
                     pistil_draw_svg_icon,
                     dst,
                     stride,
                     height,
                     rect,
-                    theme_icon_path(icon),
-                    color,
+                    theme_icon_path(*icon),
+                    *color,
                 ) {
                     continue;
                 }
@@ -1791,14 +1830,70 @@ fn execute_blossom_chrome_plan(
                     crate::scene::from_blossom_rect(blossom::Rect::new(
                         rect.x, rect.y, rect.w, rect.h,
                     )),
-                    chrome_button_for_theme_icon(icon),
+                    chrome_button_for_theme_icon(*icon),
                     false,
                     false,
-                    color,
+                    *color,
                 );
             }
         }
     }
+}
+
+fn clipped_rect(rect: ThemeRect, clip: Option<ThemeRect>) -> Option<ThemeRect> {
+    if rect.w <= 0 || rect.h <= 0 {
+        return None;
+    }
+    match clip {
+        Some(clip) => intersect_theme_rect(rect, clip),
+        None => Some(rect),
+    }
+}
+
+fn intersect_theme_rect(a: ThemeRect, b: ThemeRect) -> Option<ThemeRect> {
+    let x0 = a.x.max(b.x);
+    let y0 = a.y.max(b.y);
+    let x1 = a.x.saturating_add(a.w).min(b.x.saturating_add(b.w));
+    let y1 = a.y.saturating_add(a.h).min(b.y.saturating_add(b.h));
+    if x1 <= x0 || y1 <= y0 { None } else { Some(ThemeRect::new(x0, y0, x1 - x0, y1 - y0)) }
+}
+
+fn draw_theme_shadow(
+    dst: &mut [u32],
+    stride: u32,
+    height: u32,
+    rect: ThemeRect,
+    offset_x: i32,
+    offset_y: i32,
+    blur_radius: i32,
+    color: u32,
+    clip: Option<ThemeRect>,
+) {
+    if rect.w <= 0 || rect.h <= 0 {
+        return;
+    }
+    let blur = blur_radius.max(0);
+    let layers = blur.max(1);
+    for layer in (0..=layers).rev() {
+        let spread = layer;
+        let alpha_scale = ((layers - layer + 1) as u32).saturating_mul(255) / (layers + 1) as u32;
+        let layer_color = scale_argb_alpha(color, alpha_scale);
+        let shadow = ThemeRect::new(
+            rect.x + offset_x - spread,
+            rect.y + offset_y - spread,
+            rect.w + spread * 2,
+            rect.h + spread * 2,
+        );
+        if let Some(shadow) = clipped_rect(shadow, clip) {
+            fill_rect_i32(dst, stride, height, shadow.x, shadow.y, shadow.w, shadow.h, layer_color);
+        }
+    }
+}
+
+fn scale_argb_alpha(color: u32, scale: u32) -> u32 {
+    let scale = scale.min(255);
+    let alpha = ((color >> 24) & 0xFF).saturating_mul(scale) / 255;
+    (alpha << 24) | (color & 0x00FFFFFF)
 }
 
 fn draw_theme_svg_icon(

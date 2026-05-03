@@ -4,6 +4,7 @@
 //! future WASI theme modules: the host owns geometry, state, focus, routing,
 //! and composition; a theme module may only return validated paint commands.
 
+use alloc::borrow::Cow;
 use alloc::vec::Vec;
 
 #[derive(Clone, Copy, Debug, Default, PartialEq, Eq)]
@@ -84,13 +85,16 @@ pub struct WindowChromeRequest<'a> {
     pub title: Option<&'a str>,
 }
 
-#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+#[derive(Clone, Debug, PartialEq, Eq)]
 pub enum PaintCommand<'a> {
     FillRect { rect: ThemeRect, color: u32 },
     VerticalGradient { rect: ThemeRect, top: u32, bottom: u32 },
     HorizontalGradient { rect: ThemeRect, left: u32, center: u32, right: u32 },
     StrokeRect { rect: ThemeRect, thickness: i32, color: u32 },
-    Text { x: i32, y: i32, px_size_bits: u32, text: &'a str, color: u32 },
+    Shadow { rect: ThemeRect, offset_x: i32, offset_y: i32, blur_radius: i32, color: u32 },
+    PushClip { rect: ThemeRect },
+    PopClip,
+    Text { x: i32, y: i32, px_size_bits: u32, text: Cow<'a, str>, color: u32 },
     Icon { rect: ThemeRect, icon: ThemeIcon, color: u32 },
 }
 
@@ -109,6 +113,9 @@ pub struct CompiledTheme<'a> {
 pub enum ThemeRuntimeError {
     Unavailable,
     InvalidModule,
+    MemoryLimitExceeded,
+    ExecutionFailed,
+    SerializationFailed,
     InvalidResponse,
 }
 

@@ -1,8 +1,11 @@
+use alloc::borrow::Cow;
+
 use crate::paint::{
     PaintCommand, PaintList, ThemeControl, ThemeIcon, ThemeRect, WindowChromeRequest,
 };
+use crate::values::Color;
 
-pub const DEFAULT_THEME_NAME: &str = "Obsidian Bloom";
+pub const DEFAULT_THEME_NAME: &str = "SolarisWarm";
 
 #[derive(Clone, Copy)]
 pub struct Theme {
@@ -45,6 +48,7 @@ pub struct Theme {
 
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub enum ThemeRenderer {
+    SolarisWarm,
     ObsidianFacet,
     AuroraGlass,
 }
@@ -55,6 +59,79 @@ pub struct WindowStateTokens {
     pub title_top: u32,
     pub title_bottom: u32,
 }
+
+#[derive(Clone, Copy)]
+pub struct SolarisWarmPalette {
+    pub bg_primary: Color,
+    pub bg_secondary: Color,
+    pub surface: Color,
+    pub accent: Color,
+    pub accent_soft: Color,
+    pub text_primary: Color,
+    pub text_secondary: Color,
+    pub text_muted: Color,
+    pub border: Color,
+    pub shadow: Color,
+}
+
+pub const SOLARIS_WARM_PALETTE: SolarisWarmPalette = SolarisWarmPalette {
+    bg_primary: Color::rgb(0x1E, 0x1A, 0x16),
+    bg_secondary: Color::rgb(0x2A, 0x24, 0x1F),
+    surface: Color::rgb(0x3A, 0x32, 0x2B),
+    accent: Color::rgb(0xE3, 0xA8, 0x57),
+    accent_soft: Color::rgb(0xF2, 0xC0, 0x78),
+    text_primary: Color::rgb(0xF5, 0xE6, 0xD3),
+    text_secondary: Color::rgb(0xC9, 0xB8, 0xA2),
+    text_muted: Color::rgb(0x8A, 0x7A, 0x66),
+    border: Color::rgb(0x4A, 0x40, 0x36),
+    shadow: Color::rgba(0, 0, 0, 102),
+};
+
+pub const SOLARIS_WARM: Theme = Theme {
+    name: DEFAULT_THEME_NAME,
+    renderer: ThemeRenderer::SolarisWarm,
+    active: WindowStateTokens {
+        border: color_argb(SOLARIS_WARM_PALETTE.border),
+        title_top: color_argb(SOLARIS_WARM_PALETTE.bg_secondary),
+        title_bottom: color_argb(SOLARIS_WARM_PALETTE.bg_primary),
+    },
+    inactive: WindowStateTokens {
+        border: color_argb(SOLARIS_WARM_PALETTE.border),
+        title_top: color_argb(SOLARIS_WARM_PALETTE.surface),
+        title_bottom: color_argb(SOLARIS_WARM_PALETTE.bg_secondary),
+    },
+    titlebar_height: 32,
+    frame_thickness: 4,
+    corner_radius: 0,
+    chrome_text: color_argb(SOLARIS_WARM_PALETTE.text_primary),
+    chrome_text_inactive: color_argb(SOLARIS_WARM_PALETTE.text_muted),
+    control_icon: color_argb(SOLARIS_WARM_PALETTE.accent_soft),
+    control_icon_inactive: color_argb(SOLARIS_WARM_PALETTE.text_muted),
+    close_icon: color_argb(SOLARIS_WARM_PALETTE.accent),
+    title_rule_active: color_argb(SOLARIS_WARM_PALETTE.accent),
+    title_rule_inactive: color_argb(SOLARIS_WARM_PALETTE.border),
+    body_top: color_argb(SOLARIS_WARM_PALETTE.bg_primary),
+    button_top: color_argb(SOLARIS_WARM_PALETTE.surface),
+    outer_stroke: color_argb(SOLARIS_WARM_PALETTE.border),
+    inner_stroke: color_argb(SOLARIS_WARM_PALETTE.surface),
+    inner_stroke_inactive: color_argb(SOLARIS_WARM_PALETTE.border),
+    frame_fill: color_argb(SOLARIS_WARM_PALETTE.surface),
+    frame_fill_inactive: color_argb(SOLARIS_WARM_PALETTE.bg_secondary),
+    frame_fill_bottom: color_argb(SOLARIS_WARM_PALETTE.bg_secondary),
+    frame_fill_bottom_inactive: color_argb(SOLARIS_WARM_PALETTE.bg_primary),
+    frame_bevel_light: color_argb(SOLARIS_WARM_PALETTE.accent_soft),
+    frame_bevel_light_inactive: color_argb(SOLARIS_WARM_PALETTE.text_muted),
+    frame_bevel_shadow: color_argb(SOLARIS_WARM_PALETTE.bg_primary),
+    title_sheen: color_argb(SOLARIS_WARM_PALETTE.accent_soft),
+    facet: color_argb(SOLARIS_WARM_PALETTE.surface),
+    facet_inactive: color_argb(SOLARIS_WARM_PALETTE.bg_secondary),
+    focus_accent: color_argb(SOLARIS_WARM_PALETTE.accent),
+    edge_light: color_argb(SOLARIS_WARM_PALETTE.accent_soft),
+    edge_dark: color_argb(SOLARIS_WARM_PALETTE.bg_primary),
+    content_edge: color_argb(SOLARIS_WARM_PALETTE.border),
+    grid_line: color_with_alpha(SOLARIS_WARM_PALETTE.border, 31),
+    contact_shadow: color_argb(SOLARIS_WARM_PALETTE.shadow),
+};
 
 pub const OBSIDIAN_BLOOM: Theme = Theme {
     name: DEFAULT_THEME_NAME,
@@ -159,6 +236,10 @@ impl Theme {
         }
 
         match self.renderer {
+            ThemeRenderer::SolarisWarm => {
+                push_solaris_warm_window(self, request, out);
+                return;
+            }
             ThemeRenderer::ObsidianFacet => push_facet_frame(self, request, out),
             ThemeRenderer::AuroraGlass => push_glass_frame(self, request, out),
         }
@@ -173,12 +254,20 @@ impl Theme {
 }
 
 pub fn default_theme() -> Theme {
-    OBSIDIAN_BLOOM
+    SOLARIS_WARM
 }
 
 pub fn theme_by_name(name: &str) -> Theme {
     let trimmed = name.trim();
-    if trimmed.eq_ignore_ascii_case("aurora glass")
+    if trimmed.eq_ignore_ascii_case("solariswarm")
+        || trimmed.eq_ignore_ascii_case("solaris warm")
+        || trimmed.eq_ignore_ascii_case("solaris-warm")
+        || trimmed.eq_ignore_ascii_case("solaris_warm")
+        || trimmed.eq_ignore_ascii_case("solarized warm")
+        || trimmed.eq_ignore_ascii_case("solarized-warm")
+    {
+        SOLARIS_WARM
+    } else if trimmed.eq_ignore_ascii_case("aurora glass")
         || trimmed.eq_ignore_ascii_case("aurora-glass")
         || trimmed.eq_ignore_ascii_case("aurora_glass")
         || trimmed.eq_ignore_ascii_case("glass")
@@ -190,7 +279,121 @@ pub fn theme_by_name(name: &str) -> Theme {
     {
         OBSIDIAN_BLOOM
     } else {
-        OBSIDIAN_BLOOM
+        SOLARIS_WARM
+    }
+}
+
+fn push_solaris_warm_window<'a>(
+    theme: Theme,
+    request: WindowChromeRequest<'a>,
+    out: &mut PaintList<'a>,
+) {
+    let rect = request.visual_rect;
+    let frame = request.frame.max(1);
+    let titlebar_height = request.titlebar_height.min(theme.titlebar_height as i32);
+    let active = request.state.active;
+    let palette = SOLARIS_WARM_PALETTE;
+    let primary = color_argb(palette.bg_primary);
+    let secondary = color_argb(palette.bg_secondary);
+    let surface = color_argb(palette.surface);
+    let border = color_argb(palette.border);
+    let accent = color_argb(palette.accent);
+    let text =
+        if active { color_argb(palette.text_primary) } else { color_argb(palette.text_muted) };
+    let title_top =
+        if active { secondary } else { soften_argb(surface, color_argb(palette.text_muted), 36) };
+    let title_bottom = if active { primary } else { soften_argb(secondary, primary, 132) };
+    let surface_top = if active { surface } else { soften_argb(surface, primary, 116) };
+    let surface_bottom = if active { secondary } else { primary };
+
+    out.commands.push(PaintCommand::Shadow {
+        rect,
+        offset_x: 0,
+        offset_y: 6,
+        blur_radius: 12,
+        color: color_argb(palette.shadow),
+    });
+    out.commands.push(PaintCommand::PushClip { rect });
+    out.commands.push(PaintCommand::VerticalGradient {
+        rect,
+        top: surface_top,
+        bottom: surface_bottom,
+    });
+    out.commands.push(PaintCommand::StrokeRect { rect, thickness: 1, color: border });
+
+    if rect.w > 2 && rect.h > 2 {
+        out.commands.push(PaintCommand::FillRect {
+            rect: ThemeRect::new(rect.x + 1, rect.y + 1, rect.w - 2, 1),
+            color: color_with_alpha(palette.accent_soft, if active { 62 } else { 24 }),
+        });
+    }
+
+    if titlebar_height > 0 {
+        let titlebar = ThemeRect::new(rect.x + 1, rect.y + 1, rect.w - 2, titlebar_height - 1);
+        out.commands.push(PaintCommand::VerticalGradient {
+            rect: titlebar,
+            top: title_top,
+            bottom: title_bottom,
+        });
+        out.commands.push(PaintCommand::FillRect {
+            rect: ThemeRect::new(rect.x + 1, rect.y + titlebar_height, rect.w - 2, 1),
+            color: soften_argb(primary, border, if active { 120 } else { 68 }),
+        });
+        if active && rect.w > frame * 2 {
+            let underline = ThemeRect::new(
+                rect.x + frame + 8,
+                rect.y + titlebar_height - 2,
+                rect.w - frame * 2 - 16,
+                2,
+            );
+            out.commands.push(PaintCommand::Shadow {
+                rect: underline,
+                offset_x: 0,
+                offset_y: 0,
+                blur_radius: 7,
+                color: color_with_alpha(palette.accent, 92),
+            });
+            out.commands.push(PaintCommand::HorizontalGradient {
+                rect: underline,
+                left: color_with_alpha(palette.accent, 0),
+                center: accent,
+                right: color_with_alpha(palette.accent, 0),
+            });
+        }
+    }
+
+    push_solaris_content_edges(out, rect, frame, titlebar_height, theme);
+    if request.titlebar_height > 0 {
+        push_solaris_control_pads(theme, request, out);
+        if let Some(title) = request.title {
+            let buttons_w = request
+                .controls
+                .iter()
+                .flatten()
+                .next()
+                .map(|button| request.visual_rect.x + request.visual_rect.w - button.rect.x)
+                .unwrap_or(0);
+            let max_chars = ((request.visual_rect.w - request.frame * 2 - 28 - buttons_w).max(10)
+                as u32)
+                .saturating_div(9)
+                .max(1) as usize;
+            out.commands.push(PaintCommand::Text {
+                x: rect.x + frame + 10,
+                y: rect.y + 22,
+                px_size_bits: 15.0f32.to_bits(),
+                text: Cow::Borrowed(title_prefix(title, max_chars)),
+                color: text,
+            });
+        }
+    }
+    out.commands.push(PaintCommand::PopClip);
+
+    if active && rect.w > 8 && rect.h > 8 {
+        out.commands.push(PaintCommand::StrokeRect {
+            rect: ThemeRect::new(rect.x + 1, rect.y + 1, rect.w - 2, rect.h - 2),
+            thickness: 1,
+            color: color_with_alpha(palette.accent_soft, 48),
+        });
     }
 }
 
@@ -291,6 +494,124 @@ fn push_glass_frame<'a>(theme: Theme, request: WindowChromeRequest<'a>, out: &mu
             color: theme.outer_stroke,
         });
         push_content_edges(out, rect, frame, titlebar_height, inner);
+    }
+}
+
+fn push_solaris_content_edges(
+    out: &mut PaintList<'_>,
+    rect: ThemeRect,
+    frame: i32,
+    titlebar_height: i32,
+    theme: Theme,
+) {
+    if rect.w <= frame * 2 || rect.h <= titlebar_height + frame {
+        return;
+    }
+    let inner_x = rect.x + frame;
+    let inner_y = rect.y + titlebar_height;
+    let inner_w = rect.w - frame * 2;
+    let inner_h = rect.h - titlebar_height - frame;
+    let palette = SOLARIS_WARM_PALETTE;
+    out.commands.push(PaintCommand::VerticalGradient {
+        rect: ThemeRect::new(inner_x, inner_y, inner_w, inner_h),
+        top: color_with_alpha(palette.bg_secondary, 140),
+        bottom: color_with_alpha(palette.bg_primary, 190),
+    });
+    out.commands.push(PaintCommand::StrokeRect {
+        rect: ThemeRect::new(inner_x - 1, inner_y, inner_w + 2, inner_h + 1),
+        thickness: 1,
+        color: theme.content_edge,
+    });
+}
+
+fn push_solaris_control_pads<'a>(
+    theme: Theme,
+    request: WindowChromeRequest<'a>,
+    out: &mut PaintList<'a>,
+) {
+    let palette = SOLARIS_WARM_PALETTE;
+    for control in request.controls.iter().flatten() {
+        let hovered = contains(control.rect, request.state.pointer_x, request.state.pointer_y);
+        let pressed = hovered && request.state.primary_button_down;
+        let pad = centered_square(control.rect, if hovered { 15 } else { 13 });
+        let base = match control.control {
+            ThemeControl::Close => {
+                soften_argb(theme.close_icon, color_argb(palette.accent_soft), 42)
+            }
+            ThemeControl::Shade | ThemeControl::Fullscreen => {
+                soften_argb(color_argb(palette.surface), color_argb(palette.text_secondary), 88)
+            }
+        };
+        let top = if pressed {
+            soften_argb(base, color_argb(palette.bg_primary), 146)
+        } else if hovered {
+            soften_argb(base, color_argb(palette.accent_soft), 72)
+        } else if request.state.active {
+            base
+        } else {
+            soften_argb(base, color_argb(palette.bg_primary), 116)
+        };
+        let bottom = if pressed {
+            soften_argb(base, color_argb(palette.bg_primary), 208)
+        } else {
+            soften_argb(top, color_argb(palette.bg_primary), 92)
+        };
+        if hovered {
+            push_solaris_disc(
+                out,
+                centered_square(control.rect, 19),
+                color_with_alpha(palette.accent, 24),
+            );
+        }
+        push_solaris_disc_gradient(out, pad, top, bottom);
+        if pressed {
+            push_solaris_disc(
+                out,
+                centered_square(pad, 7),
+                color_with_alpha(palette.bg_primary, 84),
+            );
+        } else {
+            push_solaris_disc(
+                out,
+                centered_square(pad, 5),
+                color_with_alpha(palette.text_primary, 30),
+            );
+        }
+    }
+}
+
+fn push_solaris_disc(out: &mut PaintList<'_>, rect: ThemeRect, color: u32) {
+    if rect.w <= 0 || rect.h <= 0 {
+        return;
+    }
+    let radius = rect.w.min(rect.h) / 2;
+    let cx = rect.x + rect.w / 2;
+    let cy = rect.y + rect.h / 2;
+    for row in -radius..=radius {
+        let y = cy + row;
+        let dy = row.abs();
+        let span = radius - ((dy * dy + radius / 2) / radius.max(1));
+        if span > 0 {
+            push_fill(out, cx - span, y, span * 2, 1, color);
+        }
+    }
+}
+
+fn push_solaris_disc_gradient(out: &mut PaintList<'_>, rect: ThemeRect, top: u32, bottom: u32) {
+    if rect.w <= 0 || rect.h <= 0 {
+        return;
+    }
+    let radius = rect.w.min(rect.h) / 2;
+    let cx = rect.x + rect.w / 2;
+    let cy = rect.y + rect.h / 2;
+    for row in -radius..=radius {
+        let y = cy + row;
+        let dy = row.abs();
+        let span = radius - ((dy * dy + radius / 2) / radius.max(1));
+        if span > 0 {
+            let t = ((row + radius) as u32).saturating_mul(255) / (radius * 2).max(1) as u32;
+            push_fill(out, cx - span, y, span * 2, 1, lerp_argb(top, bottom, t));
+        }
     }
 }
 
@@ -451,7 +772,7 @@ fn push_title<'a>(
         x: request.visual_rect.x + request.frame + 8,
         y: request.visual_rect.y + (request.titlebar_height + 16) / 2,
         px_size_bits: 16.0f32.to_bits(),
-        text: title_prefix(title, max_chars),
+        text: Cow::Borrowed(title_prefix(title, max_chars)),
         color: if request.state.active { theme.chrome_text } else { theme.chrome_text_inactive },
     });
 }
@@ -525,14 +846,28 @@ fn lerp_argb(a: u32, b: u32, t: u32) -> u32 {
     (ca << 24) | (cr << 16) | (cg << 8) | cb
 }
 
+const fn color_argb(color: Color) -> u32 {
+    ((color.a as u32) << 24) | ((color.r as u32) << 16) | ((color.g as u32) << 8) | color.b as u32
+}
+
+const fn color_with_alpha(color: Color, alpha: u8) -> u32 {
+    ((alpha as u32) << 24) | ((color.r as u32) << 16) | ((color.g as u32) << 8) | color.b as u32
+}
+
+fn soften_argb(a: u32, b: u32, amount: u32) -> u32 {
+    lerp_argb(a, b, amount)
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
 
     #[test]
-    fn bundled_theme_names_resolve_to_two_theme_system() {
-        assert_eq!(default_theme().name, OBSIDIAN_BLOOM.name);
+    fn bundled_theme_names_resolve_to_theme_system() {
+        assert_eq!(default_theme().name, SOLARIS_WARM.name);
+        assert_eq!(theme_by_name("solaris-warm").name, SOLARIS_WARM.name);
         assert_eq!(theme_by_name("aurora-glass").name, AURORA_GLASS.name);
-        assert_eq!(theme_by_name("leather.bmp").name, OBSIDIAN_BLOOM.name);
+        assert_eq!(theme_by_name("obsidian-bloom").name, OBSIDIAN_BLOOM.name);
+        assert_eq!(theme_by_name("leather.bmp").name, SOLARIS_WARM.name);
     }
 }

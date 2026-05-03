@@ -435,6 +435,9 @@ impl BloomLoop {
             let repaint_needed = world.damage.is_dirty()
                 || world.input.has_pending_cursor_motion()
                 || world.visuals.background_fade_active();
+            if repaint_needed && !self.frame_clock.repaint_requested() {
+                self.frame_clock.request_repaint();
+            }
             if self.frame_clock.repaint_due() && repaint_needed {
                 if !first_frame_rendered {
                     stem::debug!("bloom.phase=first_commit_begin");

@@ -14,6 +14,7 @@ pub mod rule;
 pub mod selector;
 pub mod theme;
 pub mod values;
+pub mod wasi;
 
 pub use cascade::{compute, compute_for};
 pub use paint::{
@@ -23,13 +24,14 @@ pub use paint::{
 pub use rule::{Declaration, Rule};
 pub use selector::{Selector, StylableSurface};
 pub use theme::{
-    AURORA_GLASS, DEFAULT_THEME_NAME, OBSIDIAN_BLOOM, Theme, ThemeRenderer, WindowStateTokens,
-    default_theme, theme_by_name,
+    AURORA_GLASS, DEFAULT_THEME_NAME, OBSIDIAN_BLOOM, SOLARIS_WARM, SOLARIS_WARM_PALETTE,
+    SolarisWarmPalette, Theme, ThemeRenderer, WindowStateTokens, default_theme, theme_by_name,
 };
 pub use values::{
     AlignItems, Color, Control, FlexDirection, FontWeight, JustifyContent, ResolvedStyle, State,
     StateSet, Stylable, StyleProperty,
 };
+pub use wasi::{STILE_WASI_RENDER_CHROME, STILE_WASI_VERSION, WasmTheme, WasmThemeHost};
 
 #[macro_export]
 macro_rules! rule {

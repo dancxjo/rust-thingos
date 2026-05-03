@@ -404,13 +404,12 @@ impl BloomWorld {
 
     /// Process one raw bristle HID event.
     pub fn handle_bristle_event(&mut self, data: &[u8]) -> bool {
-        let defer_cursor_motion = self.visuals.cursor_is_fallback();
         self.input.handle_bristle_event(
             data,
             &mut self.scene,
             &mut self.damage,
             self.wayland_evt_write,
-            defer_cursor_motion,
+            false,
         )
     }
 
