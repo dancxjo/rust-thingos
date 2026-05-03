@@ -5,6 +5,7 @@ use crate::{
     PetalsEvent, PetalsService, Rule, Selector, ServiceAction, TaffyError, Theme, UiTree,
     default_theme,
 };
+use stile::typography::{SCALE_BODY, SPACE_MD, SPACE_SM};
 
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub struct WindowChromeNodes {
@@ -99,8 +100,8 @@ pub fn window_chrome_rules_for_theme(theme: Theme) -> Vec<Rule<Description>> {
                 Declaration::FlexDirection(FlexDirection::Row),
                 Declaration::AlignItems(AlignItems::Center),
                 Declaration::JustifyContent(JustifyContent::End),
-                Declaration::Gap(6.0),
-                Declaration::Padding(8.0),
+                Declaration::Gap(SPACE_SM),
+                Declaration::Padding(SPACE_MD),
                 Declaration::Height(44.0),
                 Declaration::BackgroundColor(color_from_argb(theme.active.title_top)),
             ],
@@ -109,8 +110,8 @@ pub fn window_chrome_rules_for_theme(theme: Theme) -> Vec<Rule<Description>> {
             Selector::has(Description::Title),
             alloc::vec![
                 Declaration::Width(160.0),
-                Declaration::Height(18.0),
-                Declaration::FontSize(13.0),
+                Declaration::Height(20.0),
+                Declaration::FontSize(SCALE_BODY),
                 Declaration::FontWeight(FontWeight::Bold),
                 Declaration::Color(color_from_argb(theme.chrome_text)),
             ],

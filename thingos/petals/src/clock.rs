@@ -8,6 +8,7 @@ use crate::{
     AlignItems, Color, Declaration, Description, FlexDirection, FontWeight, JustifyContent, NodeId,
     PetalsEvent, PetalsService, Rule, Selector, ServiceAction, Theme, UiTree, default_theme,
 };
+use stile::typography::{SCALE_H1, SCALE_LABEL, SPACE_LG, SPACE_MD, SPACE_SM, SPACE_XS};
 
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub struct Clock {
@@ -143,8 +144,8 @@ impl Clock {
                     Declaration::FlexDirection(FlexDirection::Column),
                     Declaration::AlignItems(AlignItems::Center),
                     Declaration::JustifyContent(JustifyContent::Center),
-                    Declaration::Gap(4.0),
-                    Declaration::Padding(12.0),
+                    Declaration::Gap(SPACE_XS),
+                    Declaration::Padding(SPACE_MD),
                 ],
             ),
             Rule::new(
@@ -153,7 +154,7 @@ impl Clock {
                     Declaration::FlexDirection(FlexDirection::Row),
                     Declaration::AlignItems(AlignItems::Center),
                     Declaration::JustifyContent(JustifyContent::Center),
-                    Declaration::Gap(6.0),
+                    Declaration::Gap(SPACE_SM),
                     Declaration::Height(40.0),
                 ],
             ),
@@ -162,7 +163,7 @@ impl Clock {
                 alloc::vec![
                     Declaration::Width(if self.format_12h { 92.0 } else { 104.0 }),
                     Declaration::Height(40.0),
-                    Declaration::FontSize(32.0),
+                    Declaration::FontSize(SCALE_H1),
                     Declaration::FontWeight(FontWeight::Normal),
                     Declaration::Color(color_from_argb(theme.chrome_text)),
                 ],
@@ -171,8 +172,8 @@ impl Clock {
                 Selector::has(Description::ClockAmPm),
                 alloc::vec![
                     Declaration::Width(if self.format_12h { 24.0 } else { 0.0 }),
-                    Declaration::Height(18.0),
-                    Declaration::FontSize(12.0),
+                    Declaration::Height(SPACE_LG),
+                    Declaration::FontSize(SCALE_LABEL),
                     Declaration::Color(color_from_argb(theme.control_icon_inactive)),
                 ],
             ),
@@ -183,8 +184,8 @@ impl Clock {
                 Selector::has(Description::ClockDate),
                 alloc::vec![
                     Declaration::Width(136.0),
-                    Declaration::Height(20.0),
-                    Declaration::FontSize(14.0),
+                    Declaration::Height(SPACE_LG),
+                    Declaration::FontSize(SCALE_LABEL),
                     Declaration::Color(color_from_argb(theme.chrome_text_inactive)),
                 ],
             ));

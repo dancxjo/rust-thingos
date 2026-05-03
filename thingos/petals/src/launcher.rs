@@ -7,6 +7,9 @@ use crate::{
     AlignItems, AttrValue, Color, Declaration, Description, FlexDirection, FontWeight,
     JustifyContent, NodeId, PetalsEvent, PetalsService, Rule, Selector, ServiceAction, UiTree,
 };
+use stile::typography::{
+    SCALE_BODY, SCALE_CAPTION, SCALE_H2, SCALE_H3, SPACE_LG, SPACE_MD, SPACE_SM,
+};
 
 #[derive(Clone, Debug, PartialEq, Eq)]
 pub struct ApplicationEntry {
@@ -79,7 +82,7 @@ impl ApplicationLauncher {
         let status = tree.text(&self.status)?;
 
         if let Some(node) = tree.node_mut(title) {
-            node.descriptions.push(Description::ApplicationName);
+            node.descriptions.push(Description::ApplicationTitle);
         }
         if let Some(node) = tree.node_mut(status) {
             node.descriptions.push(Description::ApplicationStatus);
@@ -137,9 +140,18 @@ impl ApplicationLauncher {
                     Declaration::FlexDirection(FlexDirection::Column),
                     Declaration::AlignItems(AlignItems::Stretch),
                     Declaration::JustifyContent(JustifyContent::Start),
-                    Declaration::Gap(12.0),
-                    Declaration::Padding(16.0),
+                    Declaration::Gap(SPACE_MD),
+                    Declaration::Padding(SPACE_LG),
                     Declaration::BackgroundColor(Color::rgb(0x16, 0x18, 0x1d)),
+                ],
+            ),
+            Rule::new(
+                Selector::has(Description::ApplicationTitle),
+                alloc::vec![
+                    Declaration::Height(24.0),
+                    Declaration::FontSize(SCALE_H2),
+                    Declaration::FontWeight(FontWeight::Bold),
+                    Declaration::Color(Color::rgb(0xf1, 0xf4, 0xf8)),
                 ],
             ),
             Rule::new(
@@ -148,7 +160,7 @@ impl ApplicationLauncher {
                     Declaration::FlexDirection(FlexDirection::Column),
                     Declaration::AlignItems(AlignItems::Start),
                     Declaration::JustifyContent(JustifyContent::Start),
-                    Declaration::Gap(10.0),
+                    Declaration::Gap(SPACE_SM),
                 ],
             ),
             Rule::new(
@@ -157,7 +169,7 @@ impl ApplicationLauncher {
                     Declaration::FlexDirection(FlexDirection::Row),
                     Declaration::AlignItems(AlignItems::Start),
                     Declaration::JustifyContent(JustifyContent::Start),
-                    Declaration::Gap(10.0),
+                    Declaration::Gap(SPACE_SM),
                 ],
             ),
             Rule::new(
@@ -166,8 +178,8 @@ impl ApplicationLauncher {
                     Declaration::FlexDirection(FlexDirection::Column),
                     Declaration::AlignItems(AlignItems::Center),
                     Declaration::JustifyContent(JustifyContent::Center),
-                    Declaration::Gap(7.0),
-                    Declaration::Padding(10.0),
+                    Declaration::Gap(SPACE_SM),
+                    Declaration::Padding(SPACE_SM),
                     Declaration::Width(128.0),
                     Declaration::Height(96.0),
                     Declaration::BackgroundColor(Color::rgb(0x24, 0x29, 0x33)),
@@ -208,7 +220,7 @@ impl ApplicationLauncher {
                 alloc::vec![
                     Declaration::Width(108.0),
                     Declaration::Height(20.0),
-                    Declaration::FontSize(15.0),
+                    Declaration::FontSize(SCALE_H3),
                     Declaration::FontWeight(FontWeight::Bold),
                     Declaration::Color(Color::rgb(0xf1, 0xf4, 0xf8)),
                 ],
@@ -217,8 +229,8 @@ impl ApplicationLauncher {
                 Selector::has(Description::ApplicationPath),
                 alloc::vec![
                     Declaration::Width(108.0),
-                    Declaration::Height(16.0),
-                    Declaration::FontSize(10.0),
+                    Declaration::Height(SPACE_LG),
+                    Declaration::FontSize(SCALE_CAPTION),
                     Declaration::Color(Color::rgb(0x9d, 0xa8, 0xb7)),
                 ],
             ),
@@ -226,8 +238,8 @@ impl ApplicationLauncher {
                 Selector::has(Description::ApplicationStatus),
                 alloc::vec![
                     Declaration::Width(360.0),
-                    Declaration::Height(18.0),
-                    Declaration::FontSize(12.0),
+                    Declaration::Height(SPACE_LG),
+                    Declaration::FontSize(SCALE_BODY),
                     Declaration::Color(Color::rgb(0xad, 0xb7, 0xc7)),
                 ],
             ),
@@ -331,6 +343,32 @@ mod tests {
             tree.node(nodes.tiles[0].icon).unwrap().descriptions.contains(&Description::Logogram)
         );
         assert_eq!(tree.global_layout_box(nodes.tiles[0].node).unwrap().width, 128.0);
+    }
+
+    #[test]
+    fn section_title_uses_application_title_description_and_is_larger_than_tile_labels() {
+        use stile::typography::{SCALE_H2, SCALE_H3};
+        let launcher = ApplicationLauncher::new(alloc::vec![ApplicationEntry {
+            name: String::from("Clock"),
+            path: String::from("/applications/clock"),
+            glyph: String::from("clock"),
+        }]);
+        let (tree, nodes) = launcher.build_tree().unwrap();
+
+        // The top-level "Applications" header must carry ApplicationTitle, not ApplicationName.
+        assert!(
+            tree.node(nodes.title).unwrap().descriptions.contains(&Description::ApplicationTitle)
+        );
+        assert!(
+            !tree.node(nodes.title).unwrap().descriptions.contains(&Description::ApplicationName)
+        );
+
+        // Section header must render at SCALE_H2; tile label must render at SCALE_H3.
+        let title_size = tree.node(nodes.title).unwrap().style.font_size;
+        let label_size = tree.node(nodes.tiles[0].label).unwrap().style.font_size;
+        assert_eq!(title_size, Some(SCALE_H2));
+        assert_eq!(label_size, Some(SCALE_H3));
+        assert!(title_size.unwrap() > label_size.unwrap());
     }
 
     #[test]

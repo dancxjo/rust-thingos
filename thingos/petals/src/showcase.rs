@@ -11,6 +11,7 @@ use crate::{
     WindowChromeNodes, WindowChromeService, default_theme, render_window_chrome,
     window_chrome_rules_for_theme,
 };
+use stile::typography::{SCALE_H3, SPACE_MD, SPACE_SM};
 
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub enum ShowcaseComponent {
@@ -211,8 +212,8 @@ impl PetalsShowcase {
                     Declaration::FlexDirection(FlexDirection::Column),
                     Declaration::AlignItems(AlignItems::Stretch),
                     Declaration::JustifyContent(JustifyContent::Start),
-                    Declaration::Gap(10.0),
-                    Declaration::Padding(14.0),
+                    Declaration::Gap(SPACE_SM),
+                    Declaration::Padding(SPACE_MD),
                     Declaration::BackgroundColor(color_from_argb(theme.frame_fill)),
                     Declaration::BorderWidth(1.0),
                 ],
@@ -221,7 +222,7 @@ impl PetalsShowcase {
                 Selector::has(Description::ShowcaseHeader),
                 alloc::vec![
                     Declaration::Height(20.0),
-                    Declaration::FontSize(15.0),
+                    Declaration::FontSize(SCALE_H3),
                     Declaration::FontWeight(FontWeight::Bold),
                     Declaration::Color(color_from_argb(theme.chrome_text)),
                 ],
@@ -232,7 +233,7 @@ impl PetalsShowcase {
                     Declaration::FlexDirection(FlexDirection::Row),
                     Declaration::AlignItems(AlignItems::Center),
                     Declaration::JustifyContent(JustifyContent::Start),
-                    Declaration::Gap(8.0),
+                    Declaration::Gap(SPACE_SM),
                 ],
             ),
             // Base swatch style (no state)
@@ -241,7 +242,7 @@ impl PetalsShowcase {
                 alloc::vec![
                     Declaration::Width(76.0),
                     Declaration::Height(36.0),
-                    Declaration::Padding(8.0),
+                    Declaration::Padding(SPACE_SM),
                     Declaration::BackgroundColor(color_from_argb(theme.button_top)),
                     Declaration::Color(color_from_argb(theme.chrome_text)),
                     Declaration::BorderWidth(1.0),
