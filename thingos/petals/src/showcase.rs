@@ -27,6 +27,7 @@ pub struct StileStateDemoNodes {
     pub title: NodeId,
     pub strip: NodeId,
     pub normal: NodeId,
+    pub hover: NodeId,
     pub active: NodeId,
     pub focus: NodeId,
     pub disabled: NodeId,
@@ -137,6 +138,7 @@ impl PetalsShowcase {
         let title = tree.text("Stile states")?;
         let strip = tree.add_node(&[Description::ShowcaseStateStrip, Description::Container])?;
         let normal = tree.pressable("Normal")?;
+        let hover = tree.pressable("Hover")?;
         let active = tree.pressable("Active")?;
         let focus = tree.pressable("Focus")?;
         let disabled = tree.pressable("Disabled")?;
@@ -147,7 +149,7 @@ impl PetalsShowcase {
         tree.add_child(tree.root(), root)?;
         tree.add_child(root, title)?;
         tree.add_child(root, strip)?;
-        for node in [normal, active, focus, disabled] {
+        for node in [normal, hover, active, focus, disabled] {
             if let Some(item) = tree.node_mut(node) {
                 item.descriptions.push(Description::ShowcaseSwatch);
             }
@@ -155,6 +157,10 @@ impl PetalsShowcase {
         }
 
         let mut service = StileStateDemoService;
+        service.dispatch(
+            &mut tree,
+            PetalsEvent::SetState { node: hover, state: State::Hover, enabled: true },
+        );
         service.dispatch(
             &mut tree,
             PetalsEvent::SetState { node: active, state: State::Active, enabled: true },
@@ -168,7 +174,7 @@ impl PetalsShowcase {
             PetalsEvent::SetState { node: disabled, state: State::Disabled, enabled: true },
         );
         tree.restyle(&self.stile_state_rules())?;
-        Ok((tree, StileStateDemoNodes { root, title, strip, normal, active, focus, disabled }))
+        Ok((tree, StileStateDemoNodes { root, title, strip, normal, hover, active, focus, disabled }))
     }
 
     pub fn prepare_component(
@@ -229,6 +235,7 @@ impl PetalsShowcase {
                     Declaration::Gap(8.0),
                 ],
             ),
+            // Base swatch style (no state)
             Rule::new(
                 Selector::has(Description::ShowcaseSwatch),
                 alloc::vec![
@@ -240,13 +247,26 @@ impl PetalsShowcase {
                     Declaration::BorderWidth(1.0),
                 ],
             ),
+            // Hover: subtle tint overlay -- lowest interactive priority
             Rule::new(
-                Selector::has(Description::ShowcaseSwatch).and(Selector::state(State::Active)),
-                alloc::vec![Declaration::BackgroundColor(color_from_argb(theme.focus_accent))],
+                Selector::has(Description::ShowcaseSwatch).and(Selector::state(State::Hover)),
+                alloc::vec![Declaration::BackgroundColor(color_from_argb(theme.hover_tint))],
             ),
+            // Focus: visible outline ring for keyboard navigation -- medium priority
             Rule::new(
                 Selector::has(Description::ShowcaseSwatch).and(Selector::state(State::Focus)),
-                alloc::vec![Declaration::OutlineColor(color_from_argb(theme.edge_light))],
+                alloc::vec![
+                    Declaration::OutlineColor(color_from_argb(theme.edge_light)),
+                    Declaration::OutlineWidth(2.0),
+                ],
+            ),
+            // Active: dominant fill -- highest interactive priority (placed last to win cascade)
+            Rule::new(
+                Selector::has(Description::ShowcaseSwatch).and(Selector::state(State::Active)),
+                alloc::vec![
+                    Declaration::BackgroundColor(color_from_argb(theme.focus_accent)),
+                    Declaration::Color(color_from_argb(theme.body_top)),
+                ],
             ),
             Rule::new(
                 Selector::has(Description::ShowcaseSwatch).and(Selector::state(State::Disabled)),
@@ -314,6 +334,7 @@ mod tests {
         assert_eq!(chrome_nodes.resize_edges.len(), 4);
 
         let (state_tree, state_nodes) = showcase.stile_state_tree().unwrap();
+        assert!(state_tree.node(state_nodes.hover).unwrap().states.contains_state(State::Hover));
         assert!(state_tree.node(state_nodes.active).unwrap().states.contains_state(State::Active));
     }
 }
