@@ -1878,6 +1878,7 @@ mod tests {
     fn provider_with_config(dns_server: Ipv4Address, gateway: Ipv4Address) -> NetVfsProvider {
         NetVfsProvider {
             req_read: 0,
+            req_write: 0,
             mac: [0; 6],
             mtu: 1500,
             link_up: true,
@@ -1892,8 +1893,10 @@ mod tests {
             rx_packets: 0,
             tx_packets: 0,
             req_buf: alloc::vec![0u8; 32],
+            pending: alloc::vec![],
             dns_pending: None,
             dns_result: None,
+            deferred_connects: alloc::vec![],
         }
     }
 

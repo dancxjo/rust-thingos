@@ -33,8 +33,8 @@
 //!  2. `EventQueue` lock — acquire/release independently.
 //!  3. `NetworkPollState` mutex — acquire/release independently.
 //! No two of these locks are ever held simultaneously.
-#![no_std]
-#![no_main]
+#![cfg_attr(not(test), no_std)]
+#![cfg_attr(not(test), no_main)]
 extern crate alloc;
 use alloc::boxed::Box;
 use alloc::string::{String, ToString};
