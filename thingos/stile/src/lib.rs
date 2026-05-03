@@ -25,7 +25,8 @@ pub use rule::{Declaration, Rule};
 pub use selector::{Selector, StylableSurface};
 pub use theme::{
     AURORA_GLASS, DEFAULT_THEME_NAME, OBSIDIAN_BLOOM, SOLARIS_WARM, SOLARIS_WARM_PALETTE,
-    SolarisWarmPalette, Theme, ThemeRenderer, WindowStateTokens, default_theme, theme_by_name,
+    SolarisWarmPalette, Theme, ThemeRenderer, WindowStateTokens, available_themes, default_theme,
+    find_theme_by_name, theme_by_name,
 };
 pub use values::{
     AlignItems, Color, Control, FlexDirection, FontWeight, JustifyContent, ResolvedStyle, State,

@@ -40,6 +40,6 @@ pub use showcase::{PetalsShowcase, ShowcaseComponent, ShowcaseServices, StileSta
 pub use stile::{
     AlignItems, Color, Control, Declaration, FlexDirection, FontWeight, JustifyContent,
     ResolvedStyle, Rule, Selector, State, StateSet, Stylable, StyleProperty, Theme,
-    WindowStateTokens, default_theme, theme_by_name,
+    WindowStateTokens, available_themes, default_theme, find_theme_by_name, theme_by_name,
 };
 pub use taffy::TaffyError;

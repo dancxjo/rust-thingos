@@ -67,6 +67,20 @@ Feature: Bloom compositor desktop behavior
     Then the serial output should contain "Applying theme Obsidian Bloom" within 60s
     And the serial output should contain "clock: applying theme Obsidian Bloom" within 60s
 
+  Scenario: The Themes app lists and swaps built-in desktop themes
+    Given the machine is booted
+    Then the serial output should contain "bloom: service loop started" within 60s
+    When I wait for the shell prompt
+    And I type "themes --list" on the serial console
+    Then the command output should contain "SolarisWarm"
+    And the command output should contain "Aurora Glass"
+    And the command output should contain "Obsidian Bloom"
+    When I type "themes --set aurora-glass" on the serial console
+    Then the command output should contain "Selected theme Aurora Glass"
+    And the serial output should contain "Applying theme Aurora Glass" within 60s
+    When I type "themes --current" on the serial console
+    Then the command output should strictly be "Aurora Glass"
+
   @wallpaper-fade
   Scenario: Wallpaper appears with a fade from black
     Given the machine is booted

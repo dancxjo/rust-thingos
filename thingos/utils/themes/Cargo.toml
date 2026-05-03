@@ -1,0 +1,16 @@
+[package]
+name = "themes"
+version = "0.1.0"
+edition = "2021"
+
+[dependencies]
+stem = { path = "../../stem", features = ["rt"] }
+abi = { path = "../../abi" }
+libdl = { path = "../libdl" }
+petals = { path = "../../petals" }
+
+[[bin]]
+name = "themes"
+path = "src/main.rs"
+test = false
+bench = false

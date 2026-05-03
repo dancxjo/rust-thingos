@@ -134,7 +134,7 @@ pub const SOLARIS_WARM: Theme = Theme {
 };
 
 pub const OBSIDIAN_BLOOM: Theme = Theme {
-    name: DEFAULT_THEME_NAME,
+    name: "Obsidian Bloom",
     renderer: ThemeRenderer::ObsidianFacet,
     active: WindowStateTokens {
         border: 0xFF11131D,
@@ -257,30 +257,49 @@ pub fn default_theme() -> Theme {
     SOLARIS_WARM
 }
 
-pub fn theme_by_name(name: &str) -> Theme {
+pub static AVAILABLE_THEMES: [Theme; 3] = [SOLARIS_WARM, AURORA_GLASS, OBSIDIAN_BLOOM];
+
+pub fn available_themes() -> &'static [Theme] {
+    &AVAILABLE_THEMES
+}
+
+pub fn find_theme_by_name(name: &str) -> Option<Theme> {
     let trimmed = name.trim();
-    if trimmed.eq_ignore_ascii_case("solariswarm")
+    if matches_solaris_warm(trimmed) {
+        Some(SOLARIS_WARM)
+    } else if matches_aurora_glass(trimmed) {
+        Some(AURORA_GLASS)
+    } else if matches_obsidian_bloom(trimmed) {
+        Some(OBSIDIAN_BLOOM)
+    } else {
+        None
+    }
+}
+
+pub fn theme_by_name(name: &str) -> Theme {
+    find_theme_by_name(name).unwrap_or(SOLARIS_WARM)
+}
+
+fn matches_solaris_warm(trimmed: &str) -> bool {
+    trimmed.eq_ignore_ascii_case("solariswarm")
         || trimmed.eq_ignore_ascii_case("solaris warm")
         || trimmed.eq_ignore_ascii_case("solaris-warm")
         || trimmed.eq_ignore_ascii_case("solaris_warm")
         || trimmed.eq_ignore_ascii_case("solarized warm")
         || trimmed.eq_ignore_ascii_case("solarized-warm")
-    {
-        SOLARIS_WARM
-    } else if trimmed.eq_ignore_ascii_case("aurora glass")
+}
+
+fn matches_aurora_glass(trimmed: &str) -> bool {
+    trimmed.eq_ignore_ascii_case("aurora glass")
         || trimmed.eq_ignore_ascii_case("aurora-glass")
         || trimmed.eq_ignore_ascii_case("aurora_glass")
         || trimmed.eq_ignore_ascii_case("glass")
-    {
-        AURORA_GLASS
-    } else if trimmed.eq_ignore_ascii_case("obsidian bloom")
+}
+
+fn matches_obsidian_bloom(trimmed: &str) -> bool {
+    trimmed.eq_ignore_ascii_case("obsidian bloom")
         || trimmed.eq_ignore_ascii_case("obsidian-bloom")
         || trimmed.eq_ignore_ascii_case("obsidian_bloom")
-    {
-        OBSIDIAN_BLOOM
-    } else {
-        SOLARIS_WARM
-    }
 }
 
 fn push_solaris_warm_window<'a>(
@@ -865,9 +884,12 @@ mod tests {
     #[test]
     fn bundled_theme_names_resolve_to_theme_system() {
         assert_eq!(default_theme().name, SOLARIS_WARM.name);
+        assert_eq!(available_themes().len(), 3);
         assert_eq!(theme_by_name("solaris-warm").name, SOLARIS_WARM.name);
         assert_eq!(theme_by_name("aurora-glass").name, AURORA_GLASS.name);
         assert_eq!(theme_by_name("obsidian-bloom").name, OBSIDIAN_BLOOM.name);
+        assert_eq!(find_theme_by_name("obsidian_bloom").unwrap().name, OBSIDIAN_BLOOM.name);
+        assert!(find_theme_by_name("not-a-theme").is_none());
         assert_eq!(theme_by_name("leather.bmp").name, SOLARIS_WARM.name);
     }
 }

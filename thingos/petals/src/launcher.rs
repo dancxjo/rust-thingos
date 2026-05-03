@@ -223,6 +223,7 @@ pub fn glyph_for_application(name: &str) -> &'static str {
     match name {
         "calc" | "calculator" => "calculator",
         "clock" | "date" => "list-todo",
+        "themes" => "layers",
         "leaf" | "sh" => "monitor",
         "httpsd" | "netd" | "ping" | "nslookup" => "blocks",
         _ => "box",
