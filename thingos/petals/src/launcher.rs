@@ -8,7 +8,7 @@ use crate::{
     JustifyContent, NodeId, PetalsEvent, PetalsService, Rule, Selector, ServiceAction, UiTree,
 };
 use stile::typography::{
-    SCALE_BODY, SCALE_CAPTION, SCALE_H2, SCALE_H3, SPACE_LG, SPACE_MD, SPACE_SM,
+    SCALE_CAPTION, SCALE_H2, SCALE_H3, SCALE_LABEL, SPACE_LG, SPACE_MD, SPACE_SM,
 };
 
 #[derive(Clone, Debug, PartialEq, Eq)]
@@ -239,7 +239,7 @@ impl ApplicationLauncher {
                 alloc::vec![
                     Declaration::Width(360.0),
                     Declaration::Height(SPACE_LG),
-                    Declaration::FontSize(SCALE_BODY),
+                    Declaration::FontSize(SCALE_LABEL),
                     Declaration::Color(Color::rgb(0xad, 0xb7, 0xc7)),
                 ],
             ),

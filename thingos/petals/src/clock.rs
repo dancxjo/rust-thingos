@@ -8,7 +8,7 @@ use crate::{
     AlignItems, Color, Declaration, Description, FlexDirection, FontWeight, JustifyContent, NodeId,
     PetalsEvent, PetalsService, Rule, Selector, ServiceAction, Theme, UiTree, default_theme,
 };
-use stile::typography::{SCALE_H1, SCALE_LABEL, SPACE_LG, SPACE_MD, SPACE_SM, SPACE_XS};
+use stile::typography::{SCALE_BODY, SCALE_H1, SCALE_LABEL, SPACE_LG, SPACE_MD, SPACE_SM, SPACE_XS};
 
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub struct Clock {
@@ -185,7 +185,7 @@ impl Clock {
                 alloc::vec![
                     Declaration::Width(136.0),
                     Declaration::Height(SPACE_LG),
-                    Declaration::FontSize(SCALE_LABEL),
+                    Declaration::FontSize(SCALE_BODY),
                     Declaration::Color(color_from_argb(theme.chrome_text_inactive)),
                 ],
             ));
