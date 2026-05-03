@@ -4,10 +4,11 @@ use alloc::vec::Vec;
 use abi::pixel::PixelFormat;
 use libdl::{RTLD_NOW, dlerror, dlopen_str, dlsym_bytes};
 use pistil_types::Texture;
+use stile::{PaintCommand, ThemeIcon, ThemeRect};
 
 use crate::display::DisplayBackend;
 use crate::scene::{ChromeButton, CompositionEntry, CursorKind, SurfaceChrome};
-use crate::theme::{UiTheme, default_theme, theme_by_name};
+use crate::theme::{Theme, default_theme, theme_by_name};
 
 const PISTIL_PATH: &str = "/lib/libpistil.so";
 const PREPARE_BACKGROUND_SYMBOL: &[u8] = b"pistil_prepare_background";
@@ -27,10 +28,8 @@ const RESIZE_NE_CURSOR_PATH: &str = "/public/cursors/future/top_right_corner.svg
 const RESIZE_NW_CURSOR_PATH: &str = "/public/cursors/future/top_left_corner.svg";
 const RESIZE_SE_CURSOR_PATH: &str = "/public/cursors/future/bottom_right_corner.svg";
 const RESIZE_SW_CURSOR_PATH: &str = "/public/cursors/future/bottom_left_corner.svg";
-const WINDOW_ICON_MINIMIZE_PATH: &str = "/public/icons/lucide/minus.svg";
 const WINDOW_ICON_SHADE_PATH: &str = "/public/icons/lucide/chevron-up.svg";
 const WINDOW_ICON_UNSHADE_PATH: &str = "/public/icons/lucide/chevron-down.svg";
-const WINDOW_ICON_MAXIMIZE_PATH: &str = "/public/icons/lucide/square.svg";
 const WINDOW_ICON_FULLSCREEN_PATH: &str = "/public/icons/lucide/fullscreen.svg";
 const WINDOW_ICON_RESTORE_PATH: &str = "/public/icons/lucide/minimize-2.svg";
 const WINDOW_ICON_CLOSE_PATH: &str = "/public/icons/lucide/x.svg";
@@ -110,7 +109,7 @@ pub struct CompositorVisuals {
     pistil: Option<PistilLib>,
     default_font_ready: bool,
     symbol_font_ready: bool,
-    theme: UiTheme,
+    theme: Theme,
 }
 
 struct PistilLib {
@@ -1611,39 +1610,6 @@ fn to_blossom_chrome(chrome: SurfaceChrome) -> blossom::wm::SurfaceChrome {
     }
 }
 
-fn chrome_button_rects(
-    rect: abi::display_protocol::Rect,
-    chrome: SurfaceChrome,
-) -> Option<[(ChromeButton, abi::display_protocol::Rect); 3]> {
-    blossom::wm::chrome_button_rects(crate::scene::to_blossom_rect(rect), to_blossom_chrome(chrome))
-        .map(|buttons| {
-            [
-                (
-                    from_blossom_chrome_button(buttons[0].0),
-                    crate::scene::from_blossom_rect(buttons[0].1),
-                ),
-                (
-                    from_blossom_chrome_button(buttons[1].0),
-                    crate::scene::from_blossom_rect(buttons[1].1),
-                ),
-                (
-                    from_blossom_chrome_button(buttons[2].0),
-                    crate::scene::from_blossom_rect(buttons[2].1),
-                ),
-            ]
-        })
-}
-
-fn from_blossom_chrome_button(button: blossom::wm::ChromeButton) -> ChromeButton {
-    match button {
-        blossom::wm::ChromeButton::Minimize => ChromeButton::Minimize,
-        blossom::wm::ChromeButton::Shade => ChromeButton::Shade,
-        blossom::wm::ChromeButton::Maximize => ChromeButton::Maximize,
-        blossom::wm::ChromeButton::Fullscreen => ChromeButton::Fullscreen,
-        blossom::wm::ChromeButton::Close => ChromeButton::Close,
-    }
-}
-
 fn needs_window_overlay(entry: &CompositionEntry) -> bool {
     !entry.is_fullscreen && !entry.chrome.is_empty()
 }
@@ -1685,7 +1651,7 @@ fn draw_chrome_overlay(
     pistil_draw_svg_icon: Option<DrawSvgIconFn>,
     pistil_draw_text: Option<DrawTextFn>,
     _pistil_draw_symbol_text: Option<DrawTextFn>,
-    theme: UiTheme,
+    theme: Theme,
     pointer_x: i32,
     pointer_y: i32,
     primary_button_down: bool,
@@ -1738,16 +1704,16 @@ fn execute_blossom_chrome_plan(
     dst: &mut [u32],
     stride: u32,
     height: u32,
-    plan: &blossom::chrome::ChromeDrawPlan<'_>,
+    plan: &blossom::chrome::WindowPaintPlan<'_>,
     pistil_draw_svg_icon: Option<DrawSvgIconFn>,
     pistil_draw_text: Option<DrawTextFn>,
 ) {
     for command in &plan.commands {
         match *command {
-            blossom::chrome::ChromeDrawCommand::FillRect { rect, color } => {
+            PaintCommand::FillRect { rect, color } => {
                 fill_rect_i32(dst, stride, height, rect.x, rect.y, rect.w, rect.h, color);
             }
-            blossom::chrome::ChromeDrawCommand::VerticalGradient { rect, top, bottom } => {
+            PaintCommand::VerticalGradient { rect, top, bottom } => {
                 if rect.w > 0 && rect.h > 0 {
                     fill_vertical_gradient(
                         dst,
@@ -1762,12 +1728,7 @@ fn execute_blossom_chrome_plan(
                     );
                 }
             }
-            blossom::chrome::ChromeDrawCommand::HorizontalGradient {
-                rect,
-                left,
-                center,
-                right,
-            } => {
+            PaintCommand::HorizontalGradient { rect, left, center, right } => {
                 if rect.w > 0 && rect.h > 0 {
                     fill_horizontal_gradient(
                         dst,
@@ -1783,7 +1744,7 @@ fn execute_blossom_chrome_plan(
                     );
                 }
             }
-            blossom::chrome::ChromeDrawCommand::StrokeRect { rect, thickness, color } => {
+            PaintCommand::StrokeRect { rect, thickness, color } => {
                 if rect.w > 0 && rect.h > 0 && thickness > 0 {
                     draw_rect_stroke(
                         dst,
@@ -1798,7 +1759,7 @@ fn execute_blossom_chrome_plan(
                     );
                 }
             }
-            blossom::chrome::ChromeDrawCommand::Text { x, y, px_size_bits, text, color } => {
+            PaintCommand::Text { x, y, px_size_bits, text, color } => {
                 draw_overlay_text_bold(
                     pistil_draw_text,
                     dst,
@@ -1811,14 +1772,14 @@ fn execute_blossom_chrome_plan(
                     color,
                 );
             }
-            blossom::chrome::ChromeDrawCommand::ControlGlyph { rect, button, icon_path, color } => {
-                if draw_blossom_svg_icon(
+            PaintCommand::Icon { rect, icon, color } => {
+                if draw_theme_svg_icon(
                     pistil_draw_svg_icon,
                     dst,
                     stride,
                     height,
                     rect,
-                    icon_path,
+                    theme_icon_path(icon),
                     color,
                 ) {
                     continue;
@@ -1827,8 +1788,10 @@ fn execute_blossom_chrome_plan(
                     dst,
                     stride,
                     height,
-                    crate::scene::from_blossom_rect(rect),
-                    from_blossom_chrome_button(button),
+                    crate::scene::from_blossom_rect(blossom::Rect::new(
+                        rect.x, rect.y, rect.w, rect.h,
+                    )),
+                    chrome_button_for_theme_icon(icon),
                     false,
                     false,
                     color,
@@ -1838,12 +1801,12 @@ fn execute_blossom_chrome_plan(
     }
 }
 
-fn draw_blossom_svg_icon(
+fn draw_theme_svg_icon(
     pistil_draw_svg_icon: Option<DrawSvgIconFn>,
     dst: &mut [u32],
     stride: u32,
     height: u32,
-    rect: blossom::Rect,
+    rect: ThemeRect,
     icon_path: Option<&'static str>,
     color: u32,
 ) -> bool {
@@ -1870,12 +1833,30 @@ fn draw_blossom_svg_icon(
     ) == 0
 }
 
+fn theme_icon_path(icon: ThemeIcon) -> Option<&'static str> {
+    match icon {
+        ThemeIcon::Shade => Some(WINDOW_ICON_SHADE_PATH),
+        ThemeIcon::Unshade => Some(WINDOW_ICON_UNSHADE_PATH),
+        ThemeIcon::Fullscreen => Some(WINDOW_ICON_FULLSCREEN_PATH),
+        ThemeIcon::Restore => Some(WINDOW_ICON_RESTORE_PATH),
+        ThemeIcon::Close => Some(WINDOW_ICON_CLOSE_PATH),
+    }
+}
+
+fn chrome_button_for_theme_icon(icon: ThemeIcon) -> ChromeButton {
+    match icon {
+        ThemeIcon::Shade | ThemeIcon::Unshade => ChromeButton::Shade,
+        ThemeIcon::Fullscreen | ThemeIcon::Restore => ChromeButton::Fullscreen,
+        ThemeIcon::Close => ChromeButton::Close,
+    }
+}
+
 fn draw_window_body_overlay(
     dst: &mut [u32],
     stride: u32,
     height: u32,
     composition: &[CompositionEntry],
-    theme: UiTheme,
+    theme: Theme,
 ) {
     dst.fill(0);
     for entry in composition {
@@ -1908,322 +1889,6 @@ fn draw_window_body_overlay(
         for px in &mut dst[len..] {
             *px = 0;
         }
-    }
-}
-
-fn title_prefix(title: &str, max_chars: usize) -> &str {
-    if max_chars == 0 {
-        return "";
-    }
-    match title.char_indices().nth(max_chars) {
-        Some((idx, _)) => &title[..idx],
-        None => title,
-    }
-}
-
-fn draw_facet_window_frame(
-    dst: &mut [u32],
-    stride: u32,
-    height: u32,
-    rect: abi::display_protocol::Rect,
-    frame: u32,
-    titlebar_height: u32,
-    active: bool,
-    theme: UiTheme,
-) {
-    let x = rect.x as i32;
-    let y = rect.y as i32;
-    let w = rect.w;
-    let h = rect.h;
-    if w == 0 || h == 0 || frame == 0 {
-        return;
-    }
-
-    let frame = frame.min(w / 2).min(h / 2);
-    let fill_top = if active { theme.frame_fill } else { theme.frame_fill_inactive };
-    let fill_bottom =
-        if active { theme.frame_fill_bottom } else { theme.frame_fill_bottom_inactive };
-    let inner = if active { theme.inner_stroke } else { theme.inner_stroke_inactive };
-    let facet = if active { theme.facet } else { theme.facet_inactive };
-    let state = if active { theme.active } else { theme.inactive };
-
-    if titlebar_height > 0 {
-        fill_vertical_gradient(
-            dst,
-            stride,
-            height,
-            x,
-            y,
-            w,
-            titlebar_height,
-            state.title_top,
-            state.title_bottom,
-        );
-        if active && titlebar_height > 6 && w > frame.saturating_mul(2) {
-            fill_horizontal_gradient(
-                dst,
-                stride,
-                height,
-                x + frame as i32,
-                y + 2,
-                w.saturating_sub(frame.saturating_mul(2)),
-                2,
-                state.title_top,
-                theme.title_sheen,
-                state.title_top,
-            );
-        }
-    } else {
-        fill_vertical_gradient(dst, stride, height, x, y, w, frame, fill_top, fill_bottom);
-    }
-    fill_vertical_gradient(dst, stride, height, x, y, frame, h, fill_top, fill_bottom);
-    fill_vertical_gradient(
-        dst,
-        stride,
-        height,
-        x + w.saturating_sub(frame) as i32,
-        y,
-        frame,
-        h,
-        fill_top,
-        fill_bottom,
-    );
-    fill_horizontal_gradient(
-        dst,
-        stride,
-        height,
-        x,
-        y + h.saturating_sub(frame) as i32,
-        w,
-        frame,
-        fill_bottom,
-        fill_top,
-        fill_bottom,
-    );
-
-    draw_rect_stroke(dst, stride, height, x, y, w, h, 2, theme.outer_stroke);
-    draw_frame_bevel(dst, stride, height, x, y, w, h, frame, active, theme);
-
-    if titlebar_height > 0 && titlebar_height < h {
-        let sep_y = y.saturating_add(titlebar_height as i32).saturating_sub(1);
-        let rule = if active { theme.title_rule_active } else { theme.title_rule_inactive };
-        fill_rect_i32(
-            dst,
-            stride,
-            height,
-            x + frame as i32,
-            sep_y.saturating_sub(1),
-            w.saturating_sub(frame * 2) as i32,
-            1,
-            if active { theme.frame_bevel_light } else { theme.frame_bevel_light_inactive },
-        );
-        fill_rect_i32(
-            dst,
-            stride,
-            height,
-            x + frame as i32,
-            sep_y,
-            w.saturating_sub(frame * 2) as i32,
-            1,
-            rule,
-        );
-    }
-
-    let body_y = y.saturating_add(titlebar_height as i32);
-    let body_h = h.saturating_sub(titlebar_height).saturating_sub(frame);
-    if body_h > 0 && w > frame.saturating_mul(2) {
-        let inner_x = x + frame as i32 - 1;
-        let inner_right = x + w.saturating_sub(frame) as i32;
-        let inner_bottom = y + h.saturating_sub(frame) as i32;
-        fill_rect_i32(dst, stride, height, inner_x, body_y, 1, body_h as i32, inner);
-        fill_rect_i32(dst, stride, height, inner_right, body_y, 1, body_h as i32, inner);
-        fill_rect_i32(
-            dst,
-            stride,
-            height,
-            x + frame as i32,
-            inner_bottom,
-            w.saturating_sub(frame * 2) as i32,
-            1,
-            inner,
-        );
-    }
-
-    draw_corner_facets(dst, stride, height, x, y, w, h, facet);
-
-    if active {
-        draw_top_glow_strip(dst, stride, height, x + 2, y, w.saturating_sub(4), theme);
-        fill_rect_i32(
-            dst,
-            stride,
-            height,
-            x + w.saturating_sub(4) as i32,
-            y + 2,
-            2,
-            2,
-            theme.focus_accent,
-        );
-        fill_rect_i32(
-            dst,
-            stride,
-            height,
-            x + frame as i32,
-            y + h.saturating_sub(frame).saturating_sub(2) as i32,
-            2,
-            2,
-            theme.focus_accent,
-        );
-    }
-}
-
-fn draw_ghost_window_frame(
-    dst: &mut [u32],
-    stride: u32,
-    height: u32,
-    rect: abi::display_protocol::Rect,
-    frame: u32,
-    titlebar_height: u32,
-    active: bool,
-    hovered: bool,
-    theme: UiTheme,
-) {
-    let x = rect.x as i32;
-    let y = rect.y as i32;
-    let w = rect.w;
-    let h = rect.h;
-    if w == 0 || h == 0 || frame == 0 {
-        return;
-    }
-
-    let state = if active { theme.active } else { theme.inactive };
-    let show_frame = hovered;
-    let show_title_surface = active || hovered;
-
-    if titlebar_height > 0 && show_title_surface {
-        fill_vertical_gradient(
-            dst,
-            stride,
-            height,
-            x,
-            y,
-            w,
-            titlebar_height,
-            state.title_top,
-            state.title_bottom,
-        );
-        let sep_y = y.saturating_add(titlebar_height as i32).saturating_sub(1);
-        let rule = if active { theme.title_rule_active } else { theme.title_rule_inactive };
-        fill_rect_i32(dst, stride, height, x, sep_y, w as i32, 1, rule);
-    }
-
-    if active {
-        draw_top_glow_strip(dst, stride, height, x + 2, y, w.saturating_sub(4), theme);
-    }
-
-    if !show_frame {
-        return;
-    }
-
-    draw_rect_stroke(dst, stride, height, x, y, w, h, 1, theme.outer_stroke);
-    if w > frame.saturating_mul(2) && h > titlebar_height.saturating_add(frame) {
-        let inner = if active { theme.inner_stroke } else { theme.inner_stroke_inactive };
-        let body_y = y.saturating_add(titlebar_height as i32);
-        let bottom_y = y + h.saturating_sub(frame) as i32;
-        fill_rect_i32(dst, stride, height, x + frame as i32 - 1, body_y, 1, h as i32, inner);
-        fill_rect_i32(
-            dst,
-            stride,
-            height,
-            x + w.saturating_sub(frame) as i32,
-            body_y,
-            1,
-            h as i32,
-            inner,
-        );
-        fill_rect_i32(
-            dst,
-            stride,
-            height,
-            x + frame as i32,
-            bottom_y,
-            w.saturating_sub(frame * 2) as i32,
-            1,
-            inner,
-        );
-    }
-}
-
-fn draw_frame_bevel(
-    dst: &mut [u32],
-    stride: u32,
-    height: u32,
-    x: i32,
-    y: i32,
-    w: u32,
-    h: u32,
-    frame: u32,
-    active: bool,
-    theme: UiTheme,
-) {
-    if w < 6 || h < 6 || frame == 0 {
-        return;
-    }
-
-    let light = if active { theme.frame_bevel_light } else { theme.frame_bevel_light_inactive };
-    let shadow = theme.frame_bevel_shadow;
-    let mid = if active { theme.edge_light } else { theme.inner_stroke_inactive };
-
-    let inner_x = x + frame.min(w / 2) as i32;
-    let inner_y = y + frame.min(h / 2) as i32;
-    let inner_w = w.saturating_sub(frame.saturating_mul(2));
-    let inner_h = h.saturating_sub(frame.saturating_mul(2));
-
-    fill_rect_i32(dst, stride, height, x + 2, y + 2, w.saturating_sub(4) as i32, 1, light);
-    fill_rect_i32(dst, stride, height, x + 2, y + 2, 1, h.saturating_sub(4) as i32, mid);
-    fill_rect_i32(
-        dst,
-        stride,
-        height,
-        x + 2,
-        y + h.saturating_sub(3) as i32,
-        w.saturating_sub(4) as i32,
-        1,
-        shadow,
-    );
-    fill_rect_i32(
-        dst,
-        stride,
-        height,
-        x + w.saturating_sub(3) as i32,
-        y + 2,
-        1,
-        h.saturating_sub(4) as i32,
-        shadow,
-    );
-
-    if inner_w > 4 && inner_h > 4 {
-        fill_rect_i32(dst, stride, height, inner_x, inner_y, inner_w as i32, 1, shadow);
-        fill_rect_i32(dst, stride, height, inner_x, inner_y, 1, inner_h as i32, shadow);
-        fill_rect_i32(
-            dst,
-            stride,
-            height,
-            inner_x,
-            inner_y + inner_h.saturating_sub(1) as i32,
-            inner_w as i32,
-            1,
-            light,
-        );
-        fill_rect_i32(
-            dst,
-            stride,
-            height,
-            inner_x + inner_w.saturating_sub(1) as i32,
-            inner_y,
-            1,
-            inner_h as i32,
-            light,
-        );
     }
 }
 
@@ -2264,63 +1929,6 @@ fn draw_rect_stroke(
         h as i32,
         color,
     );
-}
-
-fn draw_corner_facets(
-    dst: &mut [u32],
-    stride: u32,
-    height: u32,
-    x: i32,
-    y: i32,
-    w: u32,
-    h: u32,
-    color: u32,
-) {
-    if w < 16 || h < 16 {
-        return;
-    }
-
-    let size = 8i32;
-    let inset = 2i32;
-    for row in 0..size {
-        fill_rect_i32(dst, stride, height, x + inset, y + inset + row, size - row, 1, color);
-        fill_rect_i32(
-            dst,
-            stride,
-            height,
-            x + w as i32 - inset - size + row,
-            y + h as i32 - inset - size + row,
-            size - row,
-            1,
-            color,
-        );
-    }
-}
-
-fn draw_top_glow_strip(
-    dst: &mut [u32],
-    stride: u32,
-    height: u32,
-    x: i32,
-    y: i32,
-    w: u32,
-    theme: UiTheme,
-) {
-    if w == 0 {
-        return;
-    }
-
-    for sx in 0..w {
-        let t = if w <= 1 { 0 } else { sx.saturating_mul(255) / (w - 1) };
-        let color = if t < 85 {
-            lerp_argb(0x007C5CFF, theme.edge_light, t.saturating_mul(3))
-        } else if t < 170 {
-            lerp_argb(theme.edge_light, theme.control_icon, (t - 85).saturating_mul(3))
-        } else {
-            lerp_argb(theme.control_icon, 0x00B8A8FF, (t - 170).saturating_mul(3))
-        };
-        fill_rect_i32(dst, stride, height, x + sx as i32, y, 1, 2, color);
-    }
 }
 
 fn fill_vertical_gradient(
@@ -2383,7 +1991,7 @@ fn draw_contact_shadow(
     stride: u32,
     height: u32,
     rect: abi::display_protocol::Rect,
-    theme: UiTheme,
+    theme: Theme,
 ) {
     fill_rect_i32(
         dst,
@@ -2405,7 +2013,7 @@ fn draw_content_field(
     y: i32,
     w: u32,
     h: u32,
-    theme: UiTheme,
+    theme: Theme,
 ) {
     if w == 0 || h == 0 {
         return;
@@ -2438,168 +2046,12 @@ fn lerp_argb(a: u32, b: u32, t: u32) -> u32 {
     (ca << 24) | (cr << 16) | (cg << 8) | cb
 }
 
-fn draw_chrome_buttons(
-    dst: &mut [u32],
-    stride: u32,
-    height: u32,
-    surface_rect: abi::display_protocol::Rect,
-    chrome: SurfaceChrome,
-    active: bool,
-    is_shaded: bool,
-    is_fullscreen: bool,
-    pistil_draw_svg_icon: Option<DrawSvgIconFn>,
-    pistil_draw_symbol_text: Option<DrawTextFn>,
-    icon_color: u32,
-    close_icon: u32,
-    theme: UiTheme,
-    pointer_x: i32,
-    pointer_y: i32,
-    primary_button_down: bool,
-) {
-    let Some(buttons) = chrome_button_rects(surface_rect, chrome) else {
-        return;
-    };
-
-    for (button, rect) in buttons {
-        draw_chrome_button(
-            dst,
-            stride,
-            height,
-            rect,
-            button,
-            active,
-            is_shaded,
-            is_fullscreen,
-            pistil_draw_svg_icon,
-            pistil_draw_symbol_text,
-            icon_color,
-            close_icon,
-            theme,
-            pointer_x,
-            pointer_y,
-            primary_button_down,
-        );
-    }
-}
-
-fn draw_chrome_button(
-    dst: &mut [u32],
-    stride: u32,
-    height: u32,
-    rect: abi::display_protocol::Rect,
-    button: ChromeButton,
-    _active: bool,
-    is_shaded: bool,
-    is_fullscreen: bool,
-    pistil_draw_svg_icon: Option<DrawSvgIconFn>,
-    _pistil_draw_symbol_text: Option<DrawTextFn>,
-    icon_color: u32,
-    close_icon: u32,
-    theme: UiTheme,
-    pointer_x: i32,
-    pointer_y: i32,
-    primary_button_down: bool,
-) {
-    if rect.w < 8 || rect.h < 8 {
-        return;
-    }
-
-    let color = if matches!(button, ChromeButton::Close) { close_icon } else { icon_color };
-    let hovered = rect_contains(rect, pointer_x, pointer_y);
-    let pressed = hovered && primary_button_down;
-    let color = if pressed { 0xFF0B0A10 } else { color };
-    if hovered {
-        let bg = if pressed { theme.edge_light } else { theme.button_top };
-        draw_chrome_button_well(dst, stride, rect, bg);
-    }
-    let _ = pistil_draw_svg_icon;
-    draw_facet_control_glyph(dst, stride, height, rect, button, is_shaded, is_fullscreen, color);
-}
-
 fn rect_contains(rect: abi::display_protocol::Rect, x: i32, y: i32) -> bool {
     let x0 = rect.x as i32;
     let y0 = rect.y as i32;
     let x1 = rect.x.saturating_add(rect.w) as i32;
     let y1 = rect.y.saturating_add(rect.h) as i32;
     x >= x0 && x < x1 && y >= y0 && y < y1
-}
-
-fn draw_chrome_button_well(
-    dst: &mut [u32],
-    stride: u32,
-    rect: abi::display_protocol::Rect,
-    color: u32,
-) {
-    let size = 16u32.min(rect.w).min(rect.h);
-    if size < 8 {
-        return;
-    }
-
-    let x = rect.x as i32 + rect.w.saturating_sub(size) as i32 / 2;
-    let y = rect.y as i32 + rect.h.saturating_sub(size) as i32 / 2;
-    fill_rect(dst, stride, x, y, size, size, color);
-}
-
-#[allow(dead_code)]
-fn draw_chrome_button_lucide(
-    pistil_draw_svg_icon: Option<DrawSvgIconFn>,
-    dst: &mut [u32],
-    stride: u32,
-    height: u32,
-    rect: abi::display_protocol::Rect,
-    button: ChromeButton,
-    is_shaded: bool,
-    is_fullscreen: bool,
-    color: u32,
-) -> bool {
-    let Some(draw_svg_icon) = pistil_draw_svg_icon else {
-        return false;
-    };
-    let Some(path) = lucide_icon_path(button, is_shaded, is_fullscreen) else {
-        return false;
-    };
-
-    let icon_size = rect.w.min(rect.h).saturating_sub(10).clamp(12, 14);
-    let dst_x = rect.x as i32 + ((rect.w.saturating_sub(icon_size)) / 2) as i32;
-    let dst_y = rect.y as i32 + ((rect.h.saturating_sub(icon_size)) / 2) as i32;
-    call_draw_svg_icon(
-        draw_svg_icon,
-        path,
-        dst,
-        stride,
-        height,
-        dst_x,
-        dst_y,
-        icon_size,
-        icon_size,
-        color,
-    ) == 0
-}
-
-fn lucide_icon_path(
-    button: ChromeButton,
-    is_shaded: bool,
-    is_fullscreen: bool,
-) -> Option<&'static str> {
-    match button {
-        ChromeButton::Minimize => Some(WINDOW_ICON_MINIMIZE_PATH),
-        ChromeButton::Shade => {
-            if is_shaded {
-                Some(WINDOW_ICON_UNSHADE_PATH)
-            } else {
-                Some(WINDOW_ICON_SHADE_PATH)
-            }
-        }
-        ChromeButton::Maximize => Some(WINDOW_ICON_MAXIMIZE_PATH),
-        ChromeButton::Fullscreen => {
-            if is_fullscreen {
-                Some(WINDOW_ICON_RESTORE_PATH)
-            } else {
-                Some(WINDOW_ICON_FULLSCREEN_PATH)
-            }
-        }
-        ChromeButton::Close => Some(WINDOW_ICON_CLOSE_PATH),
-    }
 }
 
 fn draw_facet_control_glyph(

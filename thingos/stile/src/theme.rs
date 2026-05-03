@@ -1,11 +1,15 @@
-pub const DEFAULT_THEME_NAME: &str = "Facet Frame";
+use crate::paint::{
+    PaintCommand, PaintList, ThemeControl, ThemeIcon, ThemeRect, WindowChromeRequest,
+};
+
+pub const DEFAULT_THEME_NAME: &str = "Obsidian Bloom";
 
 #[derive(Clone, Copy)]
-pub struct UiTheme {
+pub struct Theme {
     pub name: &'static str,
-    pub chrome_style: ChromeStyle,
-    pub active: WindowStateTheme,
-    pub inactive: WindowStateTheme,
+    pub renderer: ThemeRenderer,
+    pub active: WindowStateTokens,
+    pub inactive: WindowStateTokens,
     pub titlebar_height: u32,
     pub frame_thickness: u32,
     pub corner_radius: u32,
@@ -40,299 +44,485 @@ pub struct UiTheme {
 }
 
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
-pub enum ChromeStyle {
-    Facet,
-    Ghost,
+pub enum ThemeRenderer {
+    ObsidianFacet,
+    AuroraGlass,
 }
 
 #[derive(Clone, Copy)]
-pub struct WindowStateTheme {
+pub struct WindowStateTokens {
     pub border: u32,
     pub title_top: u32,
     pub title_bottom: u32,
 }
 
-pub const FACET_FRAME: UiTheme = UiTheme {
+pub const OBSIDIAN_BLOOM: Theme = Theme {
     name: DEFAULT_THEME_NAME,
-    chrome_style: ChromeStyle::Facet,
-    active: WindowStateTheme {
-        border: 0xFF0F0C18,
-        title_top: 0xFF2C2140,
-        title_bottom: 0xFF14101D,
+    renderer: ThemeRenderer::ObsidianFacet,
+    active: WindowStateTokens {
+        border: 0xFF11131D,
+        title_top: 0xFF2A3147,
+        title_bottom: 0xFF111620,
     },
-    inactive: WindowStateTheme {
-        border: 0xFF0F0C18,
-        title_top: 0xFF1C1628,
-        title_bottom: 0xFF100D17,
+    inactive: WindowStateTokens {
+        border: 0xFF0C1018,
+        title_top: 0xFF181D2A,
+        title_bottom: 0xFF0C1018,
     },
     titlebar_height: 28,
     frame_thickness: 4,
     corner_radius: 0,
-    chrome_text: 0xFFE6E1FF,
-    chrome_text_inactive: 0xFF6E6599,
-    control_icon: 0xFFB8A8FF,
-    control_icon_inactive: 0xFF6E6599,
-    close_icon: 0xFFB8A8FF,
-    title_rule_active: 0xFF2A1F3A,
-    title_rule_inactive: 0xFF1B1426,
-    body_top: 0xFF0B0A10,
-    button_top: 0xFF2A1F3A,
-    outer_stroke: 0xFF0F0C18,
-    inner_stroke: 0xFF2A1F3A,
-    inner_stroke_inactive: 0xFF1B1426,
-    frame_fill: 0xFF1A1424,
-    frame_fill_inactive: 0xFF14101C,
-    frame_fill_bottom: 0xFF0F0C18,
-    frame_fill_bottom_inactive: 0xFF0B0910,
-    frame_bevel_light: 0xFF6D53D9,
-    frame_bevel_light_inactive: 0xFF2D2440,
-    frame_bevel_shadow: 0xFF08060C,
-    title_sheen: 0xFF4A3865,
-    facet: 0xFF231A33,
-    facet_inactive: 0xFF1A1426,
-    focus_accent: 0xFFF2C94C,
-    edge_light: 0xFF7C5CFF,
-    edge_dark: 0xFF120E18,
-    content_edge: 0xFF221A30,
-    grid_line: 0x26120E18,
-    contact_shadow: 0x66000000,
+    chrome_text: 0xFFE9EEF7,
+    chrome_text_inactive: 0xFF7C879B,
+    control_icon: 0xFFA8D7FF,
+    control_icon_inactive: 0xFF667389,
+    close_icon: 0xFFFF9EBA,
+    title_rule_active: 0xFF31405D,
+    title_rule_inactive: 0xFF1A2232,
+    body_top: 0xFF090C12,
+    button_top: 0xFF26334B,
+    outer_stroke: 0xFF070A10,
+    inner_stroke: 0xFF334360,
+    inner_stroke_inactive: 0xFF1A2232,
+    frame_fill: 0xFF171D2A,
+    frame_fill_inactive: 0xFF101620,
+    frame_fill_bottom: 0xFF0B0F16,
+    frame_fill_bottom_inactive: 0xFF080B10,
+    frame_bevel_light: 0xFF6EA8FF,
+    frame_bevel_light_inactive: 0xFF2B3952,
+    frame_bevel_shadow: 0xFF04060A,
+    title_sheen: 0xFF526B9A,
+    facet: 0xFF22304A,
+    facet_inactive: 0xFF151E2E,
+    focus_accent: 0xFFFFD166,
+    edge_light: 0xFF8AD7FF,
+    edge_dark: 0xFF080B12,
+    content_edge: 0xFF1B2638,
+    grid_line: 0x221F3148,
+    contact_shadow: 0x72000000,
 };
 
-pub const GHOST_FLOWER: UiTheme = UiTheme {
-    name: "Ghost Flower",
-    chrome_style: ChromeStyle::Ghost,
-    active: WindowStateTheme {
-        border: 0x8A2A1742,
-        title_top: 0x5A42246B,
-        title_bottom: 0x24150C27,
+pub const AURORA_GLASS: Theme = Theme {
+    name: "Aurora Glass",
+    renderer: ThemeRenderer::AuroraGlass,
+    active: WindowStateTokens {
+        border: 0x8A174A5A,
+        title_top: 0x70406B87,
+        title_bottom: 0x30102734,
     },
-    inactive: WindowStateTheme {
-        border: 0x54211434,
-        title_top: 0x32150C27,
-        title_bottom: 0x16030108,
+    inactive: WindowStateTokens {
+        border: 0x54203644,
+        title_top: 0x30203344,
+        title_bottom: 0x16060C12,
     },
     titlebar_height: 28,
     frame_thickness: 4,
     corner_radius: 0,
-    chrome_text: 0xFFF2E8FF,
-    chrome_text_inactive: 0xB89584B8,
-    control_icon: 0xFFE2C8FF,
-    control_icon_inactive: 0xA77C6899,
-    close_icon: 0xFFFFC6D7,
-    title_rule_active: 0x667957A8,
-    title_rule_inactive: 0x33281740,
-    body_top: 0xE60A0612,
-    button_top: 0x4D8457B0,
-    outer_stroke: 0x707957A8,
-    inner_stroke: 0x55C7A2FF,
-    inner_stroke_inactive: 0x2B5C407A,
-    frame_fill: 0x30211434,
-    frame_fill_inactive: 0x180A0612,
-    frame_fill_bottom: 0x22030108,
-    frame_fill_bottom_inactive: 0x10020107,
-    frame_bevel_light: 0x80C7A2FF,
-    frame_bevel_light_inactive: 0x4D5E417C,
+    chrome_text: 0xFFF0FCFF,
+    chrome_text_inactive: 0xB89BB7C4,
+    control_icon: 0xFFC6F7FF,
+    control_icon_inactive: 0xA7749BA8,
+    close_icon: 0xFFFFB6C8,
+    title_rule_active: 0x6696E6D8,
+    title_rule_inactive: 0x33406B87,
+    body_top: 0xE6060C12,
+    button_top: 0x4D42A7B8,
+    outer_stroke: 0x7087DDEA,
+    inner_stroke: 0x66B5FFF4,
+    inner_stroke_inactive: 0x2B4C7880,
+    frame_fill: 0x30153B46,
+    frame_fill_inactive: 0x18070F14,
+    frame_fill_bottom: 0x2204090D,
+    frame_fill_bottom_inactive: 0x10020407,
+    frame_bevel_light: 0x88C6F7FF,
+    frame_bevel_light_inactive: 0x4D557B85,
     frame_bevel_shadow: 0x66000000,
-    title_sheen: 0x668457B0,
-    facet: 0x403B2460,
-    facet_inactive: 0x22150C27,
-    focus_accent: 0xFFD8A657,
-    edge_light: 0xB88457B0,
-    edge_dark: 0x99020107,
-    content_edge: 0x5542246B,
-    grid_line: 0x1F8457B0,
+    title_sheen: 0x66A7FFE7,
+    facet: 0x403B6B76,
+    facet_inactive: 0x22102530,
+    focus_accent: 0xFFFFD166,
+    edge_light: 0xC47DE7FF,
+    edge_dark: 0x99020407,
+    content_edge: 0x55406B87,
+    grid_line: 0x1F7DE7FF,
     contact_shadow: 0x8A000000,
 };
 
-pub const SOLAR_WARM_SPINE: UiTheme = UiTheme {
-    name: "Solar Warm Spine",
-    chrome_style: ChromeStyle::Facet,
-    active: WindowStateTheme {
-        border: 0xFF2A1810,
-        title_top: 0xFF5A3C21,
-        title_bottom: 0xFF24130D,
-    },
-    inactive: WindowStateTheme {
-        border: 0xFF241710,
-        title_top: 0xFF33261A,
-        title_bottom: 0xFF1B120D,
-    },
-    titlebar_height: 28,
-    frame_thickness: 4,
-    corner_radius: 0,
-    chrome_text: 0xFFFFF1C8,
-    chrome_text_inactive: 0xFFB59C70,
-    control_icon: 0xFFFFD45C,
-    control_icon_inactive: 0xFF92784D,
-    close_icon: 0xFFFFAA9B,
-    title_rule_active: 0xFF7A4A1A,
-    title_rule_inactive: 0xFF402817,
-    body_top: 0xFF17120C,
-    button_top: 0xFF6C431B,
-    outer_stroke: 0xFF1A0D08,
-    inner_stroke: 0xFF7B5B22,
-    inner_stroke_inactive: 0xFF3A2B18,
-    frame_fill: 0xFF3B2514,
-    frame_fill_inactive: 0xFF24180F,
-    frame_fill_bottom: 0xFF1B0F09,
-    frame_fill_bottom_inactive: 0xFF120C08,
-    frame_bevel_light: 0xFFE1C042,
-    frame_bevel_light_inactive: 0xFF6A5B32,
-    frame_bevel_shadow: 0xFF0B0705,
-    title_sheen: 0xFFA76020,
-    facet: 0xFF4A2C16,
-    facet_inactive: 0xFF2F2014,
-    focus_accent: 0xFFE1C042,
-    edge_light: 0xFFC77619,
-    edge_dark: 0xFF120905,
-    content_edge: 0xFF3D2817,
-    grid_line: 0x244D4E2E,
-    contact_shadow: 0x66000000,
-};
+impl Theme {
+    pub fn render_window_chrome<'a>(
+        self,
+        request: WindowChromeRequest<'a>,
+        out: &mut PaintList<'a>,
+    ) {
+        if request.frame <= 0 || request.visual_rect.w <= 0 || request.visual_rect.h <= 0 {
+            return;
+        }
 
-pub const LEATHER_GRAIN: UiTheme = UiTheme {
-    name: "Leather Grain",
-    chrome_style: ChromeStyle::Facet,
-    active: WindowStateTheme {
-        border: 0xFF171318,
-        title_top: 0xFF342C35,
-        title_bottom: 0xFF1F1A20,
-    },
-    inactive: WindowStateTheme {
-        border: 0xFF171318,
-        title_top: 0xFF272128,
-        title_bottom: 0xFF1C171D,
-    },
-    titlebar_height: 28,
-    frame_thickness: 4,
-    corner_radius: 0,
-    chrome_text: 0xFFF0E6EE,
-    chrome_text_inactive: 0xFF9D8F9A,
-    control_icon: 0xFFD8C3D2,
-    control_icon_inactive: 0xFF8D7F89,
-    close_icon: 0xFFFFB9C0,
-    title_rule_active: 0xFF4B3E49,
-    title_rule_inactive: 0xFF2B242C,
-    body_top: 0xFF171318,
-    button_top: 0xFF3E343F,
-    outer_stroke: 0xFF120F13,
-    inner_stroke: 0xFF4B3E49,
-    inner_stroke_inactive: 0xFF2B242C,
-    frame_fill: 0xFF2B242C,
-    frame_fill_inactive: 0xFF221C23,
-    frame_fill_bottom: 0xFF1A151B,
-    frame_fill_bottom_inactive: 0xFF171318,
-    frame_bevel_light: 0xFF6E5F6A,
-    frame_bevel_light_inactive: 0xFF3A313A,
-    frame_bevel_shadow: 0xFF0C090D,
-    title_sheen: 0xFF4E414E,
-    facet: 0xFF342C35,
-    facet_inactive: 0xFF241E25,
-    focus_accent: 0xFFC79A70,
-    edge_light: 0xFF8F6E5A,
-    edge_dark: 0xFF120F13,
-    content_edge: 0xFF342C35,
-    grid_line: 0x242B242C,
-    contact_shadow: 0x70000000,
-};
+        match self.renderer {
+            ThemeRenderer::ObsidianFacet => push_facet_frame(self, request, out),
+            ThemeRenderer::AuroraGlass => push_glass_frame(self, request, out),
+        }
 
-pub const LINEN_LIGHT: UiTheme = UiTheme {
-    name: "Linen Light",
-    chrome_style: ChromeStyle::Facet,
-    active: WindowStateTheme {
-        border: 0xFFB8AA9A,
-        title_top: 0xFFFFFBF4,
-        title_bottom: 0xFFE9DED2,
-    },
-    inactive: WindowStateTheme {
-        border: 0xFFCFC4B8,
-        title_top: 0xFFF8F2EA,
-        title_bottom: 0xFFE9E0D7,
-    },
-    titlebar_height: 28,
-    frame_thickness: 4,
-    corner_radius: 0,
-    chrome_text: 0xFF2A2520,
-    chrome_text_inactive: 0xFF7B7066,
-    control_icon: 0xFF3E352D,
-    control_icon_inactive: 0xFF8C8176,
-    close_icon: 0xFF8E2F2B,
-    title_rule_active: 0xFFD3C3B1,
-    title_rule_inactive: 0xFFE2D8CD,
-    body_top: 0xFFFBF7F1,
-    button_top: 0xFFE8DCCF,
-    outer_stroke: 0xFFB8AA9A,
-    inner_stroke: 0xFFFFFFFF,
-    inner_stroke_inactive: 0xFFF3E9DF,
-    frame_fill: 0xFFF7F1E9,
-    frame_fill_inactive: 0xFFF0E8DF,
-    frame_fill_bottom: 0xFFE7DDD2,
-    frame_fill_bottom_inactive: 0xFFE1D7CC,
-    frame_bevel_light: 0xFFFFFFFF,
-    frame_bevel_light_inactive: 0xFFF8F2EA,
-    frame_bevel_shadow: 0xFFB8AA9A,
-    title_sheen: 0xFFFFFFFF,
-    facet: 0xFFEFE5DA,
-    facet_inactive: 0xFFE8DED3,
-    focus_accent: 0xFF7D5B2E,
-    edge_light: 0xFFD6BE9E,
-    edge_dark: 0xFFA99A8A,
-    content_edge: 0xFFD7CCC0,
-    grid_line: 0x225E554C,
-    contact_shadow: 0x33000000,
-};
-
-pub fn default_theme() -> UiTheme {
-    FACET_FRAME
+        if request.titlebar_height > 0 {
+            push_controls(self, request, out);
+            if let Some(title) = request.title {
+                push_title(self, request, title, out);
+            }
+        }
+    }
 }
 
-pub fn theme_by_name(name: &str) -> UiTheme {
+pub fn default_theme() -> Theme {
+    OBSIDIAN_BLOOM
+}
+
+pub fn theme_by_name(name: &str) -> Theme {
     let trimmed = name.trim();
-    if trimmed.eq_ignore_ascii_case("facet frame")
-        || trimmed.eq_ignore_ascii_case("facet-frame")
-        || trimmed.eq_ignore_ascii_case("facet_frame")
-        || trimmed.eq_ignore_ascii_case("bloom chrome")
-        || trimmed.eq_ignore_ascii_case("bloom-chrome")
-        || trimmed.eq_ignore_ascii_case("bloom_chrome")
+    if trimmed.eq_ignore_ascii_case("aurora glass")
+        || trimmed.eq_ignore_ascii_case("aurora-glass")
+        || trimmed.eq_ignore_ascii_case("aurora_glass")
+        || trimmed.eq_ignore_ascii_case("glass")
     {
-        FACET_FRAME
-    } else if trimmed.eq_ignore_ascii_case("ghost flower")
-        || trimmed.eq_ignore_ascii_case("ghost-flower")
-        || trimmed.eq_ignore_ascii_case("ghost_flower")
-        || trimmed.eq_ignore_ascii_case("flower.png")
-        || trimmed.eq_ignore_ascii_case("/public/wallpapers/flower.png")
+        AURORA_GLASS
+    } else if trimmed.eq_ignore_ascii_case("obsidian bloom")
+        || trimmed.eq_ignore_ascii_case("obsidian-bloom")
+        || trimmed.eq_ignore_ascii_case("obsidian_bloom")
     {
-        GHOST_FLOWER
-    } else if trimmed.eq_ignore_ascii_case("solar warm spine")
-        || trimmed.eq_ignore_ascii_case("solar-warm-spine")
-        || trimmed.eq_ignore_ascii_case("solar_warm_spine")
-        || trimmed.eq_ignore_ascii_case("flat warm")
-        || trimmed.eq_ignore_ascii_case("flat-warm")
-        || trimmed.eq_ignore_ascii_case("flat_warm")
-        || trimmed.eq_ignore_ascii_case("solarized warm")
-        || trimmed.eq_ignore_ascii_case("solarized-warm")
-        || trimmed.eq_ignore_ascii_case("solarized_warm")
-        || trimmed.eq_ignore_ascii_case("flower.bmp")
-        || trimmed.eq_ignore_ascii_case("/public/wallpapers/flower.bmp")
-    {
-        SOLAR_WARM_SPINE
-    } else if trimmed.eq_ignore_ascii_case("leather grain")
-        || trimmed.eq_ignore_ascii_case("leather-grain")
-        || trimmed.eq_ignore_ascii_case("leather_grain")
-        || trimmed.eq_ignore_ascii_case("leather.bmp")
-        || trimmed.eq_ignore_ascii_case("/public/wallpapers/leather.bmp")
-    {
-        LEATHER_GRAIN
-    } else if trimmed.eq_ignore_ascii_case("linen light")
-        || trimmed.eq_ignore_ascii_case("linen-light")
-        || trimmed.eq_ignore_ascii_case("linen_light")
-        || trimmed.eq_ignore_ascii_case("linen.bmp")
-        || trimmed.eq_ignore_ascii_case("/public/wallpapers/linen.bmp")
-    {
-        LINEN_LIGHT
+        OBSIDIAN_BLOOM
     } else {
-        default_theme()
+        OBSIDIAN_BLOOM
     }
+}
+
+fn push_facet_frame<'a>(theme: Theme, request: WindowChromeRequest<'a>, out: &mut PaintList<'a>) {
+    let rect = request.visual_rect;
+    let frame = request.frame;
+    let titlebar_height = request.titlebar_height;
+    let active = request.state.active;
+    let fill_top = if active { theme.frame_fill } else { theme.frame_fill_inactive };
+    let fill_bottom =
+        if active { theme.frame_fill_bottom } else { theme.frame_fill_bottom_inactive };
+    let inner = if active { theme.inner_stroke } else { theme.inner_stroke_inactive };
+    let facet = if active { theme.facet } else { theme.facet_inactive };
+    let state = if active { theme.active } else { theme.inactive };
+
+    if titlebar_height > 0 {
+        out.commands.push(PaintCommand::VerticalGradient {
+            rect: ThemeRect { h: titlebar_height, ..rect },
+            top: state.title_top,
+            bottom: state.title_bottom,
+        });
+        if active && titlebar_height > 6 && rect.w > frame * 2 {
+            out.commands.push(PaintCommand::HorizontalGradient {
+                rect: ThemeRect { x: rect.x + frame, y: rect.y + 2, w: rect.w - frame * 2, h: 2 },
+                left: state.title_top,
+                center: theme.title_sheen,
+                right: state.title_top,
+            });
+        }
+    } else {
+        out.commands.push(PaintCommand::VerticalGradient {
+            rect: ThemeRect { h: frame, ..rect },
+            top: fill_top,
+            bottom: fill_bottom,
+        });
+    }
+
+    out.commands.push(PaintCommand::VerticalGradient {
+        rect: ThemeRect { w: frame, ..rect },
+        top: fill_top,
+        bottom: fill_bottom,
+    });
+    out.commands.push(PaintCommand::VerticalGradient {
+        rect: ThemeRect { x: rect.x + rect.w - frame, w: frame, ..rect },
+        top: fill_top,
+        bottom: fill_bottom,
+    });
+    out.commands.push(PaintCommand::HorizontalGradient {
+        rect: ThemeRect { y: rect.y + rect.h - frame, h: frame, ..rect },
+        left: fill_bottom,
+        center: fill_top,
+        right: fill_bottom,
+    });
+    out.commands.push(PaintCommand::StrokeRect { rect, thickness: 2, color: theme.outer_stroke });
+
+    push_frame_bevel(out, rect, frame, active, theme);
+    push_title_separator(out, rect, frame, titlebar_height, active, theme);
+    push_content_edges(out, rect, frame, titlebar_height, inner);
+    push_corner_facets(out, rect, facet);
+    if active {
+        push_top_glow_strip(out, rect.x + 2, rect.y, rect.w.saturating_sub(4), theme);
+        out.commands.push(PaintCommand::FillRect {
+            rect: ThemeRect::new(rect.x + rect.w - 4, rect.y + 2, 2, 2),
+            color: theme.focus_accent,
+        });
+        out.commands.push(PaintCommand::FillRect {
+            rect: ThemeRect::new(rect.x + frame, rect.y + rect.h - frame - 2, 2, 2),
+            color: theme.focus_accent,
+        });
+    }
+}
+
+fn push_glass_frame<'a>(theme: Theme, request: WindowChromeRequest<'a>, out: &mut PaintList<'a>) {
+    let rect = request.visual_rect;
+    let frame = request.frame;
+    let titlebar_height = request.titlebar_height;
+    let active = request.state.active;
+    let state = if active { theme.active } else { theme.inactive };
+    if titlebar_height > 0 && (active || request.state.hovered) {
+        out.commands.push(PaintCommand::VerticalGradient {
+            rect: ThemeRect { h: titlebar_height, ..rect },
+            top: state.title_top,
+            bottom: state.title_bottom,
+        });
+        out.commands.push(PaintCommand::FillRect {
+            rect: ThemeRect::new(rect.x, rect.y + titlebar_height - 1, rect.w, 1),
+            color: if active { theme.title_rule_active } else { theme.title_rule_inactive },
+        });
+    }
+    if active {
+        push_top_glow_strip(out, rect.x + 2, rect.y, rect.w.saturating_sub(4), theme);
+    }
+    if request.state.hovered {
+        let inner = if active { theme.inner_stroke } else { theme.inner_stroke_inactive };
+        out.commands.push(PaintCommand::StrokeRect {
+            rect,
+            thickness: 1,
+            color: theme.outer_stroke,
+        });
+        push_content_edges(out, rect, frame, titlebar_height, inner);
+    }
+}
+
+fn push_frame_bevel(
+    out: &mut PaintList<'_>,
+    rect: ThemeRect,
+    frame: i32,
+    active: bool,
+    theme: Theme,
+) {
+    if rect.w < 6 || rect.h < 6 || frame <= 0 {
+        return;
+    }
+    let light = if active { theme.frame_bevel_light } else { theme.frame_bevel_light_inactive };
+    let shadow = theme.frame_bevel_shadow;
+    let mid = if active { theme.edge_light } else { theme.inner_stroke_inactive };
+    let inner_x = rect.x + frame.min(rect.w / 2);
+    let inner_y = rect.y + frame.min(rect.h / 2);
+    let inner_w = rect.w - frame * 2;
+    let inner_h = rect.h - frame * 2;
+
+    push_fill(out, rect.x + 2, rect.y + 2, rect.w - 4, 1, light);
+    push_fill(out, rect.x + 2, rect.y + 2, 1, rect.h - 4, mid);
+    push_fill(out, rect.x + 2, rect.y + rect.h - 3, rect.w - 4, 1, shadow);
+    push_fill(out, rect.x + rect.w - 3, rect.y + 2, 1, rect.h - 4, shadow);
+    if inner_w > 4 && inner_h > 4 {
+        push_fill(out, inner_x, inner_y, inner_w, 1, shadow);
+        push_fill(out, inner_x, inner_y, 1, inner_h, shadow);
+        push_fill(out, inner_x, inner_y + inner_h - 1, inner_w, 1, light);
+        push_fill(out, inner_x + inner_w - 1, inner_y, 1, inner_h, light);
+    }
+}
+
+fn push_title_separator(
+    out: &mut PaintList<'_>,
+    rect: ThemeRect,
+    frame: i32,
+    titlebar_height: i32,
+    active: bool,
+    theme: Theme,
+) {
+    if titlebar_height <= 0 || titlebar_height >= rect.h || rect.w <= frame * 2 {
+        return;
+    }
+    let sep_y = rect.y + titlebar_height - 1;
+    push_fill(
+        out,
+        rect.x + frame,
+        sep_y - 1,
+        rect.w - frame * 2,
+        1,
+        if active { theme.frame_bevel_light } else { theme.frame_bevel_light_inactive },
+    );
+    push_fill(
+        out,
+        rect.x + frame,
+        sep_y,
+        rect.w - frame * 2,
+        1,
+        if active { theme.title_rule_active } else { theme.title_rule_inactive },
+    );
+}
+
+fn push_content_edges(
+    out: &mut PaintList<'_>,
+    rect: ThemeRect,
+    frame: i32,
+    titlebar_height: i32,
+    color: u32,
+) {
+    let body_y = rect.y + titlebar_height;
+    let body_h = rect.h - titlebar_height - frame;
+    if body_h <= 0 || rect.w <= frame * 2 {
+        return;
+    }
+    push_fill(out, rect.x + frame - 1, body_y, 1, body_h, color);
+    push_fill(out, rect.x + rect.w - frame, body_y, 1, body_h, color);
+    push_fill(out, rect.x + frame, rect.y + rect.h - frame, rect.w - frame * 2, 1, color);
+}
+
+fn push_corner_facets(out: &mut PaintList<'_>, rect: ThemeRect, color: u32) {
+    if rect.w < 16 || rect.h < 16 {
+        return;
+    }
+    let size = 8;
+    let inset = 2;
+    for row in 0..size {
+        push_fill(out, rect.x + inset, rect.y + inset + row, size - row, 1, color);
+        push_fill(
+            out,
+            rect.x + rect.w - inset - size + row,
+            rect.y + rect.h - inset - size + row,
+            size - row,
+            1,
+            color,
+        );
+    }
+}
+
+fn push_top_glow_strip(out: &mut PaintList<'_>, x: i32, y: i32, w: i32, theme: Theme) {
+    if w <= 0 {
+        return;
+    }
+    for sx in 0..w {
+        let t = if w <= 1 { 0 } else { (sx as u32).saturating_mul(255) / (w as u32 - 1) };
+        let color = if t < 85 {
+            lerp_argb(0x008AD7FF, theme.edge_light, t.saturating_mul(3))
+        } else if t < 170 {
+            lerp_argb(theme.edge_light, theme.control_icon, (t - 85).saturating_mul(3))
+        } else {
+            lerp_argb(theme.control_icon, 0x00FFD166, (t - 170).saturating_mul(3))
+        };
+        push_fill(out, x + sx, y, 1, 2, color);
+    }
+}
+
+fn push_controls<'a>(theme: Theme, request: WindowChromeRequest<'a>, out: &mut PaintList<'a>) {
+    let icon_color =
+        if request.state.active { theme.control_icon } else { theme.control_icon_inactive };
+    for control in request.controls.iter().flatten() {
+        let hovered = contains(control.rect, request.state.pointer_x, request.state.pointer_y);
+        let pressed = hovered && request.state.primary_button_down;
+        let icon = control_icon(control.control, request.state.shaded, request.state.fullscreen);
+        let color = if pressed {
+            theme.body_top
+        } else if matches!(control.control, ThemeControl::Close) {
+            theme.close_icon
+        } else {
+            icon_color
+        };
+        if hovered {
+            out.commands.push(PaintCommand::FillRect {
+                rect: centered_square(control.rect, 16),
+                color: if pressed { theme.edge_light } else { theme.button_top },
+            });
+        }
+        out.commands.push(PaintCommand::Icon { rect: control.rect, icon, color });
+    }
+}
+
+fn push_title<'a>(
+    theme: Theme,
+    request: WindowChromeRequest<'a>,
+    title: &'a str,
+    out: &mut PaintList<'a>,
+) {
+    let buttons_w = request
+        .controls
+        .iter()
+        .flatten()
+        .next()
+        .map(|button| request.visual_rect.x + request.visual_rect.w - button.rect.x)
+        .unwrap_or(0);
+    let max_chars = ((request.visual_rect.w - request.frame * 2 - 24 - buttons_w).max(10) as u32)
+        .saturating_div(10)
+        .max(1) as usize;
+    out.commands.push(PaintCommand::Text {
+        x: request.visual_rect.x + request.frame + 8,
+        y: request.visual_rect.y + (request.titlebar_height + 16) / 2,
+        px_size_bits: 16.0f32.to_bits(),
+        text: title_prefix(title, max_chars),
+        color: if request.state.active { theme.chrome_text } else { theme.chrome_text_inactive },
+    });
+}
+
+fn push_fill(out: &mut PaintList<'_>, x: i32, y: i32, w: i32, h: i32, color: u32) {
+    if w > 0 && h > 0 {
+        out.commands.push(PaintCommand::FillRect { rect: ThemeRect::new(x, y, w, h), color });
+    }
+}
+
+fn centered_square(rect: ThemeRect, size: i32) -> ThemeRect {
+    let size = size.min(rect.w).min(rect.h);
+    ThemeRect::new(rect.x + (rect.w - size) / 2, rect.y + (rect.h - size) / 2, size, size)
+}
+
+fn contains(rect: ThemeRect, x: i32, y: i32) -> bool {
+    x >= rect.x && x < rect.x + rect.w && y >= rect.y && y < rect.y + rect.h
+}
+
+fn control_icon(control: ThemeControl, shaded: bool, fullscreen: bool) -> ThemeIcon {
+    match control {
+        ThemeControl::Shade => {
+            if shaded {
+                ThemeIcon::Unshade
+            } else {
+                ThemeIcon::Shade
+            }
+        }
+        ThemeControl::Fullscreen => {
+            if fullscreen {
+                ThemeIcon::Restore
+            } else {
+                ThemeIcon::Fullscreen
+            }
+        }
+        ThemeControl::Close => ThemeIcon::Close,
+    }
+}
+
+fn title_prefix(title: &str, max_chars: usize) -> &str {
+    if max_chars == 0 {
+        return "";
+    }
+    let mut end = 0;
+    let mut count = 0;
+    for (idx, ch) in title.char_indices() {
+        if count >= max_chars {
+            break;
+        }
+        end = idx + ch.len_utf8();
+        count += 1;
+    }
+    if count < title.chars().count() { &title[..end] } else { title }
+}
+
+fn lerp_argb(a: u32, b: u32, t: u32) -> u32 {
+    let t = t.min(255);
+    let inv = 255 - t;
+    let aa = (a >> 24) & 0xFF;
+    let ar = (a >> 16) & 0xFF;
+    let ag = (a >> 8) & 0xFF;
+    let ab = a & 0xFF;
+    let ba = (b >> 24) & 0xFF;
+    let br = (b >> 16) & 0xFF;
+    let bg = (b >> 8) & 0xFF;
+    let bb = b & 0xFF;
+    let ca = (aa * inv + ba * t) / 255;
+    let cr = (ar * inv + br * t) / 255;
+    let cg = (ag * inv + bg * t) / 255;
+    let cb = (ab * inv + bb * t) / 255;
+    (ca << 24) | (cr << 16) | (cg << 8) | cb
 }
 
 #[cfg(test)]
@@ -340,11 +530,9 @@ mod tests {
     use super::*;
 
     #[test]
-    fn bundled_wallpaper_theme_aliases_resolve_to_matching_chrome() {
-        assert_eq!(theme_by_name("flower.png").name, GHOST_FLOWER.name);
-        assert_eq!(theme_by_name("flower.png").chrome_style, ChromeStyle::Ghost);
-        assert_eq!(theme_by_name("flower.bmp").name, SOLAR_WARM_SPINE.name);
-        assert_eq!(theme_by_name("leather.bmp").name, LEATHER_GRAIN.name);
-        assert_eq!(theme_by_name("linen.bmp").name, LINEN_LIGHT.name);
+    fn bundled_theme_names_resolve_to_two_theme_system() {
+        assert_eq!(default_theme().name, OBSIDIAN_BLOOM.name);
+        assert_eq!(theme_by_name("aurora-glass").name, AURORA_GLASS.name);
+        assert_eq!(theme_by_name("leather.bmp").name, OBSIDIAN_BLOOM.name);
     }
 }

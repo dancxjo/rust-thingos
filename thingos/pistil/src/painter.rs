@@ -17,12 +17,11 @@
 //! painter.draw_panel(&mut buf, stride, height, x, y, w, h, PanelStyle::Solid);
 //! ```
 //!
-//! ## Default theme
+//! ## Built-in fallback colours
 //!
-//! `Painter::new()` bakes in the Facet-Frame theme constants.  A future
-//! `Painter::with_theme(…)` constructor will allow customisation; for now,
-//! callers that need custom colours can reach into the individual cache
-//! helpers directly.
+//! `Painter::new()` uses neutral Obsidian Bloom fallback colours for callers
+//! that draw primitives directly.  Compositor chrome should use `stile` theme
+//! paint lists and treat Pistil as the executor.
 
 use alloc::vec::Vec;
 
@@ -32,7 +31,7 @@ use crate::mask::MaskCache;
 use crate::shadow::draw_nine_slice_shadow;
 
 // ---------------------------------------------------------------------------
-// Default theme constants (Facet Frame)
+// Built-in primitive fallback constants
 // ---------------------------------------------------------------------------
 
 const DEFAULT_TITLE_TOP_ACTIVE: u32 = 0xFF1A1424;
@@ -98,7 +97,7 @@ pub struct Painter {
 }
 
 impl Painter {
-    /// Create a [`Painter`] with the default Facet-Frame theme values.
+    /// Create a [`Painter`] with the built-in primitive fallback values.
     pub fn new() -> Self {
         Self {
             gradient_cache: GradientCache::new(),
@@ -336,7 +335,7 @@ mod tests {
     use super::*;
 
     #[test]
-    fn painter_default_theme_constants() {
+    fn painter_builtin_fallback_constants() {
         let p = Painter::new();
         assert_eq!(p.titlebar_height, DEFAULT_TITLEBAR_HEIGHT);
         assert_eq!(p.frame_thickness, DEFAULT_FRAME_THICKNESS);

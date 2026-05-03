@@ -11,8 +11,7 @@ use abi::hid::Key;
 use libdl::{RTLD_NOW, dlerror, dlopen_str, dlsym_bytes};
 use petals::{
     AlignItems, AvailableSpace, CalcInput, CalcKeyNode, CalcState, Calculator, Color,
-    FlexDirection, JustifyContent, ResolvedStyle, Size, State, UiTheme, default_theme,
-    theme_by_name,
+    FlexDirection, JustifyContent, ResolvedStyle, Size, State, Theme, default_theme, theme_by_name,
 };
 use stem::abi::syscall::{PollHandle, poll_flags};
 use stem::info;
@@ -363,7 +362,7 @@ fn render_calc(
     calc: &Calculator,
     state: &CalcState,
     pressed_key: Option<usize>,
-    theme: UiTheme,
+    theme: Theme,
     text_renderer: Option<&TextRenderer>,
 ) {
     unsafe {
@@ -382,7 +381,7 @@ fn render_calc_petal(
     calc: &Calculator,
     state: &CalcState,
     pressed_key: Option<usize>,
-    theme: UiTheme,
+    theme: Theme,
     text_renderer: Option<&TextRenderer>,
 ) -> Result<(), ()> {
     let (mut tree, nodes) = calc.build_tree_for_theme(state, theme).map_err(|_| ())?;
@@ -447,7 +446,7 @@ fn draw_key(
     tree: &petals::UiTree,
     key: &CalcKeyNode,
     dark_text: bool,
-    theme: UiTheme,
+    theme: Theme,
 ) -> Result<(), ()> {
     fill_node(pixels, width, height, tree, key.node)?;
     let label = tree.node(key.label).ok_or(())?;
@@ -495,7 +494,7 @@ fn read_theme_name() -> String {
     if name.is_empty() { String::from(default_theme().name) } else { name }
 }
 
-fn refresh_theme(current_name: &mut String, theme: &mut UiTheme) -> bool {
+fn refresh_theme(current_name: &mut String, theme: &mut Theme) -> bool {
     let next_name = read_theme_name();
     let next_theme = theme_by_name(&next_name);
     if next_theme.name == theme.name && next_name == *current_name {

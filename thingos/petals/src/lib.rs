@@ -33,8 +33,8 @@ pub use node::{AttrValue, Attrs, Node, NodeId};
 pub use pressable::{InputEvent, KeyCode, PressConfig, PressEvent, PressState, Pressable, Vec2};
 pub use service_loop::{PetalsEvent, PetalsService, ServiceAction};
 pub use stile::{
-    AlignItems, ChromeStyle, Color, Control, Declaration, FlexDirection, FontWeight,
-    JustifyContent, ResolvedStyle, Rule, Selector, State, StateSet, Stylable, StyleProperty,
-    UiTheme, WindowStateTheme, default_theme, theme_by_name,
+    AlignItems, Color, Control, Declaration, FlexDirection, FontWeight, JustifyContent,
+    ResolvedStyle, Rule, Selector, State, StateSet, Stylable, StyleProperty, Theme,
+    WindowStateTokens, default_theme, theme_by_name,
 };
 pub use taffy::TaffyError;

@@ -9,17 +9,22 @@
 extern crate alloc;
 
 pub mod cascade;
+pub mod paint;
 pub mod rule;
 pub mod selector;
 pub mod theme;
 pub mod values;
 
 pub use cascade::{compute, compute_for};
+pub use paint::{
+    CompiledTheme, PaintCommand, PaintList, ThemeControl, ThemeControlRect, ThemeIcon, ThemePart,
+    ThemeRect, ThemeRuntimeError, ThemeState, WasiThemeRuntime, WindowChromeRequest,
+};
 pub use rule::{Declaration, Rule};
 pub use selector::{Selector, StylableSurface};
 pub use theme::{
-    ChromeStyle, DEFAULT_THEME_NAME, FACET_FRAME, GHOST_FLOWER, LEATHER_GRAIN, LINEN_LIGHT,
-    SOLAR_WARM_SPINE, UiTheme, WindowStateTheme, default_theme, theme_by_name,
+    AURORA_GLASS, DEFAULT_THEME_NAME, OBSIDIAN_BLOOM, Theme, ThemeRenderer, WindowStateTokens,
+    default_theme, theme_by_name,
 };
 pub use values::{
     AlignItems, Color, Control, FlexDirection, FontWeight, JustifyContent, ResolvedStyle, State,

@@ -10,7 +10,7 @@ use core::convert::TryInto;
 use libdl::{RTLD_NOW, dlerror, dlopen_str, dlsym_bytes};
 use petals::{
     AlignItems, AvailableSpace, Clock, ClockState, Color, FlexDirection, JustifyContent,
-    ResolvedStyle, Size, UiTheme, default_theme, theme_by_name,
+    ResolvedStyle, Size, Theme, default_theme, theme_by_name,
 };
 use stem::abi::syscall::{PollHandle, poll_flags};
 use stem::info;
@@ -341,7 +341,7 @@ fn render_clock(
     clock: &Clock,
     state: Option<&ClockState>,
     waiting_text: &str,
-    theme: UiTheme,
+    theme: Theme,
     text_renderer: Option<&TextRenderer>,
 ) -> bool {
     unsafe {
@@ -419,7 +419,7 @@ fn render_clock_petal(
     pixels: &mut [u32],
     clock: &Clock,
     state: &ClockState,
-    theme: UiTheme,
+    theme: Theme,
     text_renderer: Option<&TextRenderer>,
 ) -> Result<(), ()> {
     let (mut tree, nodes) = clock.build_tree_for_theme(state, theme).map_err(|_| ())?;
@@ -506,7 +506,7 @@ fn read_theme_name() -> String {
     if name.is_empty() { String::from(default_theme().name) } else { name }
 }
 
-fn refresh_theme(current_name: &mut String, theme: &mut UiTheme) -> bool {
+fn refresh_theme(current_name: &mut String, theme: &mut Theme) -> bool {
     let next_name = read_theme_name();
     let next_theme = theme_by_name(&next_name);
     if next_theme.name == theme.name && next_name == *current_name {

@@ -53,20 +53,16 @@ Feature: Bloom compositor desktop behavior
     And I wait for 2 seconds
     Then the latest serial output should not contain "VFS: sys_fs_open path='/session/desktop/wallpaper'"
 
-  Scenario: Bundled wallpaper chrome themes can be selected through the session theme file
+  Scenario: Built-in themes can be selected through the session theme file
     Given the machine is booted
     Then the serial output should contain "bloom: service loop started" within 60s
     When I wait for the shell prompt
-    And I type "echo flower.png > /session/desktop/theme" on the serial console
-    Then the serial output should contain "Applying theme Ghost Flower" within 60s
-    And the serial output should contain "clock: applying theme Ghost Flower" within 60s
-    When I type "echo flower.bmp > /session/desktop/theme" on the serial console
-    Then the serial output should contain "Applying theme Solar Warm Spine" within 60s
-    And the serial output should contain "clock: applying theme Solar Warm Spine" within 60s
-    When I type "echo leather.bmp > /session/desktop/theme" on the serial console
-    Then the serial output should contain "Applying theme Leather Grain" within 60s
-    When I type "echo linen.bmp > /session/desktop/theme" on the serial console
-    Then the serial output should contain "Applying theme Linen Light" within 60s
+    And I type "echo aurora-glass > /session/desktop/theme" on the serial console
+    Then the serial output should contain "Applying theme Aurora Glass" within 60s
+    And the serial output should contain "clock: applying theme Aurora Glass" within 60s
+    When I type "echo obsidian-bloom > /session/desktop/theme" on the serial console
+    Then the serial output should contain "Applying theme Obsidian Bloom" within 60s
+    And the serial output should contain "clock: applying theme Obsidian Bloom" within 60s
 
   @wallpaper-fade
   Scenario: Wallpaper appears with a fade from black

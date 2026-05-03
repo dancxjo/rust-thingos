@@ -6,7 +6,7 @@ use taffy::TaffyError;
 
 use crate::{
     AlignItems, Color, Declaration, Description, FlexDirection, FontWeight, JustifyContent, NodeId,
-    Rule, Selector, UiTheme, UiTree, default_theme,
+    Rule, Selector, Theme, UiTree, default_theme,
 };
 
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
@@ -122,7 +122,7 @@ impl Clock {
     pub fn build_tree_for_theme(
         &self,
         state: &ClockState,
-        theme: UiTheme,
+        theme: Theme,
     ) -> Result<(UiTree, ClockNodes), TaffyError> {
         let mut tree = UiTree::new()?;
         let root = tree.root();
@@ -135,7 +135,7 @@ impl Clock {
         self.rules_for_theme(default_theme())
     }
 
-    pub fn rules_for_theme(&self, theme: UiTheme) -> Vec<Rule<Description>> {
+    pub fn rules_for_theme(&self, theme: Theme) -> Vec<Rule<Description>> {
         let mut rules = alloc::vec![
             Rule::new(
                 Selector::has(Description::Clock),
@@ -301,6 +301,9 @@ mod tests {
         let theme = crate::theme_by_name("linen.bmp");
         let (tree, nodes) = clock.build_tree_for_theme(&state, theme).unwrap();
 
-        assert_eq!(tree.node(nodes.time).unwrap().style.color, Some(color_from_argb(theme.chrome_text)));
+        assert_eq!(
+            tree.node(nodes.time).unwrap().style.color,
+            Some(color_from_argb(theme.chrome_text))
+        );
     }
 }

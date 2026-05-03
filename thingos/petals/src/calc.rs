@@ -8,7 +8,7 @@ use taffy::TaffyError;
 
 use crate::{
     AlignItems, AttrValue, Color, Declaration, Description, FlexDirection, FontWeight,
-    JustifyContent, NodeId, Rule, Selector, State, UiTheme, UiTree, default_theme,
+    JustifyContent, NodeId, Rule, Selector, State, Theme, UiTree, default_theme,
 };
 
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
@@ -155,7 +155,7 @@ impl Calculator {
     pub fn build_tree_for_theme(
         &self,
         state: &CalcState,
-        theme: UiTheme,
+        theme: Theme,
     ) -> Result<(UiTree, CalcNodes), TaffyError> {
         let mut tree = UiTree::new()?;
         let root = tree.root();
@@ -252,7 +252,7 @@ impl Calculator {
         self.rules_for_theme(default_theme())
     }
 
-    pub fn rules_for_theme(&self, theme: UiTheme) -> Vec<Rule<Description>> {
+    pub fn rules_for_theme(&self, theme: Theme) -> Vec<Rule<Description>> {
         alloc::vec![
             Rule::new(
                 Selector::has(Description::Calculator),
