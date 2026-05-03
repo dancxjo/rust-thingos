@@ -18,11 +18,16 @@ pub enum BootPhase {
     Framebuffer,
     Memory,
     Allocator,
-    Devices,
-    Compute,
+    Display,
+    Simd,
+    Entropy,
+    Tasking,
     Vfs,
     Pci,
-    Cpu,
+    LegacyDevices,
+    Timer,
+    Smp,
+    BootInfo,
     Modules,
     Init,
     Scheduler,
@@ -35,16 +40,16 @@ const TASK_PHASES: [BootPhase; TOTAL_TASKS] = [
     BootPhase::Framebuffer, // 00 – Framebuffer Initialized
     BootPhase::Memory,      // 01 – Memory Map OK
     BootPhase::Allocator,   // 02 – Global Allocator
-    BootPhase::Devices,     // 03 – Display Registry
-    BootPhase::Compute,     // 04 – SIMD Ready
-    BootPhase::Compute,     // 05 – SIMD Ready (entropy)
-    BootPhase::Cpu,         // 06 – Tasking Initialized
+    BootPhase::Display,     // 03 – Display Registry
+    BootPhase::Simd,        // 04 – SIMD Ready
+    BootPhase::Entropy,     // 05 – SIMD Ready (entropy)
+    BootPhase::Tasking,     // 06 – Tasking Initialized
     BootPhase::Vfs,         // 07 – VFS Root Ready
     BootPhase::Pci,         // 08 – PCI Bus Scanned
-    BootPhase::Devices,     // 09 – Legacy Devices
-    BootPhase::Cpu,         // 10 – BSP Timer OK
-    BootPhase::Cpu,         // 11 – SMP Bring-up
-    BootPhase::Modules,     // 12 – Boot Info OK
+    BootPhase::LegacyDevices, // 09 – Legacy Devices
+    BootPhase::Timer,       // 10 – BSP Timer OK
+    BootPhase::Smp,         // 11 – SMP Bring-up
+    BootPhase::BootInfo,    // 12 – Boot Info OK
     BootPhase::Modules,     // 13 – Modules Scanned
     BootPhase::Init,        // 14 – Spawning Sprout
     BootPhase::Scheduler,   // 15 – Entering Scheduler
@@ -254,11 +259,16 @@ fn icon_bits_for_phase(phase: BootPhase) -> &'static [[u128; 2]; 80] {
         BootPhase::Framebuffer => &ICON_FRAMEBUFFER,
         BootPhase::Memory => &ICON_MEMORY,
         BootPhase::Allocator => &ICON_ALLOCATOR,
-        BootPhase::Devices => &ICON_DEVICES,
-        BootPhase::Compute => &ICON_COMPUTE,
+        BootPhase::Display => &ICON_DISPLAY,
+        BootPhase::Simd => &ICON_SIMD,
+        BootPhase::Entropy => &ICON_ENTROPY,
+        BootPhase::Tasking => &ICON_TASKING,
         BootPhase::Vfs => &ICON_VFS,
         BootPhase::Pci => &ICON_PCI,
-        BootPhase::Cpu => &ICON_CPU,
+        BootPhase::LegacyDevices => &ICON_LEGACY_DEVICES,
+        BootPhase::Timer => &ICON_TIMER,
+        BootPhase::Smp => &ICON_SMP,
+        BootPhase::BootInfo => &ICON_BOOT_INFO,
         BootPhase::Modules => &ICON_MODULES,
         BootPhase::Init => &ICON_INIT,
         BootPhase::Scheduler => &ICON_SCHEDULER,

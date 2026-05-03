@@ -1090,6 +1090,7 @@ pub fn start<R: BootRuntime>(runtime: &'static R) -> ! {
 
     boot_trace(runtime, b"[kernel:start] pre-memory contract point\r\n");
 
+    kinfo!("Initializing memory subsystem...");
     boot_trace(runtime, b"[kernel:start] memory::init\r\n");
     memory::init(runtime);
     boot_trace(runtime, b"[kernel:start] memory::init ok\r\n");
@@ -1179,18 +1180,18 @@ pub fn start<R: BootRuntime>(runtime: &'static R) -> ! {
         boot_trace(runtime, b"[kernel:start] framebuffer/devfs no fb\r\n");
     }
     boot_trace(runtime, b"[kernel:start] framebuffer/devfs ok\r\n");
-    crate::boot_progress::push(crate::boot_progress::BootPhase::Devices, "Display registry ready");
+    crate::boot_progress::push(crate::boot_progress::BootPhase::Display, "Display registry ready");
 
     boot_trace(runtime, b"[kernel:start] kinfo(simd) begin\r\n");
     kinfo!("Initializing SIMD...");
     boot_trace(runtime, b"[kernel:start] kinfo(simd) ok\r\n");
     runtime.simd_init_cpu();
     boot_trace(runtime, b"[kernel:start] simd init ok\r\n");
-    crate::boot_progress::push(crate::boot_progress::BootPhase::Compute, "SIMD ready");
+    crate::boot_progress::push(crate::boot_progress::BootPhase::Simd, "SIMD ready");
 
-    boot_trace(runtime, b"[kernel:start] kdebug(entropy) begin\r\n");
-    kdebug!("Seeding entropy pool...");
-    boot_trace(runtime, b"[kernel:start] kdebug(entropy) ok\r\n");
+    boot_trace(runtime, b"[kernel:start] kinfo(entropy) begin\r\n");
+    kinfo!("Seeding entropy pool...");
+    boot_trace(runtime, b"[kernel:start] kinfo(entropy) ok\r\n");
     let entropy_seed_start = runtime.mono_ticks();
     crate::entropy::seed_from_hardware();
     let entropy_seed_elapsed = runtime.mono_ticks().wrapping_sub(entropy_seed_start);
@@ -1200,19 +1201,19 @@ pub fn start<R: BootRuntime>(runtime: &'static R) -> ! {
         boot_timing_us(entropy_seed_elapsed)
     );
     boot_trace(runtime, b"[kernel:start] entropy seeded\r\n");
-    crate::boot_progress::push(crate::boot_progress::BootPhase::Compute, "Entropy ready");
+    crate::boot_progress::push(crate::boot_progress::BootPhase::Entropy, "Entropy ready");
 
     boot_trace(runtime, b"[kernel:start] kinfo(task) begin\r\n");
     kinfo!("Initializing tasking...");
     boot_trace(runtime, b"[kernel:start] kinfo(task) ok\r\n");
     crate::task::init::<R>();
     boot_trace(runtime, b"[kernel:start] task init ok\r\n");
-    crate::boot_progress::push(crate::boot_progress::BootPhase::Cpu, "Tasking initialized");
+    crate::boot_progress::push(crate::boot_progress::BootPhase::Tasking, "Tasking initialized");
     let scheduler_entry_window_start = runtime.mono_ticks();
 
-    boot_trace(runtime, b"[kernel:start] kdebug(vfs) begin\r\n");
-    kdebug!("Initializing VFS...");
-    boot_trace(runtime, b"[kernel:start] kdebug(vfs) ok\r\n");
+    boot_trace(runtime, b"[kernel:start] kinfo(vfs) begin\r\n");
+    kinfo!("Initializing VFS...");
+    boot_trace(runtime, b"[kernel:start] kinfo(vfs) ok\r\n");
     let set_cmdline_start = runtime.mono_ticks();
     crate::vfs::devfs::set_cmdline(runtime.get_kernel_cmdline().to_string());
     log_scheduler_entry_step(
@@ -1235,9 +1236,9 @@ pub fn start<R: BootRuntime>(runtime: &'static R) -> ! {
     boot_trace(runtime, b"[kernel:start] vfs init ok\r\n");
     crate::boot_progress::push(crate::boot_progress::BootPhase::Vfs, "VFS root ready");
 
-    boot_trace(runtime, b"[kernel:start] kdebug(pci) begin\r\n");
-    kdebug!("Scanning PCI bus...");
-    boot_trace(runtime, b"[kernel:start] kdebug(pci) ok\r\n");
+    boot_trace(runtime, b"[kernel:start] kinfo(pci) begin\r\n");
+    kinfo!("Scanning PCI bus...");
+    boot_trace(runtime, b"[kernel:start] kinfo(pci) ok\r\n");
     let pci_scan_start = runtime.mono_ticks();
     scan_pci();
     log_scheduler_entry_step(
@@ -1251,6 +1252,7 @@ pub fn start<R: BootRuntime>(runtime: &'static R) -> ! {
     crate::boot_progress::push(crate::boot_progress::BootPhase::Pci, "PCI bus scanned");
 
     // Register legacy ISA devices
+    kinfo!("Registering legacy devices...");
     boot_trace(runtime, b"[kernel:start] legacy device register begin\r\n");
     let register_legacy_devices_start = runtime.mono_ticks();
     {
@@ -1293,7 +1295,7 @@ pub fn start<R: BootRuntime>(runtime: &'static R) -> ! {
     );
     boot_trace(runtime, b"[kernel:start] legacy device register ok\r\n");
     crate::boot_progress::push(
-        crate::boot_progress::BootPhase::Devices,
+        crate::boot_progress::BootPhase::LegacyDevices,
         "Legacy devices registered",
     );
 
@@ -1302,9 +1304,9 @@ pub fn start<R: BootRuntime>(runtime: &'static R) -> ! {
     // If these aren't set yet, secondary CPUs get no LAPIC timer, meaning
     // wake_sleepers() (called only from on_tick → PreemptTick) never fires
     // on those CPUs, and any task that calls sleep_ms() is stuck forever.
-    boot_trace(runtime, b"[kernel:start] kdebug(preemption timer) begin\r\n");
-    kdebug!("System initialized. Setting up preemption timer (100Hz)...");
-    boot_trace(runtime, b"[kernel:start] kdebug(preemption timer) ok\r\n");
+    boot_trace(runtime, b"[kernel:start] kinfo(preemption timer) begin\r\n");
+    kinfo!("Setting up preemption timer (100Hz)...");
+    boot_trace(runtime, b"[kernel:start] kinfo(preemption timer) ok\r\n");
     let setup_preemption_timer_start = runtime.mono_ticks();
     runtime.setup_preemption_timer(100);
     log_scheduler_entry_step(
@@ -1315,7 +1317,7 @@ pub fn start<R: BootRuntime>(runtime: &'static R) -> ! {
         setup_preemption_timer_start,
     );
     boot_trace(runtime, b"[kernel:start] preemption timer ok\r\n");
-    crate::boot_progress::push(crate::boot_progress::BootPhase::Cpu, "BSP timer ready");
+    crate::boot_progress::push(crate::boot_progress::BootPhase::Timer, "BSP timer ready");
 
     // Bring up all secondary CPUs during early boot.
     boot_trace(runtime, b"[kernel:start] cpu_total_count begin\r\n");
@@ -1324,7 +1326,7 @@ pub fn start<R: BootRuntime>(runtime: &'static R) -> ! {
     let smp_bringup_start = runtime.mono_ticks();
     if cpu_total > 1 {
         boot_trace(runtime, b"[kernel:start] smp start_secondary begin\r\n");
-        crate::kdebug!("Detected {} CPUs; starting {} secondaries...", cpu_total, cpu_total - 1);
+        crate::kinfo!("Detected {} CPUs; starting {} secondaries...", cpu_total, cpu_total - 1);
         match runtime.start_secondary_cpus(kernel_secondary_entry::<R>) {
             Ok(()) => crate::kdebug!("Secondary CPU bring-up complete"),
             Err(err) => crate::kerror!("Secondary CPU bring-up failed: {:?}", err),
@@ -1341,7 +1343,7 @@ pub fn start<R: BootRuntime>(runtime: &'static R) -> ! {
         smp_bringup_start,
     );
     boot_trace(runtime, b"[kernel:start] smp bring-up stage done\r\n");
-    crate::boot_progress::push(crate::boot_progress::BootPhase::Cpu, "SMP ready");
+    crate::boot_progress::push(crate::boot_progress::BootPhase::Smp, "SMP ready");
 
     // Store global boot info for syscalls
     crate::boot_info::set(crate::boot_info::BootSyscallInfo {
@@ -1353,12 +1355,12 @@ pub fn start<R: BootRuntime>(runtime: &'static R) -> ! {
         dtb_ptr: runtime.dtb_ptr(),
     });
     boot_trace(runtime, b"[kernel:start] boot_info set\r\n");
-    crate::boot_progress::push(crate::boot_progress::BootPhase::Modules, "Boot info ready");
+    crate::boot_progress::push(crate::boot_progress::BootPhase::BootInfo, "Boot info ready");
 
     boot_trace(runtime, b"[kernel:start] modules enumerate begin\r\n");
     let modules = runtime.modules();
     boot_trace(runtime, b"[kernel:start] runtime.modules enumerate ok\r\n");
-    kdebug!("Enumerating {} boot modules...", modules.len());
+    kinfo!("Enumerating {} boot modules...", modules.len());
     // Only iterate and format individual module entries when trace logging is
     // actually enabled; skipping this loop at debug level avoids ~108 function
     // calls and atomic reads that add measurable overhead during boot.
