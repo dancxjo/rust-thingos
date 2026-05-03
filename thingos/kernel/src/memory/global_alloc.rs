@@ -1,7 +1,7 @@
 #[cfg(not(test))]
 use core::alloc::{GlobalAlloc, Layout};
 #[cfg(not(test))]
-use core::sync::atomic::{AtomicU64, Ordering};
+use core::sync::atomic::{AtomicBool, AtomicU64, Ordering};
 
 #[cfg(not(test))]
 use linked_list_allocator::LockedHeap;
@@ -11,6 +11,9 @@ use crate::BootRuntime;
 use crate::memory::kheap::kernel_heap;
 
 pub static TRACE_ALLOC: core::sync::atomic::AtomicBool = core::sync::atomic::AtomicBool::new(false);
+
+#[cfg(not(test))]
+static ALLOCATOR_READY: AtomicBool = AtomicBool::new(false);
 
 /// Track the largest allocation seen
 #[cfg(not(test))]
@@ -116,12 +119,18 @@ pub fn init<R: BootRuntime>(_rt: &R) {
         INNER_ALLOCATOR.lock().init(base as *mut u8, size);
     }
     HEAP_TOP.store(base + size as u64, Ordering::Relaxed);
+    ALLOCATOR_READY.store(true, Ordering::Release);
     crate::ktrace!(
         "Bootstrap heap initialized: base=0x{:x} size={} pages={}",
         base,
         size,
         BOOTSTRAP_HEAP_PAGES
     );
+}
+
+#[cfg(not(test))]
+pub fn is_ready() -> bool {
+    ALLOCATOR_READY.load(Ordering::Acquire)
 }
 
 #[cfg(not(test))]
@@ -151,6 +160,11 @@ pub fn alloc_stats() -> (u64, u64) {
 #[cfg(test)]
 pub fn init<R: BootRuntime>(_rt: &R) {
     // In tests, we use the system allocator (std), so no manual init needed.
+}
+
+#[cfg(test)]
+pub fn is_ready() -> bool {
+    true
 }
 
 #[cfg(test)]

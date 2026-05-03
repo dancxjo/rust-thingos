@@ -1002,6 +1002,15 @@ fn announce_log_level_hotkey(level: u8) {
 }
 
 fn try_spawn_shell(path: &str) -> Option<u64> {
+    if !kernel::memory::global_alloc::is_ready() {
+        kdebug!("F12 hotkey: shell spawn deferred until allocator is ready");
+        return None;
+    }
+    if !kernel::sched::can_spawn_process_from_path_current() {
+        kdebug!("F12 hotkey: shell spawn deferred until scheduler is ready");
+        return None;
+    }
+
     kernel::irq::ps2::set_fb_input_enabled(true);
     let tty_path = "/dev/tty0".to_string();
     let res = unsafe {

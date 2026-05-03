@@ -522,6 +522,10 @@ pub unsafe fn spawn_process_from_path_current(
     }
 }
 
+pub fn can_spawn_process_from_path_current() -> bool {
+    unsafe { core::ptr::addr_of!(SPAWN_PROCESS_FROM_PATH_HOOK).read().is_some() }
+}
+
 pub unsafe fn current_task_resource_id() -> Option<u64> {
     if let Some(hook) = unsafe { CURRENT_RESOURCE_HOOK } { hook() } else { None }
 }

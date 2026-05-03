@@ -11,7 +11,8 @@ use stem::syscall::message::{KindId, msg_send};
 use stem::{debug, info, warn};
 
 use crate::pipelines::{
-    kernel_terminal_requested, spawn_bloom, spawn_bristle, spawn_chime, spawn_shell,
+    kernel_terminal_requested, safe_shell_requested, spawn_bloom, spawn_bristle, spawn_chime,
+    spawn_safe_shell, spawn_shell,
 };
 
 const SHELL_HEADSTART_MS: u64 = 50;
@@ -28,10 +29,17 @@ impl Supervisor {
     pub fn run_forever(&mut self) -> ! {
         info!("Starting session supervisor...");
 
+        if safe_shell_requested() {
+            let shell_pid = spawn_safe_shell();
+            self.wait_for_shell(shell_pid);
+            stem::shutdown();
+        }
+
         let kernel_terminal = kernel_terminal_requested();
         let shell_pid = spawn_shell();
         let _chime_pid = spawn_chime();
         stem::sleep_ms(SHELL_HEADSTART_MS);
+        info!("Continuing supervisor startup");
 
         let cambium_pid = if kernel_terminal {
             info!("Kernel terminal requested; skipping desktop handoff");
@@ -53,6 +61,13 @@ impl Supervisor {
             let _bloom_pid = spawn_bloom();
         }
 
+        self.wait_for_shell(shell_pid);
+
+        self.request_cambium_shutdown_and_wait(cambium_pid);
+        stem::shutdown();
+    }
+
+    fn wait_for_shell(&mut self, shell_pid: Option<u64>) {
         match shell_pid {
             Some(pid) => {
                 stem::debug!("SPROUT: waiting for shell PID {} to exit", pid);
@@ -67,9 +82,6 @@ impl Supervisor {
             }
             None => warn!("SPROUT: shell did not spawn"),
         }
-
-        self.request_cambium_shutdown_and_wait(cambium_pid);
-        stem::shutdown();
     }
 
     fn spawn_cambium(&mut self) -> Option<u64> {

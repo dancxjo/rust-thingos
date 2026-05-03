@@ -6,7 +6,7 @@ use alloc::string::{String, ToString};
 use abi::errors::Errno;
 use abi::syscall::vfs_flags::{O_RDONLY, O_RDWR};
 use stem::syscall::vfs::{vfs_close, vfs_open, vfs_read};
-use stem::{debug, warn};
+use stem::{debug, info, warn};
 
 const BLOOM_SPAWN_ATTEMPTS: usize = 3;
 const BLOOM_SPAWN_RETRY_MS: u64 = 250;
@@ -47,8 +47,7 @@ pub fn select_shell() -> String {
     "/bin/sh".to_string()
 }
 
-pub fn spawn_shell() -> Option<u64> {
-    let shell_path = select_shell();
+fn spawn_shell_path(shell_path: &str) -> Option<u64> {
     debug!("Launching shell '{}'", shell_path);
 
     let open_console = || vfs_open("/dev/console", O_RDWR);
@@ -81,7 +80,7 @@ pub fn spawn_shell() -> Option<u64> {
     env.insert(b"SHELL".to_vec(), shell_path.as_bytes().to_vec());
 
     let result = stem::syscall::spawn_process_ex(
-        &shell_path,
+        shell_path,
         &[shell_path.as_bytes()],
         &env,
         abi::types::stdio_mode::handle(stdin_fd),
@@ -105,6 +104,49 @@ pub fn spawn_shell() -> Option<u64> {
             None
         }
     }
+}
+
+pub fn spawn_shell() -> Option<u64> {
+    let shell_path = select_shell();
+    spawn_shell_path(&shell_path)
+}
+
+pub fn spawn_safe_shell() -> Option<u64> {
+    info!("Safe shell requested; launching /bin/sh only");
+    spawn_shell_path("/bin/sh")
+}
+
+pub fn safe_shell_requested() -> bool {
+    let Some(cmdline) = read_trimmed_text("/sys/boot/cmdline") else {
+        return false;
+    };
+
+    for token in cmdline.split_ascii_whitespace() {
+        if token.eq_ignore_ascii_case("sprout.safe") {
+            return true;
+        }
+
+        let Some(value) = token.strip_prefix("sprout.safe=") else {
+            continue;
+        };
+
+        if value.eq_ignore_ascii_case("sh")
+            || value.eq_ignore_ascii_case("shell")
+            || value.eq_ignore_ascii_case("safe-shell")
+        {
+            return true;
+        }
+
+        if value == "0"
+            || value.eq_ignore_ascii_case("false")
+            || value.eq_ignore_ascii_case("no")
+            || value.eq_ignore_ascii_case("off")
+        {
+            return false;
+        }
+    }
+
+    false
 }
 
 pub fn kernel_terminal_requested() -> bool {
