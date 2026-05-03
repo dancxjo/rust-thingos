@@ -8,4 +8,4 @@ abi = { path = "../../thingos/abi" }
 
 [[test]]
 name = "display_negotiation"
-path = "../../tests/display_negotiation.rs"
+path = "tests/display_negotiation.rs"
