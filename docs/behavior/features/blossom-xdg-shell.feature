@@ -29,6 +29,7 @@ Feature: blossom xdg-shell lifecycle
     And the compositor then emits xdg_surface.configure with a fresh serial
     And the serial from xdg_surface.configure is greater than zero
     And the compositor does not reserve titlebar chrome for the toplevel
+    And the compositor exposes a move handle for the toplevel
 
   Scenario: calling get_toplevel a second time on the same xdg_surface errors
     Given the client has an xdg_surface that already has a toplevel role
@@ -102,11 +103,11 @@ Feature: blossom xdg-shell lifecycle
     When I click inside the Wayland hello client and press A
     Then the Wayland hello client should receive pointer and keyboard input
 
-  @pointer-debug @titlebar-drag
-  Scenario: dragging the title bar moves a toplevel window
+  @pointer-debug @window-handle-drag
+  Scenario: dragging the window handle moves a toplevel window
     Given the client has an xdg_toplevel
     Then the Wayland hello client should be visible
-    When I drag the Wayland hello title bar
+    When I drag the Wayland hello window handle
     Then the compositor should move the toplevel window
     And the dragged window should keep a stable cursor offset
 

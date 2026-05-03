@@ -25,7 +25,8 @@ use core::sync::atomic::{AtomicU64, Ordering};
 use abi::hid::{
     BRISTLE_EVENT_CLASS_KEYBOARD, BRISTLE_EVENT_CLASS_POINTER, BRISTLE_SINK_TAG_BLOOM,
     BRISTLE_SINK_TAG_ECHO, BristleEventHeader, EventType, KIND_BRISTLE_DEVICE_EVENT,
-    KIND_BRISTLE_REGISTER_SINK, decode_register_sink_with_mask,
+    KIND_BRISTLE_REGISTER_SINK, KIND_BRISTLE_SET_DISPLAY_BOUNDS, decode_display_bounds,
+    decode_register_sink_with_mask,
 };
 use abi::syscall::vfs_flags::{O_CREAT, O_RDWR, O_TRUNC};
 use abi::trace::input_source;
@@ -241,6 +242,7 @@ fn main(_arg: usize) -> ! {
 
     let mut screen_w: i32 = 800; // Defaults
     let mut screen_h: i32 = 600;
+    let mut screen_bounds_initialized = false;
     let mut pointer_x: i32 = screen_w / 2;
     let mut pointer_y: i32 = screen_h / 2;
 
@@ -259,6 +261,15 @@ fn main(_arg: usize) -> ! {
             ServiceEvent::Message { kind, payload, .. } => {
                 if kind == KindId(KIND_BRISTLE_REGISTER_SINK) {
                     handle_register_sink(payload, &mut bloom_sink, &mut echo_sink);
+                } else if kind == KindId(KIND_BRISTLE_SET_DISPLAY_BOUNDS) {
+                    apply_display_bounds(
+                        payload,
+                        &mut screen_w,
+                        &mut screen_h,
+                        &mut screen_bounds_initialized,
+                        &mut pointer_x,
+                        &mut pointer_y,
+                    );
                 } else if kind == KindId(KIND_BRISTLE_DEVICE_EVENT) {
                     let (event_accum, accum_len) = if is_pointer_event_payload(payload) {
                         (&mut mouse_event_accum, &mut mouse_accum_len)
@@ -275,8 +286,6 @@ fn main(_arg: usize) -> ! {
                         &mut drop_counter,
                         &mut pointer_x,
                         &mut pointer_y,
-                        screen_w,
-                        screen_h,
                     );
                 } else {
                     trace!("bristle: unknown inbox message kind {:?}", kind.0);
@@ -313,21 +322,15 @@ fn main(_arg: usize) -> ! {
                 if let Ok(n) = n_result {
                     if n > 0 {
                         if is_control {
-                            if n == 8 {
-                                let mut w_bytes = [0u8; 4];
-                                w_bytes.copy_from_slice(&recv_buf[0..4]);
-                                let w = u32::from_le_bytes(w_bytes) as i32;
-
-                                let mut h_bytes = [0u8; 4];
-                                h_bytes.copy_from_slice(&recv_buf[4..8]);
-                                let h = u32::from_le_bytes(h_bytes) as i32;
-                                screen_w = w;
-                                screen_h = h;
-                                pointer_x = pointer_x.clamp(0, screen_w.saturating_sub(1));
-                                pointer_y = pointer_y.clamp(0, screen_h.saturating_sub(1));
-                                stem::info!("screen resized to {}x{}, pointer clamped to {},{}", screen_w, screen_h, pointer_x, pointer_y);
-                                continue;
-                            }
+                            apply_display_bounds(
+                                &recv_buf[..n],
+                                &mut screen_w,
+                                &mut screen_h,
+                                &mut screen_bounds_initialized,
+                                &mut pointer_x,
+                                &mut pointer_y,
+                            );
+                            continue;
                         } else {
                             let (event_accum, accum_len) = if is_mouse {
                                 (&mut mouse_event_accum, &mut mouse_accum_len)
@@ -344,8 +347,6 @@ fn main(_arg: usize) -> ! {
                                 &mut drop_counter,
                                 &mut pointer_x,
                                 &mut pointer_y,
-                                screen_w,
-                                screen_h,
                             );
                         }
                     } else {
@@ -403,6 +404,42 @@ fn is_pointer_event_payload(payload: &[u8]) -> bool {
     )
 }
 
+fn apply_display_bounds(
+    payload: &[u8],
+    screen_w: &mut i32,
+    screen_h: &mut i32,
+    initialized: &mut bool,
+    pointer_x: &mut i32,
+    pointer_y: &mut i32,
+) {
+    let Some((w, h)) = decode_display_bounds(payload) else {
+        warn!("Display bounds payload too short ({} bytes)", payload.len());
+        return;
+    };
+    if w == 0 || h == 0 || w > i32::MAX as u32 || h > i32::MAX as u32 {
+        warn!("Invalid display bounds {}x{}", w, h);
+        return;
+    }
+
+    let old_w = *screen_w;
+    let old_h = *screen_h;
+    *screen_w = w as i32;
+    *screen_h = h as i32;
+    *pointer_x = (*pointer_x).clamp(0, (*screen_w).saturating_sub(1));
+    *pointer_y = (*pointer_y).clamp(0, (*screen_h).saturating_sub(1));
+    if !*initialized {
+        *initialized = true;
+        stem::info!("Pointer bounds ready at {}x{}", *screen_w, *screen_h);
+    } else if old_w != *screen_w || old_h != *screen_h {
+        stem::info!("Pointer bounds updated to {}x{}", *screen_w, *screen_h);
+    } else {
+        debug!(
+            "Pointer bounds unchanged at {}x{}; pointer at {},{}",
+            *screen_w, *screen_h, *pointer_x, *pointer_y
+        );
+    }
+}
+
 /// Handle a `RegisterSink` inbox message.
 fn handle_register_sink(
     payload: &[u8],
@@ -453,8 +490,6 @@ fn accumulate_and_dispatch(
     drop_counter: &mut u32,
     pointer_x: &mut i32,
     pointer_y: &mut i32,
-    screen_w: i32,
-    screen_h: i32,
 ) {
     let start_ns = stem::monotonic_ns();
     let entry_depth = *accum_len;
@@ -500,12 +535,8 @@ fn accumulate_and_dispatch(
                         p.copy_from_slice(&event_bytes[20..24]);
                         let payload = abi::hid::PointerMovePayload::from_bytes(&p);
 
-                        *pointer_x = pointer_x
-                            .saturating_add(payload.dx as i32)
-                            .clamp(0, screen_w.saturating_sub(1));
-                        *pointer_y = pointer_y
-                            .saturating_add(payload.dy as i32)
-                            .clamp(0, screen_h.saturating_sub(1));
+                        *pointer_x = pointer_x.saturating_add(payload.dx as i32).max(0);
+                        *pointer_y = pointer_y.saturating_add(payload.dy as i32).max(0);
 
                         let wayland_payload =
                             abi::hid::WaylandPointerMotion { x: *pointer_x, y: *pointer_y };

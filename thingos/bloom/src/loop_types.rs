@@ -441,6 +441,10 @@ impl BloomLoop {
                     world.note_presented_frame();
                     world.send_frame_callbacks(&composition);
                     self.frame_clock.after_commit();
+                    if world.visuals.background_fade_active() {
+                        world.damage.mark_full(world.primary.width, world.primary.height);
+                        self.frame_clock.request_repaint();
+                    }
                     if world.input.has_pending_cursor_motion() {
                         self.frame_clock.request_repaint();
                     }

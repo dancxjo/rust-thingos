@@ -93,6 +93,7 @@ impl BloomService for InputService {
                 if self.try_register_with_bristle() {
                     self.registered = true;
                     stem::debug!("Registered bristle pointer sink.");
+                    world.send_current_display_bounds_to_bristle();
                     LoopAction::None
                 } else {
                     LoopAction::ArmTimer {

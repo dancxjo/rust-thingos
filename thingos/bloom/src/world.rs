@@ -8,7 +8,10 @@
 use alloc::string::String;
 use alloc::vec::Vec;
 
+use abi::KindId;
+use stem::syscall::message::msg_send;
 use stem::syscall::port_send_all;
+use stem::syscall::vfs::{vfs_close, vfs_open, vfs_read};
 use stem::time::monotonic_ns;
 
 use crate::cache::ResourceCache;
@@ -309,24 +312,16 @@ impl BloomWorld {
     }
 
     fn send_resolution_to_bristle(w: u32, h: u32) {
-        if let Ok(fd) =
-            stem::syscall::vfs::vfs_open("/run/bristle/control", abi::syscall::vfs_flags::O_RDONLY)
-        {
-            let mut buf = [0u8; 16];
-            if let Ok(n) = stem::syscall::vfs::vfs_read(fd, &mut buf) {
-                let _ = stem::syscall::vfs::vfs_close(fd);
-                if let Ok(s) = core::str::from_utf8(&buf[..n]) {
-                    if let Ok(port) = s.trim().parse::<u32>() {
-                        let mut res_buf = [0u8; 8];
-                        res_buf[0..4].copy_from_slice(&w.to_le_bytes());
-                        res_buf[4..8].copy_from_slice(&h.to_le_bytes());
-                        let _ = stem::syscall::port_send_all(port, &res_buf);
-                    }
-                }
-            } else {
-                let _ = stem::syscall::vfs::vfs_close(fd);
+        let payload = abi::hid::encode_display_bounds(w, h);
+        if let Some(pid) = read_bristle_pid() {
+            if msg_send(pid, KindId(abi::hid::KIND_BRISTLE_SET_DISPLAY_BOUNDS), &payload).is_ok() {
+                stem::debug!("Sent display bounds {}x{} to bristle", w, h);
             }
         }
+    }
+
+    pub fn send_current_display_bounds_to_bristle(&self) {
+        Self::send_resolution_to_bristle(self.primary.width, self.primary.height);
     }
 
     pub fn refresh_display_output(&mut self) -> bool {
@@ -456,6 +451,9 @@ impl BloomWorld {
     /// present it.  Returns the composition list on success so frame callbacks
     /// can be sent, or `None` on failure (damage is restored internally).
     pub fn try_present(&mut self) -> Option<Vec<CompositionEntry>> {
+        if self.visuals.advance_background_fade() {
+            self.damage.mark_full(self.primary.width, self.primary.height);
+        }
         self.input.flush_pointer_grab(&mut self.scene, &mut self.damage, self.wayland_evt_write);
         let now_ns = monotonic_ns();
         self.mark_dramatic_close_damage(now_ns);
@@ -777,4 +775,30 @@ fn send_ack(reply_port: u32, status: u32, value: u32, serial: u64) {
     }
     let ack = AckEvent { header: msg_header(EVT_ACK), status, value, serial };
     let _ = port_send_all(reply_port, &to_vec(&ack));
+}
+
+fn read_bristle_pid() -> Option<u32> {
+    read_u32_file("/run/bristle/pid")
+}
+
+fn read_u32_file(path: &str) -> Option<u32> {
+    let fd = vfs_open(path, abi::syscall::vfs_flags::O_RDONLY).ok()?;
+    let mut buf = [0u8; 16];
+    let n = vfs_read(fd, &mut buf).ok()?;
+    let _ = vfs_close(fd);
+    let text = core::str::from_utf8(&buf[..n]).ok()?.trim();
+    parse_u32(text.as_bytes())
+}
+
+fn parse_u32(bytes: &[u8]) -> Option<u32> {
+    let mut value = 0u32;
+    let mut saw_digit = false;
+    for b in bytes {
+        if !b.is_ascii_digit() {
+            break;
+        }
+        saw_digit = true;
+        value = value.checked_mul(10)?.checked_add((b - b'0') as u32)?;
+    }
+    if saw_digit { Some(value) } else { None }
 }

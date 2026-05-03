@@ -360,16 +360,18 @@ impl InputState {
                 let mut p = [0u8; abi::hid::WaylandPointerMotion::SIZE];
                 p.copy_from_slice(&payload[..abi::hid::WaylandPointerMotion::SIZE]);
                 let move_ev = abi::hid::WaylandPointerMotion::from_bytes(&p);
-                let dx = (move_ev.x - self.pointer_x) as i16;
-                let dy = (move_ev.y - self.pointer_y) as i16;
+                let target_x = move_ev.x.clamp(0, self.output_w.saturating_sub(1));
+                let target_y = move_ev.y.clamp(0, self.output_h.saturating_sub(1));
+                let dx = target_x.saturating_sub(self.pointer_x);
+                let dy = target_y.saturating_sub(self.pointer_y);
                 if defer_cursor_motion {
                     self.defer_cursor_motion(dx, dy, timestamp_ns);
                     return false;
                 }
                 let old_x = self.pointer_x;
                 let old_y = self.pointer_y;
-                self.pointer_x = move_ev.x;
-                self.pointer_y = move_ev.y;
+                self.pointer_x = target_x;
+                self.pointer_y = target_y;
                 if self.pointer_x == old_x && self.pointer_y == old_y {
                     return false;
                 }
@@ -1245,11 +1247,11 @@ impl InputState {
         stem::debug!("Cursor kind {:?}", next);
     }
 
-    fn defer_cursor_motion(&mut self, dx: i16, dy: i16, timestamp_ns: u64) {
+    fn defer_cursor_motion(&mut self, dx: i32, dy: i32, timestamp_ns: u64) {
         let (old_x, old_y) =
             self.deferred_cursor_target.unwrap_or((self.pointer_x, self.pointer_y));
-        let next_x = old_x.saturating_add(dx as i32).clamp(0, self.output_w.saturating_sub(1));
-        let next_y = old_y.saturating_add(dy as i32).clamp(0, self.output_h.saturating_sub(1));
+        let next_x = old_x.saturating_add(dx).clamp(0, self.output_w.saturating_sub(1));
+        let next_y = old_y.saturating_add(dy).clamp(0, self.output_h.saturating_sub(1));
         self.deferred_cursor_target = Some((next_x, next_y));
         self.deferred_cursor_latest_ts = Some(timestamp_ns);
         self.deferred_cursor_events = self.deferred_cursor_events.saturating_add(1);

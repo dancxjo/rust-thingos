@@ -65,6 +65,8 @@ const POINTER_OVERLAY_CURSOR_INSET: i32 = 12;
 const RUNBOX_CARET_W: u32 = 2;
 const CHROME_ICON_X_BIAS: i32 = 0;
 const CHROME_ICON_Y_BIAS: i32 = 0;
+const WALLPAPER_FADE_FRAMES: u8 = 18;
+const WALLPAPER_FADE_BLACK: u32 = 0xFF000000;
 
 type PrepareBackgroundFn = extern "C" fn(
     path: *const u8,
@@ -96,6 +98,7 @@ pub struct CompositorVisuals {
     /// compositor has only a solid-colour fallback).  Used to skip redundant
     /// `prepare_background` calls when the requested path has not changed.
     wallpaper_path: Option<alloc::string::String>,
+    background_fade: Option<BackgroundFade>,
     cursor: Option<CursorBuffer>,
     pending_cursor: Option<CursorBuffer>,
     cursor_variants: Vec<(CursorKind, CursorBuffer)>,
@@ -124,6 +127,11 @@ struct PistilLib {
 struct ServerBuffer {
     _texture: Texture,
     buffer_id: u32,
+}
+
+struct BackgroundFade {
+    pixels: Vec<u32>,
+    frame: u8,
 }
 
 #[derive(Clone, Copy)]
@@ -211,6 +219,7 @@ impl CompositorVisuals {
         Self {
             background: None,
             wallpaper_path: None,
+            background_fade: None,
             cursor: None,
             pending_cursor: None,
             cursor_variants: Vec::new(),
@@ -267,6 +276,7 @@ impl CompositorVisuals {
         // not a file-backed wallpaper.  `prepare_background` sets
         // `wallpaper_path` after a successful file-based load.
         self.wallpaper_path = None;
+        self.background_fade = None;
     }
 
     /// Synchronously decode and import a wallpaper.
@@ -298,12 +308,17 @@ impl CompositorVisuals {
             false
         };
 
-        if !success {
+        let mut fade_pixels = Vec::new();
+        if success {
+            fade_pixels.extend_from_slice(texture.as_slice_mut());
+            texture.as_slice_mut().fill(WALLPAPER_FADE_BLACK);
+        } else {
             if self.background.is_some() {
                 return;
             }
             stem::info!("Using facet-frame fallback background");
             texture.as_slice_mut().fill(0xFF0B0A10);
+            self.background_fade = None;
         }
 
         let Some(buffer_id) = display.import_buffer(
@@ -327,6 +342,8 @@ impl CompositorVisuals {
             // Record the path only when the file was decoded successfully so
             // a re-request for the same path after a decode failure is retried.
             self.wallpaper_path = Some(alloc::string::String::from(wallpaper_path));
+            self.background_fade = Some(BackgroundFade { pixels: fade_pixels, frame: 0 });
+            stem::info!("Fading in wallpaper...");
         }
     }
 
@@ -355,6 +372,51 @@ impl CompositorVisuals {
     /// thread, so there is no pending worker result to poll.
     pub fn poll_ready_background(&mut self, _display: &DisplayBackend) -> bool {
         false
+    }
+
+    pub fn advance_background_fade(&mut self) -> bool {
+        if self.background_fade.is_none() {
+            return false;
+        }
+
+        let mut clear_fade = false;
+        let mut complete = false;
+        {
+            let Some(background) = self.background.as_mut() else {
+                self.background_fade = None;
+                return false;
+            };
+            let Some(fade) = self.background_fade.as_mut() else {
+                return false;
+            };
+            let dst = background._texture.as_slice_mut();
+            if dst.len() != fade.pixels.len() {
+                clear_fade = true;
+            } else {
+                let alpha = (u32::from(fade.frame).saturating_mul(255)
+                    / u32::from(WALLPAPER_FADE_FRAMES)) as u8;
+                write_wallpaper_fade_frame(dst, &fade.pixels, alpha);
+                if fade.frame >= WALLPAPER_FADE_FRAMES {
+                    complete = true;
+                } else {
+                    fade.frame = fade.frame.saturating_add(1);
+                }
+            }
+        }
+
+        if clear_fade {
+            self.background_fade = None;
+            return false;
+        }
+        if complete {
+            self.background_fade = None;
+            stem::info!("Wallpaper fade-in complete");
+        }
+        true
+    }
+
+    pub fn background_fade_active(&self) -> bool {
+        self.background_fade.is_some()
     }
 
     pub fn retry_deferred_resources(
@@ -1223,6 +1285,21 @@ fn scale_alpha(alpha: u8, opacity: u8) -> u8 {
     ((alpha as u16 * opacity as u16 + 127) / 255) as u8
 }
 
+fn write_wallpaper_fade_frame(dst: &mut [u32], src: &[u32], alpha: u8) {
+    for (dst_px, src_px) in dst.iter_mut().zip(src.iter().copied()) {
+        *dst_px = fade_pixel_from_black(src_px, alpha);
+    }
+}
+
+fn fade_pixel_from_black(pixel: u32, alpha: u8) -> u32 {
+    let alpha = alpha as u32;
+    let a = pixel & 0xFF000000;
+    let r = (((pixel >> 16) & 0xFF) * alpha + 127) / 255;
+    let g = (((pixel >> 8) & 0xFF) * alpha + 127) / 255;
+    let b = ((pixel & 0xFF) * alpha + 127) / 255;
+    a | (r << 16) | (g << 8) | b
+}
+
 fn draw_spinner_dot(dst: &mut [u32], stride: u32, cx: i32, cy: i32, radius: i32, color: u32) {
     let sample_center_x = cx * 8 + 4;
     let sample_center_y = cy * 8 + 4;
@@ -1408,7 +1485,7 @@ fn from_blossom_chrome_button(button: blossom::wm::ChromeButton) -> ChromeButton
 }
 
 fn needs_window_overlay(entry: &CompositionEntry) -> bool {
-    !entry.is_fullscreen && !entry.chrome.is_empty()
+    !entry.is_fullscreen && (!entry.chrome.is_empty() || entry.handle_height > 0)
 }
 
 fn local_overlay_entry(
@@ -1459,6 +1536,16 @@ fn draw_chrome_overlay(
             continue;
         }
         let chrome = entry.chrome;
+        if entry.handle_height > 0 {
+            draw_window_handle(
+                dst,
+                stride,
+                height,
+                entry.dest_rect,
+                entry.handle_height,
+                entry.active,
+            );
+        }
         if chrome.is_empty() {
             continue;
         }
@@ -1542,6 +1629,28 @@ fn draw_chrome_overlay(
             *px = 0;
         }
     }
+}
+
+fn draw_window_handle(
+    dst: &mut [u32],
+    stride: u32,
+    height: u32,
+    rect: abi::display_protocol::Rect,
+    handle_height: u32,
+    active: bool,
+) {
+    if rect.w < 28 || rect.h == 0 || handle_height == 0 {
+        return;
+    }
+    let handle_w = rect.w.min(64).max(28);
+    let handle_h = handle_height.min(rect.h).min(6).max(3);
+    let x = rect.x as i32 + (rect.w.saturating_sub(handle_w) / 2) as i32;
+    let y =
+        rect.y as i32 + handle_height.min(rect.h).saturating_sub(handle_h).saturating_div(2) as i32;
+    let fill = if active { 0xB07C5CFF } else { 0x66463B5E };
+    let shine = if active { 0xCCF2C94C } else { 0x6682769E };
+    fill_rect_i32(dst, stride, height, x, y, handle_w as i32, handle_h as i32, fill);
+    fill_rect_i32(dst, stride, height, x + 1, y, handle_w.saturating_sub(2) as i32, 1, shine);
 }
 
 fn draw_window_body_overlay(

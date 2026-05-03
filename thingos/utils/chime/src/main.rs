@@ -179,7 +179,7 @@ fn request_audio_drain(out_fd: u32) {
     let _ = stem::syscall::vfs::vfs_device_call_raw(out_fd, &call);
 }
 
-fn wait_for_playback_completion(out_fd: u32, sample_bytes: usize, params: &AudioParams) {
+fn wait_for_playback_completion(out_fd: u32, sample_bytes: usize, params: &AudioParams, playback_start_ns: u64) {
     let fmt = AudioSampleFormat::from_u32(params.sample_format).unwrap_or(AudioSampleFormat::S16LE);
     let bytes_per_frame =
         (fmt.bytes_per_sample() as usize).saturating_mul(params.ports as usize).max(1);
@@ -189,8 +189,8 @@ fn wait_for_playback_completion(out_fd: u32, sample_bytes: usize, params: &Audio
     } else {
         0
     };
-    let deadline_ms = playback_ms.saturating_add(500).clamp(250, 10_000);
-    let start_ns = stem::time::monotonic_ns();
+    // Wait for the exact duration of the audio plus a small buffer
+    let deadline_ms = playback_ms.saturating_add(250).clamp(250, 10_000);
 
     loop {
         if let Some(status) = get_audio_status(out_fd) {
@@ -199,7 +199,7 @@ fn wait_for_playback_completion(out_fd: u32, sample_bytes: usize, params: &Audio
             }
         }
 
-        let elapsed_ms = stem::time::monotonic_ns().saturating_sub(start_ns) / 1_000_000;
+        let elapsed_ms = stem::time::monotonic_ns().saturating_sub(playback_start_ns) / 1_000_000;
         if elapsed_ms >= deadline_ms {
             break;
         }
@@ -317,7 +317,7 @@ fn main(_arg: usize) -> ! {
         rate: 44100,
         ports: 2,
         period_frames: 1024,
-        buffer_frames: 4096,
+        buffer_frames: 16384,
         _reserved: [0; 3],
     };
     let mut accepted = AudioParams::default();
@@ -338,19 +338,6 @@ fn main(_arg: usize) -> ! {
         "Audio stream configured: rate={}Hz format={} channels={}",
         sample_rate, accepted.sample_format, accepted.ports
     );
-
-    // Start playback.
-    {
-        let call = abi::device::DeviceCall {
-            kind: DeviceKind::Audio,
-            op: AUDIO_START,
-            in_ptr: 0,
-            in_len: 0,
-            out_ptr: 0,
-            out_len: 0,
-        };
-        let _ = stem::syscall::vfs::vfs_device_call_raw(out_fd, &call);
-    }
 
     // Consume piped PCM when stdin is connected, otherwise generate samples.
     let samples: Vec<u8> = if let Some(stdin_pcm) = read_piped_stdin() {
@@ -373,6 +360,21 @@ fn main(_arg: usize) -> ! {
         chime::generate_chime(sample_rate)
     };
 
+    // Start playback.
+    {
+        let call = abi::device::DeviceCall {
+            kind: DeviceKind::Audio,
+            op: AUDIO_START,
+            in_ptr: 0,
+            in_len: 0,
+            out_ptr: 0,
+            out_len: 0,
+        };
+        let _ = stem::syscall::vfs::vfs_device_call_raw(out_fd, &call);
+    }
+
+    let playback_start_ns = stem::time::monotonic_ns();
+
     info!("Playing startup chime");
 
     if let Some(mapped) = try_setup_mapped_ring(out_fd) {
@@ -388,7 +390,7 @@ fn main(_arg: usize) -> ! {
             }
         }
         request_audio_drain(out_fd);
-        wait_for_playback_completion(out_fd, samples.len(), &accepted);
+        wait_for_playback_completion(out_fd, samples.len(), &accepted, playback_start_ns);
         let _ = stem::syscall::vm_unmap(mapped.map_addr, mapped.map_len);
         let _ = stem::syscall::vfs::vfs_close(mapped.ring_fd);
         let _ = stem::syscall::vfs::vfs_close(mapped.control_fd);
@@ -397,7 +399,7 @@ fn main(_arg: usize) -> ! {
         stem::syscall::exit(0);
     }
 
-    let chunk_size = 4096usize;
+    let chunk_size = 32768usize;
     let mut offset = 0;
 
     while offset < samples.len() {
@@ -426,7 +428,7 @@ fn main(_arg: usize) -> ! {
     }
 
     request_audio_drain(out_fd);
-    wait_for_playback_completion(out_fd, samples.len(), &accepted);
+    wait_for_playback_completion(out_fd, samples.len(), &accepted, playback_start_ns);
     let _ = stem::syscall::vfs::vfs_close(out_fd);
     info!("Startup chime finished");
     stem::syscall::exit(0);

@@ -103,6 +103,13 @@ fn mods_roundtrip_byte() {
     assert_eq!(mods, round);
 }
 
+#[test]
+fn display_bounds_payload_roundtrip() {
+    let bytes = encode_display_bounds(1024, 768);
+    assert_eq!(decode_display_bounds(&bytes), Some((1024, 768)));
+    assert_eq!(decode_display_bounds(&bytes[..7]), None);
+}
+
 // KeyEventPayload tests
 #[test]
 fn key_event_payload_is_repeat() {

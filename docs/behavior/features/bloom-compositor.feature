@@ -53,6 +53,13 @@ Feature: Bloom compositor desktop behavior
     And I wait for 2 seconds
     Then the latest serial output should not contain "VFS: sys_fs_open path='/session/desktop/wallpaper'"
 
+  @wallpaper-fade
+  Scenario: Wallpaper appears with a fade from black
+    Given the machine is booted
+    Then the serial output should contain "First frame rendered" within 180s
+    And the serial output should contain "Fading in wallpaper..." within 60s
+    And the serial output should contain "Wallpaper fade-in complete" within 60s
+
   @bootfb
   Scenario: The boot framebuffer backend can present the desktop
     Given the machine is booted

@@ -103,6 +103,7 @@ pub struct Surface {
     pub focus_eligible: bool,
     pub keyboard_interactivity: blossom::LayerKeyboardInteractivity,
     pub chrome: SurfaceChrome,
+    pub handle_height: u32,
     pub title: Option<String>,
     pub frame_serial: u64,
     pub is_fullscreen: bool,
@@ -135,6 +136,7 @@ pub struct CompositionEntry {
     pub z_order: i32,
     pub alpha: u8,
     pub chrome: SurfaceChrome,
+    pub handle_height: u32,
     pub active: bool,
     pub title: Option<String>,
     pub is_fullscreen: bool,
@@ -235,6 +237,7 @@ impl Scene {
                 focus_eligible: true,
                 keyboard_interactivity: blossom::LayerKeyboardInteractivity::None,
                 chrome: SurfaceChrome::default(),
+                handle_height: 0,
                 title: None,
                 frame_serial: 0,
                 is_fullscreen: false,
@@ -347,6 +350,7 @@ impl Scene {
             child.focus_eligible = false;
             // Subsurfaces have no compositor-drawn chrome.
             child.chrome = SurfaceChrome::default();
+            child.handle_height = 0;
         }
         true
     }
@@ -481,6 +485,22 @@ impl Scene {
             return false;
         }
         surface.chrome = chrome;
+        true
+    }
+
+    pub fn set_surface_handle_height(
+        &mut self,
+        client_id: u32,
+        surface_id: u32,
+        height: u32,
+    ) -> bool {
+        let Some(surface) = self.surfaces.get_mut(&surface_id) else {
+            return false;
+        };
+        if surface.client_id != client_id {
+            return false;
+        }
+        surface.handle_height = height;
         true
     }
 
@@ -790,6 +810,7 @@ impl Scene {
                 z_order: surface.current.z_order,
                 alpha,
                 chrome: surface.chrome,
+                handle_height: surface.handle_height,
                 active: active_surface == Some(surface.id),
                 title: surface.title.clone(),
                 is_fullscreen: surface.is_fullscreen,
@@ -827,14 +848,21 @@ impl Scene {
             {
                 continue;
             }
-            let rect = if surface.chrome.is_empty() {
-                surface.current.input_region.unwrap_or(surface.current.dest_rect)
-            } else {
-                surface.current.dest_rect
-            };
-            let max_x = rect.x.saturating_add(rect.w) as i32;
-            let max_y = rect.y.saturating_add(rect.h) as i32;
-            let inside = x >= rect.x as i32 && y >= rect.y as i32 && x < max_x && y < max_y;
+            let rect = surface.current.dest_rect;
+            let input_rect = surface.current.input_region.unwrap_or(rect);
+            let hit_rect = if surface.chrome.is_empty() { input_rect } else { rect };
+            let max_x = hit_rect.x.saturating_add(hit_rect.w) as i32;
+            let max_y = hit_rect.y.saturating_add(hit_rect.h) as i32;
+            let inside_input =
+                x >= hit_rect.x as i32 && y >= hit_rect.y as i32 && x < max_x && y < max_y;
+            let handle_bottom = rect.y.saturating_add(surface.handle_height.min(rect.h));
+            let inside_handle = surface.chrome.is_empty()
+                && surface.handle_height > 0
+                && x >= rect.x as i32
+                && x < rect.x.saturating_add(rect.w) as i32
+                && y >= rect.y as i32
+                && y < handle_bottom as i32;
+            let inside = inside_input || inside_handle;
             if !inside {
                 continue;
             }
@@ -861,6 +889,13 @@ impl Scene {
             && x < rect.x.saturating_add(rect.w) as i32
             && y >= rect.y as i32
             && y < titlebar_bottom as i32
+        {
+            Some(HitTarget::TitleBar { surface_id })
+        } else if surface.handle_height > 0
+            && x >= rect.x as i32
+            && x < rect.x.saturating_add(rect.w) as i32
+            && y >= rect.y as i32
+            && y < rect.y.saturating_add(surface.handle_height.min(rect.h)) as i32
         {
             Some(HitTarget::TitleBar { surface_id })
         } else {
@@ -1108,6 +1143,51 @@ impl Scene {
         }
 
         (old_focus, new_focus)
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    fn mapped_scene_with_surface() -> (Scene, u32, u32) {
+        let mut scene = Scene::new();
+        let client_id = scene.register_client(1, None);
+        let surface_id = scene.create_surface(client_id).expect("surface");
+        scene
+            .attach_pending_buffer(
+                client_id,
+                surface_id,
+                SurfaceBuffer { buffer_id: 1, width: 100, height: 80, stride: 400 },
+            )
+            .expect("attach");
+        scene.set_pending_dest_rect(client_id, surface_id, Rect { x: 20, y: 30, w: 100, h: 80 });
+        scene.commit_surface(client_id, surface_id, 800, 600).expect("commit");
+        (scene, client_id, surface_id)
+    }
+
+    #[test]
+    fn handle_height_creates_titlebar_hit_target_without_chrome() {
+        let (mut scene, client_id, surface_id) = mapped_scene_with_surface();
+        assert!(scene.set_surface_handle_height(client_id, surface_id, 14));
+
+        assert_eq!(scene.hit_test(30, 35), Some(HitTarget::TitleBar { surface_id }));
+        assert_eq!(scene.hit_test(30, 50), Some(HitTarget::Client { surface_id }));
+        assert_eq!(
+            scene.surface_visual_rect(surface_id),
+            Some(Rect { x: 20, y: 30, w: 100, h: 80 })
+        );
+    }
+
+    #[test]
+    fn fullscreen_surface_ignores_handle_hit_target() {
+        let (mut scene, client_id, surface_id) = mapped_scene_with_surface();
+        assert!(scene.set_surface_handle_height(client_id, surface_id, 14));
+        scene
+            .toggle_surface_fullscreen(surface_id, Rect { x: 0, y: 0, w: 800, h: 600 })
+            .expect("fullscreen");
+
+        assert_eq!(scene.hit_test(30, 35), Some(HitTarget::Client { surface_id }));
     }
 }
 

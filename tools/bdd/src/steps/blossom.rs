@@ -360,6 +360,17 @@ async fn compositor_does_not_reserve_titlebar_chrome(
     }
 }
 
+/// `And the compositor exposes a move handle for the toplevel`
+#[then("the compositor exposes a move handle for the toplevel")]
+async fn compositor_exposes_move_handle(world: &mut ThingOsWorld) -> Result<(), StepError> {
+    if world.wait_for_serial("Window handle ready", 60.0).await {
+        eprintln!("│  │  │      ✅ compositor move handle observed");
+        Ok(())
+    } else {
+        Err(StepError("Compositor did not expose a toplevel move handle".to_string()))
+    }
+}
+
 /// `And the serial from xdg_surface.configure is greater than zero`
 #[then("the serial from xdg_surface.configure is greater than zero")]
 async fn configure_serial_greater_than_zero(world: &mut ThingOsWorld) -> Result<(), StepError> {
@@ -1090,13 +1101,13 @@ async fn higher_z_content_obscures_lower_window_chrome(
     )))
 }
 
-#[when("I drag the Wayland hello title bar")]
-async fn drag_wayland_hello_title_bar(world: &mut ThingOsWorld) -> Result<(), StepError> {
+#[when("I drag the Wayland hello window handle")]
+async fn drag_wayland_hello_window_handle(world: &mut ThingOsWorld) -> Result<(), StepError> {
     if world.qmp_control.is_none() {
-        return Err(StepError("No QMP connection for title-bar drag input".to_string()));
+        return Err(StepError("No QMP connection for window-handle drag input".to_string()));
     }
-    if !world.wait_for_serial("bloom: registered titlebar drag zone", 60.0).await {
-        return Err(StepError("Bloom did not register a title-bar drag zone".to_string()));
+    if !world.wait_for_serial("Window handle ready", 60.0).await {
+        return Err(StepError("Bloom did not expose a window handle".to_string()));
     }
     if !world.wait_for_serial("ps2_mouse: bristle pid=", 60.0).await {
         return Err(StepError("PS/2 mouse driver did not connect to Bristle".to_string()));
@@ -1111,7 +1122,7 @@ async fn drag_wayland_hello_title_bar(world: &mut ThingOsWorld) -> Result<(), St
             1_000,
         ),
         (
-            r#"{"execute": "input-send-event", "arguments": {"events": [{"type": "rel", "data": {"axis": "x", "value": 48}}, {"type": "rel", "data": {"axis": "y", "value": 20}}]}}"#,
+            r#"{"execute": "input-send-event", "arguments": {"events": [{"type": "rel", "data": {"axis": "x", "value": 50}}, {"type": "rel", "data": {"axis": "y", "value": 10}}]}}"#,
             500,
         ),
         (
@@ -1132,7 +1143,7 @@ async fn drag_wayland_hello_title_bar(world: &mut ThingOsWorld) -> Result<(), St
         world
             .execute_qmp_control(command)
             .await
-            .map_err(|e| StepError(format!("QMP title-bar drag failed: {}", e)))?;
+            .map_err(|e| StepError(format!("QMP window-handle drag failed: {}", e)))?;
         tokio::time::sleep(std::time::Duration::from_millis(settle_ms)).await;
     }
     Ok(())

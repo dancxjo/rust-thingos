@@ -48,6 +48,7 @@ pub const GLOBAL_ZWLR_LAYER_SHELL: u32 = 10;
 const DRM_FORMAT_ARGB8888: u32 = 0x3432_5241; // "AR24"
 const DRM_FORMAT_XRGB8888: u32 = 0x3432_5258; // "XR24"
 const DRM_FORMAT_MOD_LINEAR: u64 = 0;
+const TOPLEVEL_HANDLE_HEIGHT: u32 = 18;
 
 // ── Top-level dispatcher ─────────────────────────────────────────────────────
 
@@ -1705,7 +1706,7 @@ fn dispatch_xdg_surface(
     cmd_write: u32,
     output: &crate::display::OutputInfo,
 ) -> Vec<Vec<u8>> {
-    let _bloom_surface_id = match client.objects.get(&obj_id) {
+    let bloom_surface_id = match client.objects.get(&obj_id) {
         Some(ObjectEntry::XdgSurface { bloom_surface_id }) => *bloom_surface_id,
         _ => return vec![],
     };
@@ -1732,6 +1733,9 @@ fn dispatch_xdg_surface(
                         obj_id
                     );
                     client.insert(new_id, ObjectEntry::XdgToplevel { xdg_surface_obj: obj_id });
+                    let msg =
+                        ipc::encode_set_window_handle(bloom_surface_id, TOPLEVEL_HANDLE_HEIGHT);
+                    let _ = stem::syscall::port_send_all(cmd_write, &msg);
                     send_blossom_commands(client, &cmds, cmd_write);
                 }
                 Err(BlossomError::XdgSurfaceAlreadyHasRole { .. }) => {

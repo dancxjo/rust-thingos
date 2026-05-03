@@ -70,6 +70,7 @@ impl WaylandCommandService {
             ipc::WCMD_DAMAGE => self.handle_damage(data, world),
             ipc::WCMD_COMMIT => self.handle_commit(data, world),
             ipc::WCMD_SET_CHROME => self.handle_set_chrome(data, world),
+            ipc::WCMD_SET_WINDOW_HANDLE => self.handle_set_window_handle(data, world),
             ipc::WCMD_SET_TITLE => self.handle_set_title(data, world),
             ipc::WCMD_SET_SUBSURFACE => self.handle_set_subsurface(data, world),
             ipc::WCMD_SET_LAYER_SURFACE => self.handle_set_layer_surface(data, world),
@@ -272,6 +273,35 @@ impl WaylandCommandService {
         true
     }
 
+    fn handle_set_window_handle(&mut self, data: &[u8], world: &mut BloomWorld) -> bool {
+        if data.len() < 12 {
+            return false;
+        }
+        let bloom_surface_id = u32::from_ne_bytes(data[4..8].try_into().unwrap_or([0; 4]));
+        let handle_height = u32::from_ne_bytes(data[8..12].try_into().unwrap_or([0; 4]));
+        if world.scene.set_surface_handle_height(
+            self.wayland_client_id,
+            bloom_surface_id,
+            handle_height,
+        ) {
+            stem::debug!(
+                "Window handle ready surface={} height={}",
+                bloom_surface_id,
+                handle_height
+            );
+            if let Some(rect) = world.scene.surface_visual_rect(bloom_surface_id) {
+                world.damage.mark_rect(rect);
+            }
+            world.sync_wayland_session_fs(alloc::format!(
+                "surface_handle_changed id={} height={}\n",
+                bloom_surface_id,
+                handle_height
+            ));
+            return true;
+        }
+        false
+    }
+
     fn handle_set_title(&mut self, data: &[u8], world: &mut BloomWorld) -> bool {
         if data.len() < 8 + ipc::MAX_TITLE_BYTES {
             return false;
@@ -408,6 +438,7 @@ impl WaylandCommandService {
             bloom_surface_id,
             SurfaceChrome { titlebar_height: 0, frame_thickness: 0 },
         );
+        let _ = world.scene.set_surface_handle_height(self.wayland_client_id, bloom_surface_id, 0);
         let _ = world.scene.set_surface_keyboard_interactivity(
             self.wayland_client_id,
             bloom_surface_id,
@@ -600,6 +631,7 @@ fn wayland_command_len(data: &[u8]) -> Option<usize> {
         ipc::WCMD_DAMAGE => 24,
         ipc::WCMD_COMMIT => 12,
         ipc::WCMD_SET_CHROME => 16,
+        ipc::WCMD_SET_WINDOW_HANDLE => 12,
         ipc::WCMD_SET_TITLE => 8 + ipc::MAX_TITLE_BYTES,
         ipc::WCMD_SET_SUBSURFACE => 24,
         ipc::WCMD_SET_LAYER_SURFACE => 48,
