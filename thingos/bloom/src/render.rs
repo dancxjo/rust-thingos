@@ -288,6 +288,7 @@ impl CompositorVisuals {
                 None => return,
             };
 
+        let t_prepare_start = stem::time::monotonic_ns();
         let success = if let Some(ref lib) = self.pistil {
             let res = call_prepare_bg(
                 lib.prepare_bg,
@@ -306,6 +307,7 @@ impl CompositorVisuals {
         } else {
             false
         };
+        let t_prepare_done = stem::time::monotonic_ns();
 
         let mut fade_pixels = Vec::new();
         if success {
@@ -320,6 +322,7 @@ impl CompositorVisuals {
             self.background_fade = None;
         }
 
+        let t_import_start = stem::time::monotonic_ns();
         let Some(buffer_id) = display.import_buffer(
             texture.fd,
             width,
@@ -331,6 +334,12 @@ impl CompositorVisuals {
         ) else {
             return;
         };
+        let t_import_done = stem::time::monotonic_ns();
+        stem::debug!(
+            "Wallpaper prepare: prepare={}ms import={}ms",
+            (t_prepare_done - t_prepare_start) / 1_000_000,
+            (t_import_done - t_import_start) / 1_000_000,
+        );
 
         if let Some(old) = self.background.take() {
             display.release_buffer(old.buffer_id);
