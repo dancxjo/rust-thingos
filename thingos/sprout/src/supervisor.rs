@@ -12,7 +12,8 @@ use stem::{debug, info, warn};
 
 use crate::pipelines::{
     kernel_terminal_requested, safe_shell_requested, spawn_bloom, spawn_blossom, spawn_bristle,
-    spawn_chime, spawn_kernel_terminal_shell, spawn_safe_shell, spawn_shell,
+    spawn_chime, spawn_kernel_terminal_shell, spawn_safe_serial_shell, spawn_safe_shell,
+    spawn_shell,
 };
 
 const SHELL_HEADSTART_MS: u64 = 50;
@@ -30,8 +31,13 @@ impl Supervisor {
         info!("Starting session supervisor...");
 
         if safe_shell_requested() {
+            let _bristle_pid = spawn_bristle();
+            let cambium_pid = self.spawn_cambium();
             let shell_pid = spawn_safe_shell();
+            let serial_shell_pid = spawn_safe_serial_shell();
             self.wait_for_shell(shell_pid);
+            self.wait_for_shell(serial_shell_pid);
+            self.request_cambium_shutdown_and_wait(cambium_pid);
             stem::shutdown();
         }
 

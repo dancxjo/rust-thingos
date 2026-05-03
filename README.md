@@ -263,7 +263,8 @@ echo Solarized Warm > /session/desktop/theme
 ```
 
 Bloom watches `/session/desktop/theme`, so window chrome themes can be changed
-from the in-guest shell without restarting the compositor:
+from the in-guest shell without restarting the compositor. Stile owns the theme
+values; Blossom builds the Petals chrome plan; Bloom executes it with Pistil:
 
 ```sh
 echo "Ghost Flower" > /session/desktop/theme
@@ -272,7 +273,9 @@ echo "Leather Grain" > /session/desktop/theme
 echo "Linen Light" > /session/desktop/theme
 ```
 
-The bundled wallpaper aliases select matching chrome:
+The bundled wallpaper aliases select matching chrome, and Petals clients such
+as `clock` and `calc` read the same file so their own surfaces use the same
+Stile palette:
 
 ```sh
 echo flower.png > /session/desktop/theme

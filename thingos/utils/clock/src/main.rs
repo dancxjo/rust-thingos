@@ -10,7 +10,7 @@ use core::convert::TryInto;
 use libdl::{RTLD_NOW, dlerror, dlopen_str, dlsym_bytes};
 use petals::{
     AlignItems, AvailableSpace, Clock, ClockState, Color, FlexDirection, JustifyContent,
-    ResolvedStyle, Size,
+    ResolvedStyle, Size, UiTheme, default_theme, theme_by_name,
 };
 use stem::abi::syscall::{PollHandle, poll_flags};
 use stem::info;
@@ -35,6 +35,7 @@ const PISTIL_PATH: &str = "/lib/libpistil.so";
 const DRAW_DSEG7_TEXT_SYMBOL: &[u8] = b"pistil_draw_dseg7_text";
 const DRAW_TEXT_SYMBOL: &[u8] = b"pistil_draw_text";
 const DSEG7_FONT_PATH: &str = "/public/fonts/DSEG7Classic-Regular.ttf";
+const THEME_PATH: &str = "/session/desktop/theme";
 const SERIAL_TICK_INTERVAL_NS: u64 = 37_000_000_000;
 const TZ_REFRESH_INTERVAL_NS: u64 = 60_000_000_000;
 const CLOCK_PRIORITY_LOW: usize = 1;
@@ -83,6 +84,8 @@ fn main(_arg: usize) -> ! {
     let fd = connect_wayland();
     let text_renderer = load_text_renderer();
     let clock = Clock::new();
+    let mut theme_name = read_theme_name();
+    let mut theme = theme_by_name(&theme_name);
 
     send_get_registry(fd, REGISTRY_ID);
     read_initial_globals(fd);
@@ -152,12 +155,13 @@ fn main(_arg: usize) -> ! {
         }
 
         let time_changed = clock_state != last_state || waiting_text != last_waiting_text;
+        let theme_changed = refresh_theme(&mut theme_name, &mut theme);
         if time_changed {
             last_state = clock_state;
             last_waiting_text = waiting_text;
         }
 
-        let should_render = pending.configured && (pending.dirty || time_changed);
+        let should_render = pending.configured && (pending.dirty || time_changed || theme_changed);
         if should_render {
             let buf = ensure_buffer(
                 fd,
@@ -172,6 +176,7 @@ fn main(_arg: usize) -> ! {
                 &clock,
                 last_state.as_ref(),
                 &last_waiting_text,
+                theme,
                 text_renderer.as_ref(),
             );
             if petal_rendered && !petal_render_logged {
@@ -336,6 +341,7 @@ fn render_clock(
     clock: &Clock,
     state: Option<&ClockState>,
     waiting_text: &str,
+    theme: UiTheme,
     text_renderer: Option<&TextRenderer>,
 ) -> bool {
     unsafe {
@@ -355,12 +361,12 @@ fn render_clock(
                 buffer.height as i32 / 2,
                 18.0,
                 waiting_text,
-                0xFF8E9895,
+                theme.chrome_text_inactive,
             );
             return false;
         };
 
-        if render_clock_petal(buffer, pixels, clock, state, text_renderer).is_ok() {
+        if render_clock_petal(buffer, pixels, clock, state, theme, text_renderer).is_ok() {
             return true;
         }
 
@@ -413,9 +419,10 @@ fn render_clock_petal(
     pixels: &mut [u32],
     clock: &Clock,
     state: &ClockState,
+    theme: UiTheme,
     text_renderer: Option<&TextRenderer>,
 ) -> Result<(), ()> {
-    let (mut tree, nodes) = clock.build_tree(state).map_err(|_| ())?;
+    let (mut tree, nodes) = clock.build_tree_for_theme(state, theme).map_err(|_| ())?;
     tree.apply_style(
         tree.root(),
         ResolvedStyle {
@@ -481,6 +488,34 @@ fn render_clock_petal(
     }
 
     Ok(())
+}
+
+fn read_theme_name() -> String {
+    let Ok(fd) = stem::syscall::vfs::vfs_open(THEME_PATH, abi::syscall::vfs_flags::O_RDONLY) else {
+        return String::from(default_theme().name);
+    };
+    let mut buf = [0u8; 128];
+    let name = match vfs_read(fd, &mut buf) {
+        Ok(n) if n > 0 => match core::str::from_utf8(&buf[..n]) {
+            Ok(text) => String::from(text.trim()),
+            Err(_) => String::from(default_theme().name),
+        },
+        _ => String::from(default_theme().name),
+    };
+    let _ = vfs_close(fd);
+    if name.is_empty() { String::from(default_theme().name) } else { name }
+}
+
+fn refresh_theme(current_name: &mut String, theme: &mut UiTheme) -> bool {
+    let next_name = read_theme_name();
+    let next_theme = theme_by_name(&next_name);
+    if next_theme.name == theme.name && next_name == *current_name {
+        return false;
+    }
+    stem::info!("clock: applying theme {}", next_theme.name);
+    *current_name = next_name;
+    *theme = next_theme;
+    true
 }
 
 fn argb(color: Color) -> u32 {

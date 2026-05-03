@@ -59,8 +59,10 @@ Feature: Bloom compositor desktop behavior
     When I wait for the shell prompt
     And I type "echo flower.png > /session/desktop/theme" on the serial console
     Then the serial output should contain "Applying theme Ghost Flower" within 60s
+    And the serial output should contain "clock: applying theme Ghost Flower" within 60s
     When I type "echo flower.bmp > /session/desktop/theme" on the serial console
     Then the serial output should contain "Applying theme Solar Warm Spine" within 60s
+    And the serial output should contain "clock: applying theme Solar Warm Spine" within 60s
     When I type "echo leather.bmp > /session/desktop/theme" on the serial console
     Then the serial output should contain "Applying theme Leather Grain" within 60s
     When I type "echo linen.bmp > /session/desktop/theme" on the serial console

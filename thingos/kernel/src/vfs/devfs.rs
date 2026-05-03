@@ -543,6 +543,7 @@ pub struct FbTerminalNode;
 
 impl VfsNode for FbTerminalNode {
     fn read(&self, offset: u64, buf: &mut [u8]) -> SysResult<usize> {
+        crate::irq::ps2::enable_fb_input();
         let tty = crate::vfs::tty::TtyNode { hw: Arc::new(FbHardware), ld: get_fb_tty_ld() };
         tty.read(offset, buf)
     }
@@ -568,11 +569,13 @@ impl VfsNode for FbTerminalNode {
     }
 
     fn poll(&self) -> u16 {
+        crate::irq::ps2::enable_fb_input();
         let tty = crate::vfs::tty::TtyNode { hw: Arc::new(FbHardware), ld: get_fb_tty_ld() };
         tty.poll()
     }
 
     fn add_waiter(&self, tid: u64) {
+        crate::irq::ps2::enable_fb_input();
         get_fb_tty_ld().read_waiters.push_back(tid);
     }
 
@@ -583,6 +586,12 @@ impl VfsNode for FbTerminalNode {
     fn device_call(&self, call: &abi::device::DeviceCall) -> SysResult<usize> {
         let tty = crate::vfs::tty::TtyNode { hw: Arc::new(FbHardware), ld: get_fb_tty_ld() };
         tty.device_call(call)
+    }
+}
+
+impl FbTerminalNode {
+    pub fn poll_input() {
+        get_fb_tty_ld().drain_input(&FbHardware);
     }
 }
 

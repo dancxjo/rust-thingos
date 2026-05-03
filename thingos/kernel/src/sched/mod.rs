@@ -1250,6 +1250,7 @@ pub fn on_tick<R: BootRuntime>() {
 
     if cpu_idx == 0 {
         crate::vfs::devfs::ConsoleNode::poll_input();
+        crate::vfs::devfs::FbTerminalNode::poll_input();
         crate::time::maybe_log_system_clock_tick(crate::time::monotonic_now_ns());
     }
 

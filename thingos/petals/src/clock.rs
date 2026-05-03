@@ -6,7 +6,7 @@ use taffy::TaffyError;
 
 use crate::{
     AlignItems, Color, Declaration, Description, FlexDirection, FontWeight, JustifyContent, NodeId,
-    Rule, Selector, UiTree,
+    Rule, Selector, UiTheme, UiTree, default_theme,
 };
 
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
@@ -116,14 +116,26 @@ impl Clock {
     }
 
     pub fn build_tree(&self, state: &ClockState) -> Result<(UiTree, ClockNodes), TaffyError> {
+        self.build_tree_for_theme(state, default_theme())
+    }
+
+    pub fn build_tree_for_theme(
+        &self,
+        state: &ClockState,
+        theme: UiTheme,
+    ) -> Result<(UiTree, ClockNodes), TaffyError> {
         let mut tree = UiTree::new()?;
         let root = tree.root();
         let nodes = self.render(&mut tree, root, state)?;
-        tree.restyle(&self.rules())?;
+        tree.restyle(&self.rules_for_theme(theme))?;
         Ok((tree, nodes))
     }
 
     pub fn rules(&self) -> Vec<Rule<Description>> {
+        self.rules_for_theme(default_theme())
+    }
+
+    pub fn rules_for_theme(&self, theme: UiTheme) -> Vec<Rule<Description>> {
         let mut rules = alloc::vec![
             Rule::new(
                 Selector::has(Description::Clock),
@@ -152,7 +164,7 @@ impl Clock {
                     Declaration::Height(40.0),
                     Declaration::FontSize(32.0),
                     Declaration::FontWeight(FontWeight::Normal),
-                    Declaration::Color(Color::rgb(242, 239, 232)),
+                    Declaration::Color(color_from_argb(theme.chrome_text)),
                 ],
             ),
             Rule::new(
@@ -161,7 +173,7 @@ impl Clock {
                     Declaration::Width(if self.format_12h { 24.0 } else { 0.0 }),
                     Declaration::Height(18.0),
                     Declaration::FontSize(12.0),
-                    Declaration::Color(Color::rgb(176, 184, 182)),
+                    Declaration::Color(color_from_argb(theme.control_icon_inactive)),
                 ],
             ),
         ];
@@ -173,13 +185,22 @@ impl Clock {
                     Declaration::Width(136.0),
                     Declaration::Height(20.0),
                     Declaration::FontSize(14.0),
-                    Declaration::Color(Color::rgb(142, 152, 149)),
+                    Declaration::Color(color_from_argb(theme.chrome_text_inactive)),
                 ],
             ));
         }
 
         rules
     }
+}
+
+const fn color_from_argb(argb: u32) -> Color {
+    Color::rgba(
+        ((argb >> 16) & 0xFF) as u8,
+        ((argb >> 8) & 0xFF) as u8,
+        (argb & 0xFF) as u8,
+        ((argb >> 24) & 0xFF) as u8,
+    )
 }
 
 impl Default for Clock {
@@ -271,5 +292,15 @@ mod tests {
         assert!(clock_box.y > 40.0);
         assert!(time_box.y < date_box.y);
         assert_eq!(tree.node(nodes.time).unwrap().attrs.get("text").is_some(), true);
+    }
+
+    #[test]
+    fn clock_text_uses_stile_theme_colors() {
+        let clock = Clock::new();
+        let state = clock.update_from_parts(2026, 5, 2, 21, 41);
+        let theme = crate::theme_by_name("linen.bmp");
+        let (tree, nodes) = clock.build_tree_for_theme(&state, theme).unwrap();
+
+        assert_eq!(tree.node(nodes.time).unwrap().style.color, Some(color_from_argb(theme.chrome_text)));
     }
 }

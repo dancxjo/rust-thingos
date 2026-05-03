@@ -1358,7 +1358,8 @@ fn is_non_bootfb_graphics_driver(name: &str) -> bool {
 }
 
 fn is_safe_shell_program(name: &str) -> bool {
-    is_bin_program(name) || matches!(name, "sprout" | "terminal" | "bristle")
+    is_bin_program(name)
+        || matches!(name, "sprout" | "terminal" | "bristle" | "cambium" | "ps2_kbd" | "ps2_mouse")
 }
 
 fn userspace_aliases(name: &str) -> &'static [&'static str] {
@@ -1424,7 +1425,7 @@ mod tests {
     }
 
     #[test]
-    fn safe_shell_entry_loads_only_sprout_sh_bristle_echo_and_terminal() {
+    fn safe_shell_entry_loads_only_sprout_sh_bristle_cambium_ps2_and_terminal() {
         let sh = Shell::new().expect("shell");
         let mut sprout = test_program("sprout");
         sprout.is_init = true;
@@ -1442,6 +1443,9 @@ mod tests {
             test_program("terminal"),
             test_program("bloom"),
             test_program("bristle"),
+            test_program("cambium"),
+            test_program("ps2_kbd"),
+            test_program("ps2_mouse"),
             test_program("display_bootfb"),
             test_program("display_nvidia_gpu"),
             test_program("display_virtio_gpu"),
@@ -1463,6 +1467,9 @@ mod tests {
         assert!(safe_entry.contains("module_path: boot():/bin/stat"));
         assert!(safe_entry.contains("module_path: boot():/applications/terminal"));
         assert!(safe_entry.contains("module_path: boot():/services/bristle"));
+        assert!(safe_entry.contains("module_path: boot():/services/cambium"));
+        assert!(safe_entry.contains("module_path: boot():/drivers/ps2_kbd"));
+        assert!(safe_entry.contains("module_path: boot():/drivers/ps2_mouse"));
         assert!(!safe_entry.contains("module_path: boot():/services/bloom"));
         assert!(!safe_entry.contains("module_path: boot():/lib/libpistil.so"));
         assert!(!safe_entry.contains("module_path: boot():/bin/busybox"));

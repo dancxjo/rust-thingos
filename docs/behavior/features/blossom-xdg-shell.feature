@@ -111,6 +111,14 @@ Feature: blossom xdg-shell lifecycle
     Then the compositor should move the toplevel window
     And the dragged window should keep a stable cursor offset
 
+  @pointer-debug @meta-window-drag
+  Scenario: holding Meta lets any point inside a window move that window
+    Given the client has an xdg_toplevel
+    Then the Wayland hello client should be visible
+    When I hold Meta and drag inside the Wayland hello client
+    Then the compositor should move the toplevel window
+    And the dragged window should keep a stable cursor offset
+
   @pointer-debug
   Scenario: dragging the frame resizes a toplevel window
     Given the client has an xdg_toplevel

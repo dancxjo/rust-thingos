@@ -128,6 +128,11 @@ pub fn spawn_safe_shell() -> Option<u64> {
     spawn_shell_path("/bin/sh", "/dev/tty0")
 }
 
+pub fn spawn_safe_serial_shell() -> Option<u64> {
+    info!("Safe shell requested; launching /bin/sh on /dev/console");
+    spawn_shell_path("/bin/sh", "/dev/console")
+}
+
 pub fn safe_shell_requested() -> bool {
     let Some(cmdline) = read_boot_cmdline() else {
         return false;

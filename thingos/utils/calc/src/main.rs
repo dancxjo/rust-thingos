@@ -11,7 +11,8 @@ use abi::hid::Key;
 use libdl::{RTLD_NOW, dlerror, dlopen_str, dlsym_bytes};
 use petals::{
     AlignItems, AvailableSpace, CalcInput, CalcKeyNode, CalcState, Calculator, Color,
-    FlexDirection, JustifyContent, ResolvedStyle, Size, State,
+    FlexDirection, JustifyContent, ResolvedStyle, Size, State, UiTheme, default_theme,
+    theme_by_name,
 };
 use stem::abi::syscall::{PollHandle, poll_flags};
 use stem::info;
@@ -36,6 +37,7 @@ const TOPLEVEL_ID: u32 = 12;
 
 const PISTIL_PATH: &str = "/lib/libpistil.so";
 const DRAW_TEXT_SYMBOL: &[u8] = b"pistil_draw_text";
+const THEME_PATH: &str = "/session/desktop/theme";
 const IDLE_SLEEP_MS: u64 = 16;
 const HOLD_DELAY_NS: u64 = 400_000_000;
 const HOLD_REPEAT_NS: u64 = 50_000_000;
@@ -87,6 +89,8 @@ fn main(_arg: usize) -> ! {
     let text_renderer = load_text_renderer();
     let calc = Calculator::new();
     let mut state = CalcState::default();
+    let mut theme_name = read_theme_name();
+    let mut theme = theme_by_name(&theme_name);
 
     send_get_registry(fd, REGISTRY_ID);
     read_initial_globals(fd);
@@ -131,12 +135,14 @@ fn main(_arg: usize) -> ! {
             &mut state,
         );
         let hold_changed = update_hold_repeat(&mut pointer, &calc, &mut state);
+        let theme_changed = refresh_theme(&mut theme_name, &mut theme);
 
         let state_changed = state.expression != last_rendered_expression
             || state.display != last_rendered_display
             || pointer.pressed_key != last_pressed_key
             || changed
-            || hold_changed;
+            || hold_changed
+            || theme_changed;
 
         if pending.configured && (pending.dirty || state_changed) {
             last_rendered_expression = state.expression.clone();
@@ -151,7 +157,7 @@ fn main(_arg: usize) -> ! {
                 pending.width,
                 pending.height,
             );
-            render_calc(buf, &calc, &state, pointer.pressed_key, text_renderer.as_ref());
+            render_calc(buf, &calc, &state, pointer.pressed_key, theme, text_renderer.as_ref());
             if pending.dirty {
                 ack_configure(fd, XDG_SURFACE_ID, pending.serial.unwrap_or(0));
                 pending.dirty = false;
@@ -357,6 +363,7 @@ fn render_calc(
     calc: &Calculator,
     state: &CalcState,
     pressed_key: Option<usize>,
+    theme: UiTheme,
     text_renderer: Option<&TextRenderer>,
 ) {
     unsafe {
@@ -364,8 +371,8 @@ fn render_calc(
             buffer.ptr as *mut u32,
             (buffer.width * buffer.height) as usize,
         );
-        pixels.fill(0xff111318);
-        let _ = render_calc_petal(buffer, pixels, calc, state, pressed_key, text_renderer);
+        pixels.fill(theme.body_top);
+        let _ = render_calc_petal(buffer, pixels, calc, state, pressed_key, theme, text_renderer);
     }
 }
 
@@ -375,13 +382,14 @@ fn render_calc_petal(
     calc: &Calculator,
     state: &CalcState,
     pressed_key: Option<usize>,
+    theme: UiTheme,
     text_renderer: Option<&TextRenderer>,
 ) -> Result<(), ()> {
-    let (mut tree, nodes) = calc.build_tree(state).map_err(|_| ())?;
+    let (mut tree, nodes) = calc.build_tree_for_theme(state, theme).map_err(|_| ())?;
     if let Some(index) = pressed_key {
         if let Some(key) = nodes.keys.get(index) {
             tree.set_state(key.node, State::Active, true);
-            tree.restyle(&calc.rules()).map_err(|_| ())?;
+            tree.restyle(&calc.rules_for_theme(theme)).map_err(|_| ())?;
         }
     }
     tree.apply_style(
@@ -413,7 +421,7 @@ fn render_calc_petal(
     )?;
     draw_text_node(text_renderer, pixels, buffer.width, buffer.height, &tree, nodes.result_line)?;
 
-    for (index, key) in nodes.keys.iter().enumerate() {
+    for key in nodes.keys.iter() {
         draw_key(
             text_renderer,
             pixels,
@@ -422,6 +430,7 @@ fn render_calc_petal(
             &tree,
             key,
             matches!(key.key.input, CalcInput::Operator(_) | CalcInput::Equals),
+            theme,
         )?;
     }
     fill_node(pixels, buffer.width, buffer.height, &tree, nodes.mode_toggle)?;
@@ -438,6 +447,7 @@ fn draw_key(
     tree: &petals::UiTree,
     key: &CalcKeyNode,
     dark_text: bool,
+    theme: UiTheme,
 ) -> Result<(), ()> {
     fill_node(pixels, width, height, tree, key.node)?;
     let label = tree.node(key.label).ok_or(())?;
@@ -448,7 +458,7 @@ fn draw_key(
         _ => key.key.label,
     };
     let color = if dark_text {
-        0xff111318
+        theme.body_top
     } else {
         argb(label.style.color.unwrap_or(Color::rgb(0xe6, 0xea, 0xf0)))
     };
@@ -467,6 +477,34 @@ fn draw_key(
         color,
     );
     Ok(())
+}
+
+fn read_theme_name() -> String {
+    let Ok(fd) = stem::syscall::vfs::vfs_open(THEME_PATH, abi::syscall::vfs_flags::O_RDONLY) else {
+        return String::from(default_theme().name);
+    };
+    let mut buf = [0u8; 128];
+    let name = match vfs_read(fd, &mut buf) {
+        Ok(n) if n > 0 => match core::str::from_utf8(&buf[..n]) {
+            Ok(text) => String::from(text.trim()),
+            Err(_) => String::from(default_theme().name),
+        },
+        _ => String::from(default_theme().name),
+    };
+    let _ = vfs_close(fd);
+    if name.is_empty() { String::from(default_theme().name) } else { name }
+}
+
+fn refresh_theme(current_name: &mut String, theme: &mut UiTheme) -> bool {
+    let next_name = read_theme_name();
+    let next_theme = theme_by_name(&next_name);
+    if next_theme.name == theme.name && next_name == *current_name {
+        return false;
+    }
+    stem::info!("calc: applying theme {}", next_theme.name);
+    *current_name = next_name;
+    *theme = next_theme;
+    true
 }
 
 fn fill_node(

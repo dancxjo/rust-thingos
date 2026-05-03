@@ -3,7 +3,7 @@ use cucumber::{given, then, when};
 use super::basic::turn_on_machine;
 use super::helpers::{StepError, capture_failure_diagnostics, color_close};
 use crate::input::{
-    WindowInfo, drag_pointer, find_window as find_shared_window,
+    WindowInfo, drag_pointer, find_window as find_shared_window, qmp_key,
     read_wayland_windows as read_shared_wayland_windows, send_qmp_sequence,
 };
 use crate::world::ThingOsWorld;
@@ -1147,6 +1147,37 @@ async fn drag_wayland_hello_window_handle(world: &mut ThingOsWorld) -> Result<()
         tokio::time::sleep(std::time::Duration::from_millis(settle_ms)).await;
     }
     Ok(())
+}
+
+#[when("I hold Meta and drag inside the Wayland hello client")]
+async fn meta_drag_inside_wayland_hello_client(world: &mut ThingOsWorld) -> Result<(), StepError> {
+    if world.qmp_control.is_none() {
+        return Err(StepError("No QMP connection for meta window-drag input".to_string()));
+    }
+    if !world.wait_for_serial("ps2_mouse: bristle pid=", 60.0).await {
+        return Err(StepError("PS/2 mouse driver did not connect to Bristle".to_string()));
+    }
+    if !world.wait_for_serial("ps2_kbd: bristle pid=", 60.0).await {
+        return Err(StepError("PS/2 keyboard driver did not connect to Bristle".to_string()));
+    }
+    if !world.wait_for_serial("bloom: registered bristle pointer sink", 60.0).await {
+        return Err(StepError("Bloom did not register its Bristle pointer sink".to_string()));
+    }
+
+    let windows = read_wayland_windows(world).await?;
+    let window = find_window(&windows, "Wayland Lab")?;
+    let start_x = window.x + (window.w as i32 / 2);
+    let start_y = window.y + (window.h as i32 / 2);
+    let end_x = start_x + 84;
+    let end_y = start_y + 52;
+
+    let mut commands = vec![(qmp_key("meta_l", true), std::time::Duration::from_millis(100))];
+    commands.extend(drag_pointer(start_x, start_y, end_x, end_y, 4));
+    commands.push((qmp_key("meta_l", false), std::time::Duration::from_millis(120)));
+
+    send_qmp_sequence(world, &commands, "meta window drag")
+        .await
+        .map_err(|e| StepError(format!("QMP meta window drag failed: {}", e)))
 }
 
 #[then("the compositor should move the toplevel window")]

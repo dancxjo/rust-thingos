@@ -7,7 +7,7 @@ use pistil_types::Texture;
 
 use crate::display::DisplayBackend;
 use crate::scene::{ChromeButton, CompositionEntry, CursorKind, SurfaceChrome};
-use crate::theme::{ChromeStyle, UiTheme, default_theme, theme_by_name};
+use crate::theme::{UiTheme, default_theme, theme_by_name};
 
 const PISTIL_PATH: &str = "/lib/libpistil.so";
 const PREPARE_BACKGROUND_SYMBOL: &[u8] = b"pistil_prepare_background";
@@ -1525,7 +1525,7 @@ fn draw_chrome_overlay(
     composition: &[CompositionEntry],
     pistil_draw_svg_icon: Option<DrawSvgIconFn>,
     pistil_draw_text: Option<DrawTextFn>,
-    pistil_draw_symbol_text: Option<DrawTextFn>,
+    _pistil_draw_symbol_text: Option<DrawTextFn>,
     theme: UiTheme,
     pointer_x: i32,
     pointer_y: i32,
@@ -1551,91 +1551,30 @@ fn draw_chrome_overlay(
             continue;
         }
         let rect = entry.dest_rect;
-        let frame = chrome.frame_thickness.min(rect.w / 2).min(rect.h / 2);
-        if frame == 0 {
-            continue;
-        }
-        let x = rect.x as i32;
-        let y = rect.y as i32;
-        let w = rect.w;
-        let h = rect.h;
-        let text_color = if entry.active { theme.chrome_text } else { theme.chrome_text_inactive };
-        let icon_color =
-            if entry.active { theme.control_icon } else { theme.control_icon_inactive };
-        let titlebar_height = chrome.titlebar_height.min(theme.titlebar_height).min(h);
-
         let window_hovered = rect_contains(rect, pointer_x, pointer_y);
-        match theme.chrome_style {
-            ChromeStyle::Facet => draw_facet_window_frame(
-                dst,
-                stride,
-                height,
-                rect,
-                frame,
-                titlebar_height,
-                entry.active,
-                theme,
-            ),
-            ChromeStyle::Ghost => draw_ghost_window_frame(
-                dst,
-                stride,
-                height,
-                rect,
-                frame,
-                titlebar_height,
-                entry.active,
-                window_hovered,
-                theme,
-            ),
-        }
-
-        if titlebar_height > 0 {
-            draw_chrome_buttons(
-                dst,
-                stride,
-                height,
-                rect,
-                chrome,
-                entry.active,
-                entry.is_shaded,
-                entry.is_fullscreen,
-                pistil_draw_svg_icon,
-                pistil_draw_symbol_text.or(pistil_draw_text),
-                icon_color,
-                theme.close_icon,
-                theme,
+        let plan = blossom::chrome::window_chrome_plan(
+            crate::scene::to_blossom_rect(rect),
+            to_blossom_chrome(chrome),
+            theme,
+            blossom::chrome::ChromeVisualState {
+                active: entry.active,
+                hovered: window_hovered,
+                primary_button_down,
                 pointer_x,
                 pointer_y,
-                primary_button_down,
-            );
-            if let Some(title) = entry.title.as_deref() {
-                let text_x = x.saturating_add(frame as i32).saturating_add(8);
-                let text_y = y.saturating_add((titlebar_height as i32 + 16) / 2);
-                let buttons_w = chrome_button_rects(rect, chrome)
-                    .map(|rects| {
-                        let first = rects[0].1;
-                        rect.x.saturating_add(rect.w).saturating_sub(first.x)
-                    })
-                    .unwrap_or(0);
-                let max_chars = w
-                    .saturating_sub(frame.saturating_mul(2))
-                    .saturating_sub(24)
-                    .saturating_sub(buttons_w)
-                    .saturating_div(10)
-                    .max(1) as usize;
-                draw_overlay_text_bold(
-                    pistil_draw_text,
-                    dst,
-                    stride,
-                    height,
-                    text_x,
-                    text_y,
-                    16.0,
-                    title_prefix(title, max_chars),
-                    text_color,
-                );
-            }
-        }
+                shaded: entry.is_shaded,
+                fullscreen: entry.is_fullscreen,
+            },
+            entry.title.as_deref(),
+        );
+        execute_blossom_chrome_plan(
+            dst,
+            stride,
+            height,
+            &plan,
+            pistil_draw_svg_icon,
+            pistil_draw_text,
+        );
     }
 
     let len = (stride.saturating_mul(height)) as usize;
@@ -1644,6 +1583,142 @@ fn draw_chrome_overlay(
             *px = 0;
         }
     }
+}
+
+fn execute_blossom_chrome_plan(
+    dst: &mut [u32],
+    stride: u32,
+    height: u32,
+    plan: &blossom::chrome::ChromeDrawPlan<'_>,
+    pistil_draw_svg_icon: Option<DrawSvgIconFn>,
+    pistil_draw_text: Option<DrawTextFn>,
+) {
+    for command in &plan.commands {
+        match *command {
+            blossom::chrome::ChromeDrawCommand::FillRect { rect, color } => {
+                fill_rect_i32(dst, stride, height, rect.x, rect.y, rect.w, rect.h, color);
+            }
+            blossom::chrome::ChromeDrawCommand::VerticalGradient { rect, top, bottom } => {
+                if rect.w > 0 && rect.h > 0 {
+                    fill_vertical_gradient(
+                        dst,
+                        stride,
+                        height,
+                        rect.x,
+                        rect.y,
+                        rect.w as u32,
+                        rect.h as u32,
+                        top,
+                        bottom,
+                    );
+                }
+            }
+            blossom::chrome::ChromeDrawCommand::HorizontalGradient { rect, left, center, right } => {
+                if rect.w > 0 && rect.h > 0 {
+                    fill_horizontal_gradient(
+                        dst,
+                        stride,
+                        height,
+                        rect.x,
+                        rect.y,
+                        rect.w as u32,
+                        rect.h as u32,
+                        left,
+                        center,
+                        right,
+                    );
+                }
+            }
+            blossom::chrome::ChromeDrawCommand::StrokeRect { rect, thickness, color } => {
+                if rect.w > 0 && rect.h > 0 && thickness > 0 {
+                    draw_rect_stroke(
+                        dst,
+                        stride,
+                        height,
+                        rect.x,
+                        rect.y,
+                        rect.w as u32,
+                        rect.h as u32,
+                        thickness as u32,
+                        color,
+                    );
+                }
+            }
+            blossom::chrome::ChromeDrawCommand::Text { x, y, px_size_bits, text, color } => {
+                draw_overlay_text_bold(
+                    pistil_draw_text,
+                    dst,
+                    stride,
+                    height,
+                    x,
+                    y,
+                    f32::from_bits(px_size_bits),
+                    text,
+                    color,
+                );
+            }
+            blossom::chrome::ChromeDrawCommand::ControlGlyph {
+                rect,
+                button,
+                icon_path,
+                color,
+            } => {
+                if draw_blossom_svg_icon(
+                    pistil_draw_svg_icon,
+                    dst,
+                    stride,
+                    height,
+                    rect,
+                    icon_path,
+                    color,
+                ) {
+                    continue;
+                }
+                draw_facet_control_glyph(
+                    dst,
+                    stride,
+                    height,
+                    crate::scene::from_blossom_rect(rect),
+                    from_blossom_chrome_button(button),
+                    false,
+                    false,
+                    color,
+                );
+            }
+        }
+    }
+}
+
+fn draw_blossom_svg_icon(
+    pistil_draw_svg_icon: Option<DrawSvgIconFn>,
+    dst: &mut [u32],
+    stride: u32,
+    height: u32,
+    rect: blossom::Rect,
+    icon_path: Option<&'static str>,
+    color: u32,
+) -> bool {
+    let (Some(draw_svg_icon), Some(path)) = (pistil_draw_svg_icon, icon_path) else {
+        return false;
+    };
+    if rect.w <= 0 || rect.h <= 0 {
+        return false;
+    }
+    let icon_size = (rect.w.min(rect.h) as u32).saturating_sub(10).clamp(12, 14);
+    let dst_x = rect.x + (rect.w - icon_size as i32) / 2;
+    let dst_y = rect.y + (rect.h - icon_size as i32) / 2;
+    call_draw_svg_icon(
+        draw_svg_icon,
+        path,
+        dst,
+        stride,
+        height,
+        dst_x,
+        dst_y,
+        icon_size,
+        icon_size,
+        color,
+    ) == 0
 }
 
 fn draw_window_handle(

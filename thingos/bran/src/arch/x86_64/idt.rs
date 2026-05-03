@@ -1011,7 +1011,7 @@ fn try_spawn_shell(path: &str) -> Option<u64> {
         return None;
     }
 
-    kernel::irq::ps2::set_fb_input_enabled(true);
+    kernel::irq::ps2::enable_fb_input();
     let tty_path = "/dev/tty0".to_string();
     let res = unsafe {
         kernel::sched::spawn_process_from_path_current(
@@ -1078,7 +1078,7 @@ pub fn activate_terminal_and_spawn_shell() {
     }
 
     crate::console::activate_onscreen_terminal();
-    kernel::irq::ps2::set_fb_input_enabled(true);
+    kernel::irq::ps2::enable_fb_input();
 
     if !try_lock_hotkey_shell_spawn() {
         let existing = HOTKEY_SHELL_TID.load(Ordering::Acquire);

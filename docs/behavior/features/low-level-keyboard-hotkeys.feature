@@ -26,4 +26,5 @@ Feature: Low-level keyboard hotkeys
     Given the machine is started
     When I wait for the system to boot
     Then the serial output should contain "Kernel terminal requested; launching shell on /dev/tty0"
+    And the serial output should contain "Framebuffer terminal input ready"
     And the serial output should contain "Kernel terminal requested; skipping desktop handoff"

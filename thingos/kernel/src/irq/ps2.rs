@@ -99,6 +99,12 @@ pub fn set_fb_input_enabled(enabled: bool) {
     FB_INPUT_ENABLED.store(enabled, Ordering::Release);
 }
 
+pub fn enable_fb_input() {
+    if !FB_INPUT_ENABLED.swap(true, Ordering::AcqRel) {
+        crate::kinfo!("Framebuffer terminal input ready");
+    }
+}
+
 pub fn take_input_char() -> Option<u8> {
     INPUT_QUEUE.pop().map(|v| v as u8)
 }
@@ -290,12 +296,14 @@ mod tests {
 
     fn reset_state() {
         while take_scancode().is_some() {}
+        while take_input_char().is_some() {}
         EXTENDED_PREFIX.store(false, Ordering::Release);
         ALT_DOWN.store(false, Ordering::Release);
         F1_DOWN.store(false, Ordering::Release);
         F12_DOWN.store(false, Ordering::Release);
         LOG_LEVEL_HOTKEY_PENDING.store(0, Ordering::Release);
         TERMINAL_HOTKEY_PENDING.store(false, Ordering::Release);
+        FB_INPUT_ENABLED.store(false, Ordering::Release);
         crate::logging::set_log_level(3);
     }
 
@@ -394,5 +402,17 @@ mod tests {
         assert!(!buffer_scancode(0x3B, false));
         assert_eq!(take_log_level_hotkey(), Some(1));
         assert_eq!(crate::logging::get_log_level(), 1);
+    }
+
+    #[test]
+    fn framebuffer_input_requires_explicit_enable() {
+        reset_state();
+
+        assert!(!buffer_scancode(0x1E, false));
+        assert_eq!(take_input_char(), None);
+
+        enable_fb_input();
+        assert!(!buffer_scancode(0x1E, false));
+        assert_eq!(take_input_char(), Some(b'a'));
     }
 }

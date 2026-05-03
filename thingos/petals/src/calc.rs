@@ -8,7 +8,7 @@ use taffy::TaffyError;
 
 use crate::{
     AlignItems, AttrValue, Color, Declaration, Description, FlexDirection, FontWeight,
-    JustifyContent, NodeId, Rule, Selector, State, UiTree,
+    JustifyContent, NodeId, Rule, Selector, State, UiTheme, UiTree, default_theme,
 };
 
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
@@ -149,10 +149,18 @@ impl Calculator {
     }
 
     pub fn build_tree(&self, state: &CalcState) -> Result<(UiTree, CalcNodes), TaffyError> {
+        self.build_tree_for_theme(state, default_theme())
+    }
+
+    pub fn build_tree_for_theme(
+        &self,
+        state: &CalcState,
+        theme: UiTheme,
+    ) -> Result<(UiTree, CalcNodes), TaffyError> {
         let mut tree = UiTree::new()?;
         let root = tree.root();
         let nodes = self.render(&mut tree, root, state)?;
-        tree.restyle(&self.rules())?;
+        tree.restyle(&self.rules_for_theme(theme))?;
         Ok((tree, nodes))
     }
 
@@ -241,6 +249,10 @@ impl Calculator {
     }
 
     pub fn rules(&self) -> Vec<Rule<Description>> {
+        self.rules_for_theme(default_theme())
+    }
+
+    pub fn rules_for_theme(&self, theme: UiTheme) -> Vec<Rule<Description>> {
         alloc::vec![
             Rule::new(
                 Selector::has(Description::Calculator),
@@ -250,7 +262,7 @@ impl Calculator {
                     Declaration::JustifyContent(JustifyContent::Start),
                     Declaration::Gap(8.0),
                     Declaration::Padding(12.0),
-                    Declaration::BackgroundColor(Color::rgb(0x11, 0x13, 0x18)),
+                    Declaration::BackgroundColor(color_from_argb(theme.body_top)),
                 ],
             ),
             Rule::new(
@@ -262,7 +274,7 @@ impl Calculator {
                     Declaration::Padding(16.0),
                     Declaration::Gap(6.0),
                     Declaration::Height(112.0),
-                    Declaration::BackgroundColor(Color::rgb(0x1b, 0x1f, 0x2a)),
+                    Declaration::BackgroundColor(color_from_argb(theme.inactive.title_bottom)),
                 ],
             ),
             Rule::new(
@@ -271,7 +283,7 @@ impl Calculator {
                     Declaration::Width(320.0),
                     Declaration::Height(22.0),
                     Declaration::FontSize(18.0),
-                    Declaration::Color(Color::rgb(0x7a, 0x83, 0x94)),
+                    Declaration::Color(color_from_argb(theme.chrome_text_inactive)),
                 ],
             ),
             Rule::new(
@@ -281,7 +293,7 @@ impl Calculator {
                     Declaration::Height(56.0),
                     Declaration::FontSize(48.0),
                     Declaration::FontWeight(FontWeight::Normal),
-                    Declaration::Color(Color::rgb(0xe6, 0xea, 0xf0)),
+                    Declaration::Color(color_from_argb(theme.chrome_text)),
                 ],
             ),
             Rule::new(
@@ -312,25 +324,25 @@ impl Calculator {
                     Declaration::FlexDirection(FlexDirection::Row),
                     Declaration::AlignItems(AlignItems::Center),
                     Declaration::JustifyContent(JustifyContent::Center),
-                    Declaration::BackgroundColor(Color::rgb(0x22, 0x26, 0x34)),
+                    Declaration::BackgroundColor(color_from_argb(theme.button_top)),
                     Declaration::BorderWidth(1.0),
                 ],
             ),
             Rule::new(
                 Selector::has(Description::CalcKey).and(Selector::state(State::Active)),
-                alloc::vec![Declaration::BackgroundColor(Color::rgb(0x2e, 0x34, 0x45))],
+                alloc::vec![Declaration::BackgroundColor(color_from_argb(theme.frame_bevel_light))],
             ),
             Rule::new(
                 Selector::has(Description::OperatorKey),
-                alloc::vec![Declaration::BackgroundColor(Color::rgb(0xd8, 0xa6, 0x57))],
+                alloc::vec![Declaration::BackgroundColor(color_from_argb(theme.focus_accent))],
             ),
             Rule::new(
                 Selector::has(Description::EqualsKey),
-                alloc::vec![Declaration::BackgroundColor(Color::rgb(0xd8, 0xa6, 0x57))],
+                alloc::vec![Declaration::BackgroundColor(color_from_argb(theme.focus_accent))],
             ),
             Rule::new(
                 Selector::has(Description::DangerKey),
-                alloc::vec![Declaration::BackgroundColor(Color::rgb(0xe0, 0x6c, 0x75))],
+                alloc::vec![Declaration::BackgroundColor(color_from_argb(theme.close_icon))],
             ),
             Rule::new(
                 Selector::has(Description::Textual),
@@ -338,7 +350,7 @@ impl Calculator {
                     Declaration::FontSize(22.0),
                     Declaration::Width(64.0),
                     Declaration::Height(28.0),
-                    Declaration::Color(Color::rgb(0xe6, 0xea, 0xf0)),
+                    Declaration::Color(color_from_argb(theme.chrome_text)),
                 ],
             ),
             Rule::new(
@@ -354,11 +366,20 @@ impl Calculator {
                     Declaration::FlexDirection(FlexDirection::Row),
                     Declaration::AlignItems(AlignItems::Center),
                     Declaration::JustifyContent(JustifyContent::Center),
-                    Declaration::BackgroundColor(Color::rgb(0x1b, 0x1f, 0x2a)),
+                    Declaration::BackgroundColor(color_from_argb(theme.inactive.title_bottom)),
                 ],
             ),
         ]
     }
+}
+
+const fn color_from_argb(argb: u32) -> Color {
+    Color::rgba(
+        ((argb >> 16) & 0xFF) as u8,
+        ((argb >> 8) & 0xFF) as u8,
+        (argb & 0xFF) as u8,
+        ((argb >> 24) & 0xFF) as u8,
+    )
 }
 
 impl Default for Calculator {
@@ -832,6 +853,22 @@ mod tests {
             tree.node(nodes.keys[0].node).unwrap().descriptions.contains(&Description::Pressable)
         );
         assert_eq!(tree.global_layout_box(nodes.keys[0].node).unwrap().width, 72.0);
+    }
+
+    #[test]
+    fn calculator_surfaces_use_stile_theme_colors() {
+        let calc = Calculator::new();
+        let theme = crate::theme_by_name("leather.bmp");
+        let (tree, nodes) = calc.build_tree_for_theme(&CalcState::default(), theme).unwrap();
+
+        assert_eq!(
+            tree.node(nodes.root).unwrap().style.background_color,
+            Some(color_from_argb(theme.body_top))
+        );
+        assert_eq!(
+            tree.node(nodes.keys[0].node).unwrap().style.background_color,
+            Some(color_from_argb(theme.button_top))
+        );
     }
 
     #[test]

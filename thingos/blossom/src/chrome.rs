@@ -2,7 +2,10 @@ use alloc::vec::Vec;
 
 use petals::{ChromeStyle, UiTheme};
 
-use crate::wm::{ChromeButton, Rect, SurfaceChrome, chrome_button_rects};
+use crate::{
+    Rect,
+    wm::{ChromeButton, SurfaceChrome, chrome_button_rects},
+};
 
 pub const WINDOW_ICON_SHADE_PATH: &str = "/public/icons/lucide/chevron-up.svg";
 pub const WINDOW_ICON_UNSHADE_PATH: &str = "/public/icons/lucide/chevron-down.svg";
@@ -17,8 +20,7 @@ pub enum ChromeDrawCommand<'a> {
     HorizontalGradient { rect: Rect, left: u32, center: u32, right: u32 },
     StrokeRect { rect: Rect, thickness: i32, color: u32 },
     Text { x: i32, y: i32, px_size_bits: u32, text: &'a str, color: u32 },
-    SvgIcon { rect: Rect, path: &'static str, color: u32 },
-    FacetGlyph { rect: Rect, button: ChromeButton, color: u32 },
+    ControlGlyph { rect: Rect, button: ChromeButton, icon_path: Option<&'static str>, color: u32 },
 }
 
 #[derive(Clone, Debug, Default, PartialEq, Eq)]
@@ -328,10 +330,12 @@ fn push_chrome_buttons(
                 color: if pressed { theme.edge_light } else { theme.button_top },
             });
         }
-        if let Some(path) = icon_path(button, state.shaded, state.fullscreen) {
-            plan.commands.push(ChromeDrawCommand::SvgIcon { rect, path, color });
-        }
-        plan.commands.push(ChromeDrawCommand::FacetGlyph { rect, button, color });
+        plan.commands.push(ChromeDrawCommand::ControlGlyph {
+            rect,
+            button,
+            icon_path: icon_path(button, state.shaded, state.fullscreen),
+            color,
+        });
     }
 }
 
@@ -440,6 +444,6 @@ mod tests {
 
         assert!(plan.commands.iter().any(|cmd| matches!(cmd, ChromeDrawCommand::VerticalGradient { .. })));
         assert!(plan.commands.iter().any(|cmd| matches!(cmd, ChromeDrawCommand::Text { .. })));
-        assert!(plan.commands.iter().any(|cmd| matches!(cmd, ChromeDrawCommand::FacetGlyph { .. })));
+        assert!(plan.commands.iter().any(|cmd| matches!(cmd, ChromeDrawCommand::ControlGlyph { .. })));
     }
 }

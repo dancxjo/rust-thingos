@@ -461,6 +461,35 @@ impl InputState {
                 }
                 let old_focus = scene.keyboard_focus;
                 if btn.button == 0 {
+                    if self.keyboard_modifiers_have_meta() {
+                        if let Some(surface_id) = self.start_meta_window_grab(scene, damage) {
+                            let new_focus = Some(surface_id);
+                            if scene.raise_to_top(surface_id) {
+                                immediate_repaint = true;
+                                if old_focus == new_focus {
+                                    if let Some(rect) = scene.surface_rect(surface_id) {
+                                        mark_surface_visual_damage(scene, damage, surface_id, rect);
+                                    }
+                                }
+                            }
+                            scene.keyboard_focus = new_focus;
+                            mark_focus_damage(scene, damage, old_focus, new_focus);
+                            self.send_keyboard_focus_events(
+                                scene,
+                                old_focus,
+                                scene.keyboard_focus,
+                                wayland_evt_write,
+                            );
+                            mark_cursor_damage(
+                                damage,
+                                self.visible_x,
+                                self.visible_y,
+                                self.pointer_x,
+                                self.pointer_y,
+                            );
+                            return true;
+                        }
+                    }
                     if self.handle_chrome_button(scene, damage, wayland_evt_write, old_focus) {
                         immediate_repaint = true;
                         mark_cursor_damage(
@@ -869,6 +898,10 @@ impl InputState {
         immediate_repaint
     }
 
+    fn keyboard_modifiers_have_meta(&self) -> bool {
+        abi::hid::Mods(self.keyboard_modifiers).has_meta()
+    }
+
     fn update_pointer_focus(&mut self, scene: &mut Scene, wayland_evt_write: Option<u32>) {
         let new_focus = scene.top_client_surface_at(self.pointer_x, self.pointer_y);
         if scene.pointer_focus == new_focus {
@@ -903,6 +936,34 @@ impl InputState {
         }
     }
 
+    fn begin_move_grab(
+        &mut self,
+        scene: &Scene,
+        damage: &mut DamageTracker,
+        surface_id: u32,
+    ) -> Option<u32> {
+        let rect = scene.surface_rect(surface_id)?;
+        let offset_x = self.pointer_x.saturating_sub(rect.x as i32);
+        let offset_y = self.pointer_y.saturating_sub(rect.y as i32);
+        self.pointer_grab =
+            Some(PointerGrab { surface_id, kind: PointerGrabKind::Move { offset_x, offset_y } });
+        self.set_cursor_kind(CursorKind::Move, damage);
+        stem::debug!(
+            "Window drag started surface={} pointer={},{} offset={},{}",
+            surface_id,
+            self.pointer_x,
+            self.pointer_y,
+            offset_x,
+            offset_y
+        );
+        Some(surface_id)
+    }
+
+    fn start_meta_window_grab(&mut self, scene: &Scene, damage: &mut DamageTracker) -> Option<u32> {
+        let surface_id = scene.top_surface_at(self.pointer_x, self.pointer_y)?;
+        self.begin_move_grab(scene, damage, surface_id)
+    }
+
     fn start_chrome_grab(
         &mut self,
         scene: &Scene,
@@ -910,25 +971,7 @@ impl InputState {
         wayland_evt_write: Option<u32>,
     ) -> Option<u32> {
         match scene.hit_test(self.pointer_x, self.pointer_y)? {
-            HitTarget::TitleBar { surface_id } => {
-                let rect = scene.surface_rect(surface_id)?;
-                let offset_x = self.pointer_x.saturating_sub(rect.x as i32);
-                let offset_y = self.pointer_y.saturating_sub(rect.y as i32);
-                self.pointer_grab = Some(PointerGrab {
-                    surface_id,
-                    kind: PointerGrabKind::Move { offset_x, offset_y },
-                });
-                self.set_cursor_kind(CursorKind::Move, damage);
-                stem::debug!(
-                    "Window drag started surface={} pointer={},{} offset={},{}",
-                    surface_id,
-                    self.pointer_x,
-                    self.pointer_y,
-                    offset_x,
-                    offset_y
-                );
-                Some(surface_id)
-            }
+            HitTarget::TitleBar { surface_id } => self.begin_move_grab(scene, damage, surface_id),
             HitTarget::Frame { surface_id, edge } => {
                 let rect = scene.surface_rect(surface_id)?;
                 self.pointer_grab = Some(PointerGrab {
