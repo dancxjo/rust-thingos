@@ -278,6 +278,26 @@ pub fn spawn_bloom() -> Option<u64> {
     None
 }
 
+pub fn spawn_netd() -> Option<u64> {
+    let path = "/services/netd";
+    let argv: [&[u8]; 1] = [path.as_bytes()];
+    let env = BTreeMap::new();
+    let inherit = abi::types::stdio_mode::INHERIT;
+    let null = abi::types::stdio_mode::NULL;
+
+    match stem::syscall::spawn_process_ex(path, &argv, &env, null, inherit, inherit, 0, &[]) {
+        Ok(resp) => {
+            let pid = resp.child_tid;
+            debug!("Spawned netd with PID {}", pid);
+            Some(pid)
+        }
+        Err(err) => {
+            warn!("SPROUT: failed to spawn netd: {:?}", err);
+            None
+        }
+    }
+}
+
 pub fn spawn_blossom() -> Option<u64> {
     let path = "/services/blossom";
     let argv: [&[u8]; 1] = [path.as_bytes()];

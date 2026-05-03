@@ -186,10 +186,9 @@ impl ArchRuntime for LoongArch64Runtime {
         virt: u64,
         phys: u64,
         perms: MapPerms,
-        kind: MapKind,
         allocator: &dyn FrameAllocatorHook,
     ) -> Result<(), ()> {
-        paging::map_page(aspace, virt, phys, perms, kind, allocator)
+        paging::map_page(aspace, virt, phys, perms, allocator)
     }
 
     fn unmap_page(&self, aspace: Self::AddressSpace, virt: u64) -> Result<Option<u64>, ()> {
@@ -211,8 +210,17 @@ impl ArchRuntime for LoongArch64Runtime {
         aspace.pgdl
     }
 }
-        unsafe {
-            asm!("idle 0");
-        }
+
+struct DumbKernelAlloc;
+impl FrameAllocatorHook for DumbKernelAlloc {
+    fn alloc_frame(&self) -> Option<u64> {
+        kernel::memory::alloc_frame()
+    }
+}
+
+#[inline(always)]
+pub fn hcf() -> ! {
+    loop {
+        unsafe { core::arch::asm!("idle 0") };
     }
 }

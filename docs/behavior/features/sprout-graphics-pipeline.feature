@@ -7,6 +7,7 @@ Feature: Sprout desktop session orchestration
     Then the serial output should contain "SPROUT: Starting full pipeline (graphics + input)" within 60s
     And the serial output should contain "SPROUT: Spawned bristle" within 60s
     And the serial output should contain "SPROUT: Spawned bloom" within 120s
+    And the serial output should contain "NETD: Starting network service" within 120s
     And the serial output should contain "bloom: compositor service starting" within 120s
     And the serial output should contain "bloom: service loop started" within 180s
     And the serial output should contain "First frame rendered" within 180s

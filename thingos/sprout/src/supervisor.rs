@@ -12,8 +12,8 @@ use stem::{debug, info, warn};
 
 use crate::pipelines::{
     kernel_terminal_requested, safe_shell_requested, spawn_bloom, spawn_blossom, spawn_bristle,
-    spawn_chime, spawn_kernel_terminal_shell, spawn_safe_serial_shell, spawn_safe_shell,
-    spawn_shell,
+    spawn_chime, spawn_kernel_terminal_shell, spawn_netd, spawn_safe_serial_shell,
+    spawn_safe_shell, spawn_shell,
 };
 
 const SHELL_HEADSTART_MS: u64 = 50;
@@ -66,6 +66,7 @@ impl Supervisor {
             // we can launch the bloom compositor and the Blossom shell that
             // owns window-management UI over Wayland.
             let _bloom_pid = spawn_bloom();
+            let _netd_pid = spawn_netd();
             let _blossom_pid = spawn_blossom();
         }
 

@@ -40,7 +40,6 @@ pub fn map_page(
     virt: u64,
     phys: u64,
     perms: MapPerms,
-    _kind: MapKind,
     allocator: &dyn FrameAllocatorHook,
 ) -> Result<(), ()> {
     let mut bits = 1u64; // Valid

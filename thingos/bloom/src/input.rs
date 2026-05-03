@@ -744,6 +744,32 @@ impl InputState {
                     }
                     return true;
                 }
+                if matches!(wm_action, blossom::input::WmAction::LaunchTerminal) {
+                    let launcher = BloomLauncher;
+                    let mut buf = [0u8; 128];
+                    let command = match stem::syscall::env_get(b"TERMINAL", &mut buf) {
+                        Ok(n) if n > 0 && n <= buf.len() => {
+                            if let Ok(s) = core::str::from_utf8(&buf[..n]) {
+                                alloc::string::String::from(s)
+                            } else {
+                                alloc::string::String::from("terminal")
+                            }
+                        }
+                        _ => alloc::string::String::from("terminal"),
+                    };
+                    match blossom::runbox::Launcher::run(&launcher, &command) {
+                        blossom::runbox::LaunchResult::Started { pid } => {
+                            stem::info!("Launched {} as pid {}", command, pid);
+                        }
+                        blossom::runbox::LaunchResult::NotFound => {
+                            stem::warn!("Could not launch '{}': command not found", command);
+                        }
+                        blossom::runbox::LaunchResult::Failed => {
+                            stem::warn!("Could not launch '{}'", command);
+                        }
+                    }
+                    return true;
+                }
                 if self.launcher.visible {
                     if key.key() == Key::Escape {
                         self.launcher.close();
@@ -821,6 +847,7 @@ impl InputState {
                     }
                     blossom::input::WmAction::ToggleRunBox => {}
                     blossom::input::WmAction::ToggleLauncher => {}
+                    blossom::input::WmAction::LaunchTerminal => {}
                     blossom::input::WmAction::None => {}
                 }
                 if let Some(surface_id) = scene.keyboard_focus {

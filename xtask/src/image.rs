@@ -748,7 +748,7 @@ pub fn build_iso_with_config(
 
     sh.write_file(
         iso_root.join("etc/profile"),
-        "export PATH=/bin:/applications:/drivers\nalias ll='loglevel'\nalias halt='shutdown'\n",
+        "export PATH=/bin:/applications:/drivers\nexport TERMINAL=leaf\nalias ll='loglevel'\nalias halt='shutdown'\n",
     )?;
 
     sh.write_file(iso_root.join("etc/motd"), generate_motd())?;
@@ -1172,7 +1172,7 @@ pub fn build_hdd(sh: &Shell, arch: &str, programs: &[ProgramConfig]) -> Result<P
 
     sh.write_file(
         "profile",
-        "export PATH=/bin:/applications:/drivers\nalias ll='loglevel'\nalias halt='shutdown'\n",
+        "export PATH=/bin:/applications:/drivers\nexport TERMINAL=leaf\nalias ll='loglevel'\nalias halt='shutdown'\n",
     )?;
     sh.write_file("motd", generate_motd())?;
 

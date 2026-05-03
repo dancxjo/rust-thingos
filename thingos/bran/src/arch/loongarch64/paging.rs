@@ -42,7 +42,6 @@ pub fn map_page(
     virt: u64,
     phys: u64,
     perms: MapPerms,
-    kind: MapKind,
     allocator: &dyn FrameAllocatorHook,
 ) -> Result<(), ()> {
     let mut bits = 1u64 << 0; // V (Valid)
@@ -56,7 +55,7 @@ pub fn map_page(
     } // PLV=3 (Set bits 2 and 3)
 
     // MAT (Memory Access Type): Normal=1 (CC), Device=0 (SU)
-    if kind == MapKind::Normal {
+    if perms.kind == MapKind::Normal {
         bits |= 1 << 4;
     } // MAT=1 (Coherent Cached)
 

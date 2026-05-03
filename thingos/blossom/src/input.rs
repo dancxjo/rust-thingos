@@ -7,6 +7,7 @@ pub enum WmAction {
     CloseSurface,
     ToggleRunBox,
     ToggleLauncher,
+    LaunchTerminal,
 }
 
 pub fn handle_hotkey(key: Key, mods: Mods, is_repeat: bool) -> WmAction {
@@ -28,6 +29,10 @@ pub fn handle_hotkey(key: Key, mods: Mods, is_repeat: bool) -> WmAction {
 
     if key == Key::F11 {
         return WmAction::ToggleFullscreen;
+    }
+
+    if key == Key::T && mods.has_meta() {
+        return WmAction::LaunchTerminal;
     }
 
     if (mods.has_alt() && key == Key::F4) || (mods.has_ctrl() && key == Key::W) {

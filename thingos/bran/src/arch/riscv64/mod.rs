@@ -185,10 +185,9 @@ impl ArchRuntime for RISCV64Runtime {
         virt: u64,
         phys: u64,
         perms: MapPerms,
-        kind: MapKind,
         allocator: &dyn FrameAllocatorHook,
     ) -> Result<(), ()> {
-        paging::map_page(aspace, virt, phys, perms, kind, allocator)
+        paging::map_page(aspace, virt, phys, perms, allocator)
     }
 
     fn unmap_page(&self, aspace: Self::AddressSpace, virt: u64) -> Result<Option<u64>, ()> {
@@ -207,11 +206,6 @@ impl ArchRuntime for RISCV64Runtime {
         aspace.0
     }
 }
-        unsafe {
-            asm!("wfi");
-        }
-    }
-}
 
 #[inline]
 fn read_time() -> u64 {
@@ -220,4 +214,19 @@ fn read_time() -> u64 {
         asm!("csrr {}, time", out(reg) val);
     }
     val
+}
+
+struct DumbKernelAlloc;
+impl FrameAllocatorHook for DumbKernelAlloc {
+    fn alloc_frame(&self) -> Option<u64> {
+        kernel::memory::alloc_frame()
+    }
+}
+
+pub fn hcf() -> ! {
+    loop {
+        unsafe {
+            asm!("wfi");
+        }
+    }
 }
