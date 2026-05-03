@@ -13,6 +13,7 @@ default = []
 stem-service-loop = ["dep:stem"]
 
 [dependencies]
+abi = { path = "../abi" }
 stile = { path = "../stile" }
 taffy = { version = "0.10.1", default-features = false, features = ["alloc", "taffy_tree", "flexbox"] }
 stem = { path = "../stem", optional = true, features = ["rt"] }
