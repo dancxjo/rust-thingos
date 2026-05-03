@@ -12,15 +12,19 @@ use petals::{
     AlignItems, AvailableSpace, Clock, ClockState, Color, FlexDirection, JustifyContent,
     ResolvedStyle, Size, Theme, default_theme, theme_by_name,
 };
-use stem::abi::syscall::{PollHandle, poll_flags};
+use stem::application::{
+    AppAction, Application, ApplicationContext, ServiceLooper, run_application,
+};
 use stem::info;
+use stem::service_loop::ServiceEvent;
 use stem::syscall::socket::{connect, sendmsg, socket};
 use stem::syscall::socket_domain::AF_UNIX;
 use stem::syscall::socket_type::SOCK_STREAM;
 use stem::syscall::{
-    exit, get_tid, memfd_create, set_priority, sleep_ms, vfs_close, vfs_poll, vfs_read, vfs_write,
-    vm_map,
+    get_tid, memfd_create, set_priority, sleep_ms, vfs_close, vfs_read, vfs_write, vm_map,
 };
+use stem::time::Duration;
+use stem::wait_set::WaitToken;
 
 const REGISTRY_ID: u32 = 2;
 const COMPOSITOR_ID: u32 = 3;
@@ -79,13 +83,43 @@ struct DateTime {
 
 #[stem::main]
 fn main(_arg: usize) -> ! {
+    run_application::<ClockApp>()
+}
+
+struct ClockApp {
+    fd: u32,
+    wayland_token: WaitToken,
+    text_renderer: Option<TextRenderer>,
+    clock: Clock,
+    theme_name: String,
+    theme: Theme,
+    pending: PendingSurface,
+    buffer: Option<BufferState>,
+    next_callback_id: u32,
+    pending_frame_callbacks: Vec<u32>,
+    tz_offset: i32,
+    last_tz_refresh_ns: u64,
+    last_serial_tick_ns: u64,
+    last_state: Option<ClockState>,
+    last_waiting_text: String,
+    petal_render_logged: bool,
+}
+
+impl Application for ClockApp {
+    const NAME: &'static str = "clock";
+
+    fn init(
+        ctx: &mut ApplicationContext,
+        looper: &mut ServiceLooper,
+    ) -> Result<Self, stem::errors::Errno> {
     lower_clock_priority();
 
     let fd = connect_wayland();
     let text_renderer = load_text_renderer();
     let clock = Clock::new();
-    let mut theme_name = read_theme_name();
-    let mut theme = theme_by_name(&theme_name);
+        let theme_name = read_theme_name();
+        let theme = theme_by_name(&theme_name);
+        let wayland_token = looper.add_fd_readable(fd)?;
 
     send_get_registry(fd, REGISTRY_ID);
     read_initial_globals(fd);
@@ -101,37 +135,81 @@ fn main(_arg: usize) -> ! {
     set_toplevel_app_id(fd, TOPLEVEL_ID, "thingos.clock");
     commit_surface(fd, SURFACE_ID);
 
-    let mut pending =
-        PendingSurface { serial: None, width: 520, height: 220, dirty: false, configured: false };
-    let mut buffer: Option<BufferState> = None;
-    let mut next_callback_id = 1000u32;
-    let mut pending_frame_callbacks: Vec<u32> = Vec::new();
-    let mut tz_offset = get_tz_offset();
-    let mut last_tz_refresh_ns = stem::time::monotonic_ns();
-    let mut last_serial_tick_ns = 0u64;
-    let mut last_state: Option<ClockState> = None;
-    let mut last_waiting_text = String::new();
-    let mut petal_render_logged = false;
+        ctx.register_window("clock toplevel", move || close_toplevel(fd));
+        ctx.register_cleanup("wayland fd", move || {
+            let _ = vfs_close(fd);
+        });
 
-    loop {
-        read_events(fd, &mut pending, &mut pending_frame_callbacks);
+        Ok(Self {
+            fd,
+            wayland_token,
+            text_renderer,
+            clock,
+            theme_name,
+            theme,
+            pending: PendingSurface {
+                serial: None,
+                width: 520,
+                height: 220,
+                dirty: false,
+                configured: false,
+            },
+            buffer: None,
+            next_callback_id: 1000,
+            pending_frame_callbacks: Vec::new(),
+            tz_offset: get_tz_offset(),
+            last_tz_refresh_ns: stem::time::monotonic_ns(),
+            last_serial_tick_ns: 0,
+            last_state: None,
+            last_waiting_text: String::new(),
+            petal_render_logged: false,
+        })
+    }
 
+    fn timeout(&self) -> Option<Duration> {
+        Some(Duration::from_millis(IDLE_SLEEP_MS))
+    }
+
+    fn handle_event(&mut self, _ctx: &mut ApplicationContext, event: ServiceEvent<'_>) -> AppAction {
+        match event {
+            ServiceEvent::Ready { token, event }
+                if token == self.wayland_token && event.is_readable() =>
+            {
+                if read_events(self.fd, &mut self.pending, &mut self.pending_frame_callbacks) {
+                    self.tick_and_render();
+                }
+            }
+            ServiceEvent::Ready { token, event }
+                if token == self.wayland_token && (event.is_hangup() || event.is_error()) =>
+            {
+                return AppAction::Quit;
+            }
+            ServiceEvent::Timeout => self.tick_and_render(),
+            ServiceEvent::Message { .. } | ServiceEvent::Ready { .. } => {}
+            ServiceEvent::InboxClosed => return AppAction::Quit,
+        }
+        AppAction::Continue
+    }
+}
+
+impl ClockApp {
+    fn tick_and_render(&mut self) {
         let now_ns = stem::time::monotonic_ns();
-        if now_ns.saturating_sub(last_tz_refresh_ns) >= TZ_REFRESH_INTERVAL_NS {
-            tz_offset = get_tz_offset();
-            last_tz_refresh_ns = now_ns;
+        if now_ns.saturating_sub(self.last_tz_refresh_ns) >= TZ_REFRESH_INTERVAL_NS {
+            self.tz_offset = get_tz_offset();
+            self.last_tz_refresh_ns = now_ns;
         }
 
-        let realtime = local_datetime(tz_offset);
+        let realtime = local_datetime(self.tz_offset);
         let (clock_state, waiting_text) = match realtime {
             Some((dt, _, _)) => (
-                Some(clock.update_from_parts(dt.year, dt.month, dt.day, dt.hour, dt.minute)),
+                Some(self.clock.update_from_parts(dt.year, dt.month, dt.day, dt.hour, dt.minute)),
                 String::new(),
             ),
-            None => (None, format!("Waiting for RTC UTC{:+}", tz_offset)),
+            None => (None, format!("Waiting for RTC UTC{:+}", self.tz_offset)),
         };
 
-        if now_ns.saturating_sub(last_serial_tick_ns) >= SERIAL_TICK_INTERVAL_NS {
+        if now_ns.saturating_sub(self.last_serial_tick_ns) >= SERIAL_TICK_INTERVAL_NS {
             match realtime {
                 Some((dt, unix_secs, nanos)) => {
                     info!(
@@ -142,7 +220,7 @@ fn main(_arg: usize) -> ! {
                         dt.hour,
                         dt.minute,
                         dt.second,
-                        tz_offset,
+                        self.tz_offset,
                         unix_secs,
                         nanos
                     );
@@ -151,51 +229,51 @@ fn main(_arg: usize) -> ! {
                     info!("clock: waiting for system clock anchor");
                 }
             }
-            last_serial_tick_ns = now_ns;
+            self.last_serial_tick_ns = now_ns;
         }
 
-        let time_changed = clock_state != last_state || waiting_text != last_waiting_text;
-        let theme_changed = refresh_theme(&mut theme_name, &mut theme);
+        let time_changed =
+            clock_state != self.last_state || waiting_text != self.last_waiting_text;
+        let theme_changed = refresh_theme(&mut self.theme_name, &mut self.theme);
         if time_changed {
-            last_state = clock_state;
-            last_waiting_text = waiting_text;
+            self.last_state = clock_state;
+            self.last_waiting_text = waiting_text;
         }
 
-        let should_render = pending.configured && (pending.dirty || time_changed || theme_changed);
+        let should_render =
+            self.pending.configured && (self.pending.dirty || time_changed || theme_changed);
         if should_render {
             let buf = ensure_buffer(
-                fd,
+                self.fd,
                 SHM_ID,
-                &mut buffer,
+                &mut self.buffer,
                 SURFACE_ID + 100,
-                pending.width,
-                pending.height,
+                self.pending.width,
+                self.pending.height,
             );
             let petal_rendered = render_clock(
                 buf,
-                &clock,
-                last_state.as_ref(),
-                &last_waiting_text,
-                theme,
-                text_renderer.as_ref(),
+                &self.clock,
+                self.last_state.as_ref(),
+                &self.last_waiting_text,
+                self.theme,
+                self.text_renderer.as_ref(),
             );
-            if petal_rendered && !petal_render_logged {
+            if petal_rendered && !self.petal_render_logged {
                 info!("clock: petal perspective rendering date+time");
-                petal_render_logged = true;
+                self.petal_render_logged = true;
             }
-            if pending.dirty {
-                ack_configure(fd, XDG_SURFACE_ID, pending.serial.unwrap_or(0));
-                pending.dirty = false;
+            if self.pending.dirty {
+                ack_configure(self.fd, XDG_SURFACE_ID, self.pending.serial.unwrap_or(0));
+                self.pending.dirty = false;
             }
-            attach_buffer(fd, SURFACE_ID, buf.buffer_id);
-            damage_surface(fd, SURFACE_ID, 0, 0, pending.width, pending.height);
-            let cb_id = alloc_callback_id(&mut next_callback_id);
-            request_frame(fd, SURFACE_ID, cb_id);
-            pending_frame_callbacks.push(cb_id);
-            commit_surface(fd, SURFACE_ID);
+            attach_buffer(self.fd, SURFACE_ID, buf.buffer_id);
+            damage_surface(self.fd, SURFACE_ID, 0, 0, self.pending.width, self.pending.height);
+            let cb_id = alloc_callback_id(&mut self.next_callback_id);
+            request_frame(self.fd, SURFACE_ID, cb_id);
+            self.pending_frame_callbacks.push(cb_id);
+            commit_surface(self.fd, SURFACE_ID);
         }
-
-        sleep_ms(IDLE_SLEEP_MS);
     }
 }
 
@@ -235,18 +313,12 @@ fn read_initial_globals(fd: u32) {
     let _ = vfs_read(fd, &mut buf);
 }
 
-fn read_events(fd: u32, pending: &mut PendingSurface, pending_frame_callbacks: &mut Vec<u32>) {
-    let mut pollfd = [PollHandle { handle: fd as i32, events: poll_flags::POLLIN, revents: 0 }];
-    if !matches!(vfs_poll(&mut pollfd, 0), Ok(n) if n > 0)
-        || (pollfd[0].revents & poll_flags::POLLIN) == 0
-    {
-        return;
-    }
-
+fn read_events(fd: u32, pending: &mut PendingSurface, pending_frame_callbacks: &mut Vec<u32>) -> bool {
+    let mut changed = false;
     let mut in_buf = [0u8; 4096];
     let len = match vfs_read(fd, &mut in_buf) {
         Ok(n) if n > 0 => n,
-        _ => return,
+        _ => return false,
     };
 
     let mut offset = 0usize;
@@ -264,6 +336,7 @@ fn read_events(fd: u32, pending: &mut PendingSurface, pending_frame_callbacks: &
                 pending.serial = Some(read_u32(payload, 0));
                 pending.dirty = true;
                 pending.configured = true;
+                changed = true;
             }
             (TOPLEVEL_ID, 0) if payload.len() >= 12 => {
                 let width = read_i32(payload, 0);
@@ -274,6 +347,7 @@ fn read_events(fd: u32, pending: &mut PendingSurface, pending_frame_callbacks: &
                 if height > 0 {
                     pending.height = height as u32;
                 }
+                changed = true;
             }
             (TOPLEVEL_ID, 1) => {
                 info!("clock: compositor requested close; exiting");
@@ -287,6 +361,7 @@ fn read_events(fd: u32, pending: &mut PendingSurface, pending_frame_callbacks: &
         }
         offset += size as usize;
     }
+    changed
 }
 
 fn ensure_buffer(
