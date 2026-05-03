@@ -28,6 +28,10 @@ impl ResourceRetryService {
         }
     }
 
+    fn arm_retry_timer_after(delay_ms: u64) -> LoopAction {
+        LoopAction::ArmTimer { delay: Duration::from_millis(delay_ms), id: RESOURCE_RETRY_TIMER }
+    }
+
     fn arm_retry_timer_and_repaint() -> LoopAction {
         LoopAction::RequestRepaintAndArmTimer {
             delay: Duration::from_millis(RESOURCE_RETRY_MS),
@@ -55,11 +59,13 @@ impl BloomService for ResourceRetryService {
         }
 
         let wallpaper_path = self.wallpaper_config_path.map(wallpaper_target_or_default);
+        let defer_font_checks = self.load_cursor && world.visuals.cursor_is_fallback();
         let had_fallback_cursor = world.visuals.cursor_is_fallback();
         let mut status = world.visuals.retry_deferred_resources(
             &world.display,
             wallpaper_path.as_deref(),
             self.load_cursor,
+            !defer_font_checks,
         );
         if had_fallback_cursor && !world.visuals.cursor_is_fallback() {
             status.improved |= world.replay_deferred_cursor_motion();
@@ -89,6 +95,19 @@ impl BloomService for ResourceRetryService {
                 Self::arm_retry_timer_and_repaint()
             } else {
                 Self::arm_retry_timer()
+            }
+        } else if defer_font_checks {
+            if !self.ready_logged {
+                stem::info!("Deferred visual resources are ready.");
+                self.ready_logged = true;
+            }
+            if status.improved {
+                LoopAction::RequestRepaintAndArmTimer {
+                    delay: Duration::from_millis(RESOURCE_RETRY_MS),
+                    id: RESOURCE_RETRY_TIMER,
+                }
+            } else {
+                Self::arm_retry_timer_after(RESOURCE_RETRY_MS)
             }
         } else if status.improved {
             if !self.ready_logged {

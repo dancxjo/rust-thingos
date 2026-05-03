@@ -298,7 +298,7 @@ impl BloomWorld {
     }
 
     pub fn check_resource_retries(&mut self) -> bool {
-        let mut status = self.visuals.retry_deferred_resources(&self.display, None, true);
+        let mut status = self.visuals.retry_deferred_resources(&self.display, None, true, true);
         if status.improved {
             self.damage.mark_full(self.primary.width, self.primary.height);
         }

@@ -342,6 +342,7 @@ impl CompositorVisuals {
         display: &DisplayBackend,
         wallpaper_path: Option<&str>,
         load_cursor: bool,
+        check_fonts: bool,
     ) -> ResourceRetryStatus {
         let mut improved = false;
 
@@ -354,7 +355,16 @@ impl CompositorVisuals {
         }
 
         let mut font_pending = false;
-        if let Some(ref lib) = self.pistil {
+        if check_fonts {
+            let Some(ref lib) = self.pistil else {
+                let pending = true;
+                return ResourceRetryStatus {
+                    pending,
+                    improved,
+                    wallpaper_pending: wallpaper_path.is_some(),
+                    cursor_pending: load_cursor && self.needs_asset_cursor(),
+                };
+            };
             if lib.draw_text.is_some() {
                 match lib.default_font_ready {
                     Some(ready) if ready() != 0 => {
@@ -407,7 +417,10 @@ impl CompositorVisuals {
         }
 
         let cursor_pending = load_cursor && self.needs_asset_cursor();
-        let pending = self.pistil.is_none() || font_pending || wallpaper_pending || cursor_pending;
+        let pending = self.pistil.is_none()
+            || (check_fonts && font_pending)
+            || wallpaper_pending
+            || cursor_pending;
 
         ResourceRetryStatus { pending, improved, wallpaper_pending, cursor_pending }
     }

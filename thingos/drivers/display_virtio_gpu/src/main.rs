@@ -921,8 +921,8 @@ fn init_virgl_blend(
         return (0, 0, 0, 0, 0);
     }
 
-    info!(
-        "display_virtio_gpu: virgl GPU alpha blend ready ctx_id={} src_res={} staging={}B ({}x{})",
+    debug!(
+        "Virgl alpha blend ready: ctx_id={} src_res={} staging={}B size={}x{}.",
         BLEND_CTX_ID, src_res_id, size, disp_width, disp_height
     );
     (BLEND_CTX_ID, buf_virt, buf_phys, size, src_res_id)
@@ -1924,8 +1924,8 @@ fn dispatch_display_device_call(
                             // `gpu_planes` and `cpu_planes` are cumulative totals
                             // across all commits processed so far (including this
                             // one), not counts for this commit alone.
-                            stem::info!(
-                                "display_virtio_gpu: first commit copied buffer={} rect={}x{} src_px=0x{:08x} dst_px=0x{:08x} damage={}x{}+{},{} res_id={} gpu_planes={} cpu_planes={}",
+                            stem::debug!(
+                                "First display commit copied buffer={} rect={}x{} src_px=0x{:08x} dst_px=0x{:08x} damage={}x{}+{},{} res_id={} gpu_planes={} cpu_planes={}.",
                                 buffer_id,
                                 copy_w,
                                 copy_h,
@@ -1950,8 +1950,8 @@ fn dispatch_display_device_call(
                         if let Some((buffer_id, src_px, dst_before, dst_after, x, y)) =
                             cursor_copy_sample
                         {
-                            stem::info!(
-                                "display_virtio_gpu: cursor plane blended buffer={} at {},{} src_px=0x{:08x} dst_before=0x{:08x} dst_after=0x{:08x}",
+                            stem::debug!(
+                                "Cursor plane blended: buffer={} at {},{} src_px=0x{:08x} dst_before=0x{:08x} dst_after=0x{:08x}.",
                                 buffer_id,
                                 x,
                                 y,
@@ -3081,8 +3081,8 @@ fn initial_display_dimensions(gpu: &mut VirtioGpu) -> (u32, u32, u32, u32) {
     match gpu.query_display_info() {
         Ok(Some(scanout)) if scanout.width > 0 && scanout.height > 0 => {
             let stride = scanout.width.saturating_mul(DISPLAY_BPP);
-            info!(
-                "display_virtio_gpu: host scanout {}x{} enabled={} (bootfb was {}x{})",
+            debug!(
+                "Host scanout: {}x{} enabled={} bootfb={}x{}.",
                 scanout.width, scanout.height, scanout.enabled, boot_w, boot_h
             );
             (scanout.width, scanout.height, stride, boot_format)
@@ -3090,7 +3090,7 @@ fn initial_display_dimensions(gpu: &mut VirtioGpu) -> (u32, u32, u32, u32) {
         Ok(_) => {
             let stride = boot_w.saturating_mul(DISPLAY_BPP);
             warn!(
-                "display_virtio_gpu: host scanout unavailable; using bootfb {}x{}",
+                "Host scanout is unavailable; using boot framebuffer {}x{}.",
                 boot_w, boot_h
             );
             (boot_w, boot_h, stride, boot_format)
@@ -3203,14 +3203,14 @@ fn refresh_display_mode(driver: &mut VirtioGpuDriver) -> bool {
     match resize_frame_pool(driver, scanout.width, scanout.height, stride) {
         Ok(()) => {
             info!(
-                "display_virtio_gpu: output resized {}x{} -> {}x{}",
+                "Display output resized from {}x{} to {}x{}.",
                 old_w, old_h, driver.disp_width, driver.disp_height
             );
             true
         }
         Err(e) => {
             warn!(
-                "display_virtio_gpu: output resize {}x{} -> {}x{} failed: {}",
+                "Display output resize from {}x{} to {}x{} failed: {}.",
                 old_w, old_h, scanout.width, scanout.height, e
             );
             false
@@ -3220,7 +3220,7 @@ fn refresh_display_mode(driver: &mut VirtioGpuDriver) -> bool {
 
 #[stem::main]
 fn main(boot_arg: usize) -> ! {
-    stem::info!("display_virtio_gpu: starting v0.4.1 (boot_arg={})", boot_arg);
+    stem::info!("Starting display driver.");
 
     if boot_arg == 0 {
         stem::error!(
@@ -3271,8 +3271,8 @@ fn main(boot_arg: usize) -> ! {
                         stem::syscall::exit(1);
                     }
                 }
-                stem::info!(
-                    "display_virtio_gpu: recovered Cambium DriverEntryCtx device_path='{}'",
+                stem::debug!(
+                    "Recovered Cambium DriverEntryCtx with device_path='{}'.",
                     cambium_device_path.as_deref().unwrap_or("")
                 );
             } else {
@@ -3352,7 +3352,7 @@ fn main(boot_arg: usize) -> ! {
         }
     }
 
-    info!("display_virtio_gpu: GPU ready with copy and CPU blend paths");
+    info!("Display driver ready with GPU copy and CPU blending.");
     if gpu.has_3d_feature() {
         debug!("display_virtio_gpu: Virgl 3D supported — GPU alpha blend path will be initialized");
     } else {
@@ -3406,8 +3406,8 @@ fn main(boot_arg: usize) -> ! {
         match device_alloc_dma(claim, MAX_CURSOR_PAGES) {
             Ok(virt) => match device_dma_phys(virt) {
                 Ok(phys) => {
-                    info!(
-                        "display_virtio_gpu: cursor DMA buffer ready ({} pages at phys=0x{:x})",
+                    debug!(
+                        "Cursor DMA buffer ready: pages={} phys=0x{:x}.",
                         MAX_CURSOR_PAGES, phys
                     );
                     (virt, phys)
@@ -3443,10 +3443,7 @@ fn main(boot_arg: usize) -> ! {
     ) = init_virgl_blend(&mut gpu, disp_width, disp_height, &frame_pool_buffers);
     if virgl_ctx_id != 0 {
         info!(
-            "display_virtio_gpu: composition paths: gpu_opaque_copy=enabled gpu_alpha_blend=enabled cpu_alpha_blend=enabled"
-        );
-        info!(
-            "display_virtio_gpu: accel2d_gpu=enabled (COPY_RECT and ALPHA_BLIT dispatched to virgl GPU pipeline)"
+            "GPU composition ready: opaque copy, alpha blend, CPU fallback, and accelerated 2D commands are enabled."
         );
     }
 
@@ -3480,7 +3477,7 @@ fn main(boot_arg: usize) -> ! {
         };
         match stem::syscall::vfs::vfs_mount(vfs_write, &dev_path) {
             Ok(()) => {
-                info!("display_virtio_gpu: mounted VFS provider at {} via cambium", dev_path)
+                info!("Display service mounted at {}.", dev_path)
             }
             Err(e) => {
                 error!("display_virtio_gpu: vfs_mount({}) failed: {:?}", dev_path, e);
@@ -3544,10 +3541,7 @@ fn main(boot_arg: usize) -> ! {
                             &assigned.primary_path[..path_len],
                         )
                         .to_string();
-                        info!(
-                            "display_virtio_gpu: Sovereign registration COMPLETE. Assigned: {}",
-                            assigned_path
-                        );
+                        debug!("Display driver assigned to {}.", assigned_path);
                         break assigned.bind_instance_id;
                     }
                 } else if header.msg_type == supervisor_protocol::MSG_BIND_FAILED {
@@ -3653,7 +3647,7 @@ fn main(boot_arg: usize) -> ! {
     // response with the req_id the kernel needs to route the reply.
     let mut vfs_loop = ProviderLoop::new(vfs_read);
     let mut last_watchdog_ns = stem::time::monotonic_ns();
-    info!("display_virtio_gpu: VFS provider loop online");
+    debug!("Display VFS provider loop online.");
 
     loop {
         let mut did_work = false;

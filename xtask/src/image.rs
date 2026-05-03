@@ -1302,6 +1302,7 @@ fn is_bin_program(name: &str) -> bool {
             | "attr_get"
             | "attr_set"
             | "attr_rm"
+            | "grep"
             | "chime"
     )
 }
@@ -1504,7 +1505,7 @@ mod tests {
 
         let conf = generate_limine_config(&sh, &programs, &assets, None, None, false, false, false);
 
-        assert!(!conf.contains("module_path: boot():/public/cursors/future/default.svg"));
+        assert!(conf.contains("module_path: boot():/public/cursors/future/default.svg"));
         assert!(!conf.contains("module_path: boot():/public/cursors/future/fleur.svg"));
         assert!(!conf.contains("module_path: boot():/public/cursors/future/top_side.svg"));
         assert!(
@@ -1570,10 +1571,11 @@ mod tests {
     fn executable_staging_keeps_bin_to_core_commands() {
         for name in [
             "sh", "ls", "cat", "cp", "less", "mkdir", "mount", "printf", "stat", "tree", "loglevel",
+            "grep", "find",
         ] {
             assert_eq!(executable_subdir(name), "bin", "{name} should stay in /bin");
         }
-        for name in ["sprout", "grep", "find"] {
+        for name in ["sprout"] {
             assert_eq!(
                 executable_subdir(name),
                 "applications",
@@ -1623,10 +1625,10 @@ mod tests {
         assert!(normal_entry.contains("module_path: boot():/lib/libpistil.so"));
         assert!(normal_entry.contains("module_path: boot():/public/fonts/Inter-Regular.ttf"));
 
-        assert!(!normal_entry.contains("module_path: boot():/bin/ps"));
-        assert!(!normal_entry.contains("module_path: boot():/bin/grep"));
+        assert!(normal_entry.contains("module_path: boot():/bin/ps"));
+        assert!(normal_entry.contains("module_path: boot():/bin/grep"));
         assert!(!normal_entry.contains("module_path: boot():/etc/fstab"));
-        assert!(!normal_entry.contains("module_path: boot():/public/wallpapers/flower.png"));
+        assert!(normal_entry.contains("module_path: boot():/public/wallpapers/flower.png"));
         assert!(!normal_entry.contains("module_path: boot():/public/wallpapers/flower.bmp"));
     }
 }

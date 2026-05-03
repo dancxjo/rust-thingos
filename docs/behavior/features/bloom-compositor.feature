@@ -20,12 +20,14 @@ Feature: Bloom compositor desktop behavior
     And the serial output should contain "bloom: built-in busy spinner ready" within 60s
     And the serial output should contain "bloom: busy spinner serviceLoop started" within 60s
     And the serial output should contain "bloom: cursor ready" within 60s
-    And the serial output should contain "bloom: wallpaper and cursor all settled" within 60s
-    And the serial output should contain "bloom: deferred visual resources ready" within 60s
+    And the serial output should contain "Wallpaper and cursor are ready." within 60s
+    And the serial output should contain "Deferred visual resources are ready." within 60s
     And the serial output should contain "bloom: busy spinner waiting for stable scene" within 60s
     And the serial output should contain "bloom: busy spinner scene stable after" within 60s
     And the serial output should contain "bloom: busy spinner fading out" within 60s
     And the serial output should contain "bloom: busy spinner handoff complete; real cursor active" within 60s
+    And the serial output should contain "bloom: deferred default font became available" within 90s
+    And the serial output should contain "bloom: deferred symbol font became available" within 90s
     And the serial output should contain "size=96x96" within 60s
     And the serial output should contain "First frame rendered" within 60s
     And the serial output should not contain "Freed node"
