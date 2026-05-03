@@ -329,9 +329,15 @@ impl Calculator {
                     Declaration::BorderWidth(1.0),
                 ],
             ),
+            // Hover: subtle tint -- lowest interactive priority
+            Rule::new(
+                Selector::has(Description::CalcKey).and(Selector::state(State::Hover)),
+                alloc::vec![Declaration::BackgroundColor(color_from_argb(theme.hover_tint))],
+            ),
+            // Active: dominant fill -- highest interactive priority (placed last to win cascade)
             Rule::new(
                 Selector::has(Description::CalcKey).and(Selector::state(State::Active)),
-                alloc::vec![Declaration::BackgroundColor(color_from_argb(theme.frame_bevel_light))],
+                alloc::vec![Declaration::BackgroundColor(color_from_argb(theme.focus_accent))],
             ),
             Rule::new(
                 Selector::has(Description::OperatorKey),

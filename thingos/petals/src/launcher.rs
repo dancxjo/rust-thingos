@@ -174,6 +174,22 @@ impl ApplicationLauncher {
                     Declaration::BorderWidth(1.0),
                 ],
             ),
+            // Hover: subtle tint -- lowest interactive priority
+            Rule::new(
+                Selector::has(Description::ApplicationTile)
+                    .and(Selector::state(crate::State::Hover)),
+                alloc::vec![Declaration::BackgroundColor(Color::rgb(0x2A, 0x30, 0x3C))],
+            ),
+            // Focus: visible outline ring for keyboard navigation -- medium priority
+            Rule::new(
+                Selector::has(Description::ApplicationTile)
+                    .and(Selector::state(crate::State::Focus)),
+                alloc::vec![
+                    Declaration::OutlineColor(Color::rgb(0x8A, 0xD7, 0xFF)),
+                    Declaration::OutlineWidth(2.0),
+                ],
+            ),
+            // Active: dominant fill -- highest interactive priority (placed last to win cascade)
             Rule::new(
                 Selector::has(Description::ApplicationTile)
                     .and(Selector::state(crate::State::Active)),
