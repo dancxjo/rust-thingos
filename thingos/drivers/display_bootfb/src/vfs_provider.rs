@@ -4,17 +4,11 @@
 //! requests and return typed [`ProviderResponse`] values.  The caller is
 //! responsible for creating a [`ProviderLoop`] and forwarding its decoded
 //! requests here.
-#![no_std]
-use alloc::string::ToString;
-use core::default::Default;
 extern crate alloc;
 
 use alloc::vec::Vec;
 
-use abi::attrs::{
-    ATTR_OP_GET, ATTR_OP_LIST, ATTR_OP_REMOVE, ATTR_OP_SET, AttrListEntryHeader, AttrNameHeader,
-    AttrType, AttrValueHeader,
-};
+use abi::attrs::{AttrListEntryHeader, AttrNameHeader, AttrType, AttrValueHeader};
 use abi::device::{DeviceCall, DeviceKind};
 use abi::display::accel2d::{ACCEL2D_COMMAND_SIZE, Accel2dBatch, Accel2dCommand};
 use abi::display::{
@@ -31,7 +25,6 @@ use crate::driver::BootFbDriver;
 // Handle IDs for this driver.
 pub const HANDLE_ROOT: u64 = 0;
 pub const HANDLE_CARD: u64 = 1;
-const ATTR_DRIVER_NAME: &str = "display_bootfb";
 const ATTR_DRIVER_CLASS: &str = "display";
 
 const S_IFDIR: u32 = 0o040000;
@@ -49,11 +42,11 @@ pub fn dispatch_vfs_rpc(driver: &mut BootFbDriver, req: &ProviderRequest) -> Pro
         VfsRpcOp::DeviceCall => device_call(driver, req),
         VfsRpcOp::SubscribeReady | VfsRpcOp::UnsubscribeReady => ProviderResponse::ok_empty(),
         VfsRpcOp::Rename => ProviderResponse::err(Errno::ENOSYS),
-        VfsRpcOp::AttrGet
-        | VfsRpcOp::AttrSet
-        | VfsRpcOp::AttrRemove
-        | VfsRpcOp::AttrList
-        | VfsRpcOp::Readlink => ProviderResponse::err(Errno::ENOTSUP),
+        VfsRpcOp::AttrGet => handle_attr_get(driver, &req.payload),
+        VfsRpcOp::AttrList => handle_attr_list(driver, &req.payload),
+        VfsRpcOp::AttrSet | VfsRpcOp::AttrRemove | VfsRpcOp::Readlink => {
+            ProviderResponse::err(Errno::ENOTSUP)
+        }
         VfsRpcOp::Read | VfsRpcOp::Write | VfsRpcOp::Readdir | VfsRpcOp::Poll => {
             ProviderResponse::err(Errno::ENOSYS)
         }
@@ -365,7 +358,7 @@ fn device_call(driver: &mut BootFbDriver, req: &ProviderRequest) -> ProviderResp
     response
 }
 
-fn handle_attr_get(payload: &[u8]) -> ProviderResponse {
+fn handle_attr_get(driver: &BootFbDriver, payload: &[u8]) -> ProviderResponse {
     if payload.len() < 8 + core::mem::size_of::<AttrNameHeader>() {
         return ProviderResponse::err(Errno::EINVAL);
     }
@@ -388,7 +381,7 @@ fn handle_attr_get(payload: &[u8]) -> ProviderResponse {
     };
 
     let (value_type, value_bytes): (AttrType, &[u8]) = match name {
-        "driver.name" => (AttrType::Utf8, ATTR_DRIVER_NAME.as_bytes()),
+        "driver.name" => (AttrType::Utf8, driver.driver_name.as_bytes()),
         "driver.class" => (AttrType::Utf8, ATTR_DRIVER_CLASS.as_bytes()),
         _ => return ProviderResponse::err(Errno::ENOENT),
     };
@@ -403,7 +396,7 @@ fn handle_attr_get(payload: &[u8]) -> ProviderResponse {
     ProviderResponse::ok_bytes(&out)
 }
 
-fn handle_attr_list(payload: &[u8]) -> ProviderResponse {
+fn handle_attr_list(driver: &BootFbDriver, payload: &[u8]) -> ProviderResponse {
     if payload.len() < 8 {
         return ProviderResponse::err(Errno::EINVAL);
     }
@@ -414,7 +407,7 @@ fn handle_attr_list(payload: &[u8]) -> ProviderResponse {
 
     let mut out = Vec::new();
     let entries = [
-        ("driver.name", AttrType::Utf8, ATTR_DRIVER_NAME.len() as u32),
+        ("driver.name", AttrType::Utf8, driver.driver_name.len() as u32),
         ("driver.class", AttrType::Utf8, ATTR_DRIVER_CLASS.len() as u32),
     ];
     for (name, ty, value_len) in entries {

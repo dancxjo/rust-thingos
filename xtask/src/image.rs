@@ -336,6 +336,12 @@ pub fn default_programs() -> Vec<ProgramConfig> {
             boot_module: true,
             features: vec![],
         },
+        ProgramConfig {
+            name: "display_nvidia_gpu",
+            is_init: false,
+            boot_module: true,
+            features: vec![],
+        },
         ProgramConfig { name: "cambium", is_init: false, boot_module: true, features: vec![] },
         ProgramConfig { name: "virtio_netd", is_init: false, boot_module: true, features: vec![] },
         ProgramConfig { name: "rtl8168d", is_init: false, boot_module: true, features: vec![] },
@@ -1229,6 +1235,7 @@ fn is_driver(name: &str) -> bool {
         "ata_disk",
         "display_bootfb",
         "display_fake",
+        "display_nvidia_gpu",
         "display_virtio_gpu",
         "driver_wasm_host",
         "hdaudio",
@@ -1375,6 +1382,7 @@ mod tests {
         let sh = Shell::new().expect("shell");
         let programs = [
             test_program("display_bootfb"),
+            test_program("display_nvidia_gpu"),
             test_program("display_virtio_gpu"),
             test_program("display_fake"),
             test_program("virtio_gpu"),
@@ -1386,6 +1394,7 @@ mod tests {
         let bootfb_entry = limine_entry(&conf, "ThingOS (BootFB Fallback)");
 
         assert!(normal_entry.contains("module_path: boot():/drivers/display_bootfb"));
+        assert!(normal_entry.contains("module_path: boot():/drivers/display_nvidia_gpu"));
         assert!(normal_entry.contains("module_path: boot():/drivers/display_virtio_gpu"));
         assert!(normal_entry.contains("module_path: boot():/drivers/display_fake"));
         assert!(normal_entry.contains("module_path: boot():/drivers/virtio_gpu"));
@@ -1394,6 +1403,7 @@ mod tests {
             bootfb_entry.contains("kernel_cmdline: loglevel=3 display=bootfb kernel.terminal=1")
         );
         assert!(bootfb_entry.contains("module_path: boot():/drivers/display_bootfb"));
+        assert!(!bootfb_entry.contains("module_path: boot():/drivers/display_nvidia_gpu"));
         assert!(!bootfb_entry.contains("module_path: boot():/drivers/display_virtio_gpu"));
         assert!(!bootfb_entry.contains("module_path: boot():/drivers/display_fake"));
         assert!(!bootfb_entry.contains("module_path: boot():/drivers/virtio_gpu"));
@@ -1420,6 +1430,7 @@ mod tests {
             test_program("bloom"),
             test_program("bristle"),
             test_program("display_bootfb"),
+            test_program("display_nvidia_gpu"),
             test_program("display_virtio_gpu"),
         ];
 
@@ -1445,6 +1456,7 @@ mod tests {
         assert!(!safe_entry.contains("module_path: boot():/bin/ash"));
         assert!(!safe_entry.contains("module_path: boot():/etc/default/shell"));
         assert!(!safe_entry.contains("module_path: boot():/drivers/display_bootfb"));
+        assert!(!safe_entry.contains("module_path: boot():/drivers/display_nvidia_gpu"));
         assert!(!safe_entry.contains("module_path: boot():/drivers/display_virtio_gpu"));
         assert_eq!(safe_entry.matches("module_cmdline: init").count(), 1);
     }
@@ -1570,8 +1582,8 @@ mod tests {
     #[test]
     fn executable_staging_keeps_bin_to_core_commands() {
         for name in [
-            "sh", "ls", "cat", "cp", "less", "mkdir", "mount", "printf", "stat", "tree", "loglevel",
-            "grep", "find",
+            "sh", "ls", "cat", "cp", "less", "mkdir", "mount", "printf", "stat", "tree",
+            "loglevel", "grep", "find",
         ] {
             assert_eq!(executable_subdir(name), "bin", "{name} should stay in /bin");
         }

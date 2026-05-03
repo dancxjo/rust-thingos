@@ -12,6 +12,7 @@ members = [
   "thingos/cambium",
   "thingos/drivers/display_bootfb",
   "thingos/drivers/display_fake",
+  "thingos/drivers/display_nvidia_gpu",
   "thingos/drivers/display_virtio_gpu",
   "thingos/drivers/driver_wasm_host",
   "thingos/drivers/hdaudio",

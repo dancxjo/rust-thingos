@@ -323,7 +323,10 @@ fn main(_arg: usize) -> ! {
                                 let h = u32::from_le_bytes(h_bytes) as i32;
                                 screen_w = w;
                                 screen_h = h;
-                                stem::debug!("Updated screen resolution to {}x{}", w, h);
+                                pointer_x = pointer_x.clamp(0, screen_w.saturating_sub(1));
+                                pointer_y = pointer_y.clamp(0, screen_h.saturating_sub(1));
+                                stem::info!("screen resized to {}x{}, pointer clamped to {},{}", screen_w, screen_h, pointer_x, pointer_y);
+                                continue;
                             }
                         } else {
                             let (event_accum, accum_len) = if is_mouse {

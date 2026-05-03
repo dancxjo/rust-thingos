@@ -1,25 +1,21 @@
 #![no_std]
 #![no_main]
 use alloc::string::{String, ToString};
-use core::default::Default;
 extern crate alloc;
-
-mod driver;
-mod vfs_provider;
 
 use abi::driver_interface::{
     DRIVER_DESCRIPTOR_ABI_VERSION, DeviceInfo, DriverClass, DriverDescriptor, DriverEntryCtx,
     ProbeResult, Status,
 };
 use abi::vfs_rpc::VFS_RPC_MAX_REQ;
-use driver::BootFbDriver;
+use display_bootfb::driver::BootFbDriver;
+use display_bootfb::vfs_provider::dispatch_vfs_rpc;
 use ipc_helpers::provider::ProviderLoop;
 use stem::abi::module_manifest::{MANIFEST_MAGIC, ManifestHeader, ModuleKind, device_kind_bytes};
 use stem::syscall::message::{KindId, msg_inbox_open, msg_recv_blocking, msg_sendmsg};
 use stem::syscall::port_create;
 use stem::syscall::vfs::{vfs_handle_from_port, vfs_mount};
 use stem::{debug, info, warn};
-use vfs_provider::dispatch_vfs_rpc;
 const THINGOS_DRIVER_NAME: &[u8] = b"display_bootfb";
 const DRIVER_DEVPATH_ENV: &[u8] = b"THINGOS_DRIVER_DEVPATH";
 
@@ -316,8 +312,7 @@ fn main(boot_fd: usize) -> ! {
         }
 
         // Wait for MSG_BIND_ASSIGNED or MSG_BIND_FAILED on our inbox.
-        let mut bind_instance_id_confirmed = bind_instance_id;
-        loop {
+        let bind_instance_id_confirmed = loop {
             let msg = msg_recv_blocking(512);
             if msg.kind.0 != display_driver_protocol::KIND_ID_DISPLAY_DRIVER_CONTROL {
                 continue;
@@ -325,7 +320,6 @@ fn main(boot_fd: usize) -> ! {
             if let Some((header, payload)) = display_driver_protocol::parse_message(&msg.payload) {
                 if header.msg_type == supervisor_protocol::MSG_BIND_ASSIGNED {
                     if let Some(assigned) = supervisor_protocol::decode_bind_assigned_le(payload) {
-                        bind_instance_id_confirmed = assigned.bind_instance_id;
                         let path_len =
                             assigned.primary_path.iter().position(|&b| b == 0).unwrap_or(64);
                         let path =
@@ -334,7 +328,7 @@ fn main(boot_fd: usize) -> ! {
                             "display_bootfb: Sovereign registration COMPLETE. Assigned: {}",
                             path
                         );
-                        break;
+                        break assigned.bind_instance_id;
                     }
                 } else if header.msg_type == supervisor_protocol::MSG_BIND_FAILED {
                     if let Some(failed) = supervisor_protocol::decode_bind_failed_le(payload) {
@@ -349,7 +343,7 @@ fn main(boot_fd: usize) -> ! {
                     }
                 }
             }
-        }
+        };
 
         // Notify supervisor that this service is now fully operational.
         {

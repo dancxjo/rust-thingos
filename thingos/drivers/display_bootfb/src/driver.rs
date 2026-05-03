@@ -1,6 +1,3 @@
-#![no_std]
-use alloc::string::ToString;
-use core::default::Default;
 extern crate alloc;
 use alloc::collections::BTreeMap;
 
@@ -17,8 +14,8 @@ use abi::display_protocol::Rect;
 use abi::errors::{Errno, SysResult};
 use abi::pixel::PixelFormat;
 use abi::vm::{VmBacking, VmMapFlags, VmMapReq, VmProt};
+use stem::debug;
 use stem::syscall::{vfs_close, vfs_open, vfs_read, vm_map};
-use stem::{debug, info};
 
 /// HW Framebuffer description
 pub struct Framebuffer {
@@ -41,6 +38,7 @@ pub struct MappedBuffer {
 
 pub struct BootFbDriver {
     pub fb: Framebuffer,
+    pub driver_name: &'static str,
     pub buffers: BTreeMap<BufferId, MappedBuffer>,
     pub next_buffer_id: u32,
     /// Monotonically increasing sequence number for display DeviceCall RPCs.
@@ -54,7 +52,18 @@ pub struct BootFbDriver {
 impl BootFbDriver {
     pub fn new() -> Option<Self> {
         let fb = find_framebuffer()?;
-        Some(Self { fb, buffers: BTreeMap::new(), next_buffer_id: 1, rpc_seq: 0, rpc_enter_ns: 0 })
+        Some(Self::with_framebuffer(fb, "display_bootfb"))
+    }
+
+    pub fn with_framebuffer(fb: Framebuffer, driver_name: &'static str) -> Self {
+        Self {
+            fb,
+            driver_name,
+            buffers: BTreeMap::new(),
+            next_buffer_id: 1,
+            rpc_seq: 0,
+            rpc_enter_ns: 0,
+        }
     }
 
     pub fn get_info(&self) -> DisplayInfo {
