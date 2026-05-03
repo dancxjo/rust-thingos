@@ -773,9 +773,8 @@ pub fn build_iso_with_config(
 
     // Stage libstd.so from bootstrap artifacts.
     // Note: rustc-thingos/bootstrap build puts artifacts under build/
-    let std_src = cwd.join(format!(
-        "build/x86_64-unknown-linux-gnu/stage1-std/{target_name}/release/libstd.so"
-    ));
+    let std_src = cwd
+        .join(format!("build/x86_64-unknown-linux-gnu/stage1-std/{target_name}/release/libstd.so"));
     if std_src.exists() {
         let std_dst = iso_root.join("lib/libstd.so");
         sh.create_dir(std_dst.parent().unwrap())?;
@@ -1251,16 +1250,7 @@ fn is_bin_program(name: &str) -> bool {
 }
 
 fn is_service_program(name: &str) -> bool {
-    matches!(
-        name,
-        "bloom"
-            | "blossom"
-            | "bristle"
-            | "cambium"
-            | "httpsd"
-            | "mesocarp"
-            | "netd"
-    )
+    matches!(name, "bloom" | "blossom" | "bristle" | "cambium" | "httpsd" | "mesocarp" | "netd")
 }
 
 fn executable_subdir(name: &str) -> &'static str {
@@ -1279,10 +1269,7 @@ fn is_bootstrap_boot_module(name: &str) -> bool {
     is_driver(name)
         || is_bin_program(name)
         || is_service_program(name)
-        || matches!(
-            name,
-            "sprout" | "wayland_hello" | "clock" | "calc" | "leaf"
-        )
+        || matches!(name, "sprout" | "wayland_hello" | "clock" | "calc" | "leaf")
 }
 
 fn is_non_bootfb_graphics_driver(name: &str) -> bool {
