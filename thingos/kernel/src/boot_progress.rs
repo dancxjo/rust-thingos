@@ -37,22 +37,22 @@ pub enum BootPhase {
 /// Used to pre-populate the grid with pending icons and to redraw cells on
 /// state transitions without requiring the caller to pass the phase twice.
 const TASK_PHASES: [BootPhase; TOTAL_TASKS] = [
-    BootPhase::Framebuffer, // 00 – Framebuffer Initialized
-    BootPhase::Memory,      // 01 – Memory Map OK
-    BootPhase::Allocator,   // 02 – Global Allocator
-    BootPhase::Display,     // 03 – Display Registry
-    BootPhase::Simd,        // 04 – SIMD Ready
-    BootPhase::Entropy,     // 05 – SIMD Ready (entropy)
-    BootPhase::Tasking,     // 06 – Tasking Initialized
-    BootPhase::Vfs,         // 07 – VFS Root Ready
-    BootPhase::Pci,         // 08 – PCI Bus Scanned
+    BootPhase::Framebuffer,   // 00 – Framebuffer Initialized
+    BootPhase::Memory,        // 01 – Memory Map OK
+    BootPhase::Allocator,     // 02 – Global Allocator
+    BootPhase::Display,       // 03 – Display Registry
+    BootPhase::Simd,          // 04 – SIMD Ready
+    BootPhase::Entropy,       // 05 – SIMD Ready (entropy)
+    BootPhase::Tasking,       // 06 – Tasking Initialized
+    BootPhase::Vfs,           // 07 – VFS Root Ready
+    BootPhase::Pci,           // 08 – PCI Bus Scanned
     BootPhase::LegacyDevices, // 09 – Legacy Devices
-    BootPhase::Timer,       // 10 – BSP Timer OK
-    BootPhase::Smp,         // 11 – SMP Bring-up
-    BootPhase::BootInfo,    // 12 – Boot Info OK
-    BootPhase::Modules,     // 13 – Modules Scanned
-    BootPhase::Init,        // 14 – Spawning Sprout
-    BootPhase::Scheduler,   // 15 – Entering Scheduler
+    BootPhase::Timer,         // 10 – BSP Timer OK
+    BootPhase::Smp,           // 11 – SMP Bring-up
+    BootPhase::BootInfo,      // 12 – Boot Info OK
+    BootPhase::Modules,       // 13 – Modules Scanned
+    BootPhase::Init,          // 14 – Spawning Sprout
+    BootPhase::Scheduler,     // 15 – Entering Scheduler
 ];
 
 /// Milestone dot[i] lights up (green) when `pushed_count >= DOT_THRESHOLDS[i]`.
@@ -78,6 +78,7 @@ const DOT_ACTIVE_COLOR: u32 = 0xAA88FF;
 const BAR_H: usize = 6;
 const DOT_SIZE: usize = 8;
 const MSG_H: usize = 16;
+const MAX_MESSAGE_BYTES: usize = 64;
 const HINT_H: usize = 16;
 const HINT_FG: u32 = 0x888888;
 const HINT_TEXT: &str = "Press F12 for a terminal";
@@ -115,6 +116,10 @@ struct BootProgressState {
     /// Stores the phase that was passed to each push() call so cells can be
     /// correctly redrawn (e.g. Active → Complete) later.
     pushed_phases: [BootPhase; TOTAL_TASKS],
+    /// Latest milestone text. Stored explicitly because most milestones arrive
+    /// before the Unifont boot module is available for framebuffer text.
+    message: [u8; MAX_MESSAGE_BYTES],
+    message_len: usize,
 }
 
 static BOOT_PROGRESS: Mutex<Option<BootProgressState>> = Mutex::new(None);
@@ -171,6 +176,8 @@ pub fn init(fb: FramebufferInfo) {
         next_index: 0,
         unifont_data: None,
         pushed_phases: [BootPhase::Framebuffer; TOTAL_TASKS],
+        message: [0; MAX_MESSAGE_BYTES],
+        message_len: 0,
     };
     state.draw_initial_panel();
     *BOOT_PROGRESS.lock() = Some(state);
@@ -180,7 +187,9 @@ pub fn set_unifont_data(data: &'static [u8]) {
     let mut guard = BOOT_PROGRESS.lock();
     if let Some(state) = guard.as_mut() {
         state.unifont_data = Some(data);
-        // Font is now available; redraw the hint so it appears as soon as possible.
+        // Font is now available; draw the latest step before the persistent hint.
+        state.draw_phase_dots(state.next_index.min(TOTAL_TASKS));
+        state.draw_current_message();
         state.draw_hint();
         // LOG TO SERIAL NOW that logger is initialized.
         crate::kinfo!("{}", HINT_TEXT);
@@ -404,17 +413,40 @@ impl BootProgressState {
 
     /// Replace the milestone text row with `msg`, centred within the panel.
     fn update_message(&mut self, msg: &str) {
+        self.store_message(msg);
+        self.draw_current_message();
+    }
+
+    fn store_message(&mut self, msg: &str) {
+        let mut len = msg.len().min(MAX_MESSAGE_BYTES);
+        while !msg.is_char_boundary(len) {
+            len -= 1;
+        }
+
+        self.message_len = len;
+        self.message[..len].copy_from_slice(&msg.as_bytes()[..len]);
+        if len < MAX_MESSAGE_BYTES {
+            self.message[len] = 0;
+        }
+    }
+
+    fn draw_current_message(&mut self) {
         // Clear 18 pixels to ensure no artifacts remain from 16-pixel Unifont.
         self.fill_rect(self.layout.panel_x, self.layout.msg_y, self.layout.panel_side, 18, 0);
         if self.unifont_data.is_some() {
-            let char_w = 8;
-            let text_w = msg.len() * char_w;
-            let text_x = if text_w < self.layout.panel_side {
-                self.layout.panel_x + (self.layout.panel_side - text_w) / 2
-            } else {
-                self.layout.panel_x
-            };
-            self.draw_string(text_x, self.layout.msg_y, msg, TEXT_FG);
+            let mut message = [0; MAX_MESSAGE_BYTES];
+            let len = self.message_len;
+            message[..len].copy_from_slice(&self.message[..len]);
+            if let Ok(msg) = core::str::from_utf8(&message[..len]) {
+                let char_w = 8;
+                let text_w = msg.len() * char_w;
+                let text_x = if text_w < self.layout.panel_side {
+                    self.layout.panel_x + (self.layout.panel_side - text_w) / 2
+                } else {
+                    self.layout.panel_x
+                };
+                self.draw_string(text_x, self.layout.msg_y, msg, TEXT_FG);
+            }
         }
     }
 
