@@ -5,7 +5,7 @@
 # created during manual debugging and many people like to clean up instead of
 # having git ignore such leftovers. You can use `.git/info/exclude` to
 # configure your local ignore list.
-
+thingos/bran/bin-*
 /docs/behavior/*
 /docs/behavior/**/*
 !/docs/behavior/features
@@ -128,3 +128,5 @@ assets/pci/pci.ids
 thingos/build.log
 thingos/bran/bin-aarch64/kernel
 test-usb.img
+thingos/bran/bin-riscv64/kernel
+thingos/bran/bin-riscv64/kernel
