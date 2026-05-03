@@ -180,7 +180,7 @@ impl InputState {
             && CURSOR_SMOOTHING_LOGS.fetch_add(1, Ordering::Relaxed) < MAX_STARTUP_LOGS
         {
             stem::trace!(
-                "bloom: cursor smoothing visible={},{} target={},{}",
+                "Cursor smoothing visible={},{} target={},{}",
                 self.visible_x,
                 self.visible_y,
                 self.pointer_x,
@@ -210,7 +210,7 @@ impl InputState {
         if flush_count < MAX_STARTUP_LOGS {
             let pre = COALESCE_PRE.load(Ordering::Relaxed);
             stem::trace!(
-                "bloom: motion coalesce pre={} post={} pos={},{}",
+                "Motion coalesce pre={} post={} pos={},{}",
                 pre,
                 flush_count + 1,
                 self.pointer_x,
@@ -275,7 +275,7 @@ impl InputState {
         let old_y = self.pointer_y;
         if target_x == old_x && target_y == old_y {
             stem::debug!(
-                "bloom: discarded {} deferred cursor motion events at cursor boundary",
+                "Discarded {} deferred cursor motion events at cursor boundary",
                 event_count
             );
             return false;
@@ -288,8 +288,8 @@ impl InputState {
             self.pending_motion_ts = Some(ts);
         }
         COALESCE_PRE.fetch_add(event_count, Ordering::Relaxed);
-        stem::info!(
-            "bloom: replayed {} deferred cursor motion events pos={},{}",
+        stem::debug!(
+            "Replayed {} deferred cursor motion events pos={},{}",
             event_count,
             self.pointer_x,
             self.pointer_y
@@ -362,7 +362,7 @@ impl InputState {
                 COALESCE_PRE.fetch_add(1, Ordering::Relaxed);
                 if POINTER_MOVE_LOGS.fetch_add(1, Ordering::Relaxed) < MAX_STARTUP_LOGS {
                     stem::trace!(
-                        "bloom: pointer moved dx={} dy={} pos={},{}",
+                        "Pointer moved dx={} dy={} pos={},{}",
                         dx,
                         dy,
                         self.pointer_x,
@@ -378,8 +378,8 @@ impl InputState {
                 let mut p = [0u8; abi::hid::WaylandPointerButton::SIZE];
                 p.copy_from_slice(&payload[..abi::hid::WaylandPointerButton::SIZE]);
                 let btn = abi::hid::WaylandPointerButton::from_bytes(&p);
-                stem::info!(
-                    "bloom: PointerButtonDown at {},{} button={}",
+                stem::debug!(
+                    "PointerButtonDown at {},{} button={}",
                     self.pointer_x,
                     self.pointer_y,
                     btn.button
@@ -580,7 +580,7 @@ impl InputState {
                 let key = KeyEventPayload::from_bytes(&p);
                 let raw_key = key.key;
                 stem::trace!(
-                    "bloom: KeyDown received: {:?} (raw={:#06x}, mods={:?}, repeat={})",
+                    "KeyDown received: {:?} (raw={:#06x}, mods={:?}, repeat={})",
                     key.key(),
                     raw_key,
                     key.mods(),
@@ -592,7 +592,7 @@ impl InputState {
                         self.pointer_overlay_enabled = !self.pointer_overlay_enabled;
                         damage.mark_full(self.output_w as u32, self.output_h as u32);
                         stem::info!(
-                            "bloom: pointer debug overlay {}",
+                            "Pointer debug overlay {}",
                             if self.pointer_overlay_enabled { "enabled" } else { "disabled" }
                         );
                     }
@@ -601,8 +601,8 @@ impl InputState {
                 match blossom::input::handle_hotkey(key.key(), key.mods(), key.is_repeat()) {
                     blossom::input::WmAction::CycleFocus { forward } => {
                         let (old_focus, new_focus) = scene.cycle_focus(forward);
-                        stem::info!(
-                            "bloom: focus cycled from {:?} to {:?} (forward={})",
+                        stem::debug!(
+                            "Focus cycled from {:?} to {:?} (forward={})",
                             old_focus,
                             new_focus,
                             forward
@@ -744,8 +744,8 @@ impl InputState {
                     kind: PointerGrabKind::Move { offset_x, offset_y },
                 });
                 self.set_cursor_kind(CursorKind::Move, damage);
-                stem::info!(
-                    "bloom: window drag started surface={} pointer={},{} offset={},{}",
+                stem::debug!(
+                    "Window drag started surface={} pointer={},{} offset={},{}",
                     surface_id,
                     self.pointer_x,
                     self.pointer_y,
@@ -767,8 +767,8 @@ impl InputState {
                 });
                 self.set_cursor_kind(CursorKind::for_resize_edge(edge), damage);
                 send_wayland_configure(wayland_evt_write, surface_id, rect.w, rect.h, true);
-                stem::info!(
-                    "bloom: window resize started surface={} edge={:?} pointer={},{}",
+                stem::debug!(
+                    "Window resize started surface={} edge={:?} pointer={},{}",
                     surface_id,
                     edge,
                     self.pointer_x,
@@ -834,8 +834,8 @@ impl InputState {
                     target.w as i32,
                     target.h as i32,
                 );
-                stem::info!(
-                    "bloom: maximize button pressed surface={} size={}x{}",
+                stem::debug!(
+                    "Maximize button pressed surface={} size={}x{}",
                     surface_id,
                     target.w,
                     target.h
@@ -935,8 +935,8 @@ impl InputState {
             toggled.new_rect.w as i32,
             toggled.new_rect.h as i32,
         );
-        stem::info!(
-            "bloom: fullscreen toggled surface={} fullscreen={}",
+        stem::debug!(
+            "Fullscreen toggled surface={} fullscreen={}",
             surface_id,
             toggled.active
         );
@@ -966,8 +966,8 @@ impl InputState {
                     mark_surface_visual_damage(scene, damage, grab.surface_id, moved.new_rect);
                     let cursor_offset_x = self.pointer_x.saturating_sub(moved.new_rect.x as i32);
                     let cursor_offset_y = self.pointer_y.saturating_sub(moved.new_rect.y as i32);
-                    stem::info!(
-                        "bloom: window drag moved surface={} to {},{} pointer={},{} offset={},{}",
+                    stem::trace!(
+                        "Window drag moved surface={} to {},{} pointer={},{} offset={},{}",
                         grab.surface_id,
                         moved.new_rect.x,
                         moved.new_rect.y,
@@ -1009,8 +1009,8 @@ impl InputState {
                         true,
                     );
                     self.resize_sent_this_frame = true;
-                    stem::info!(
-                        "bloom: window resize moved surface={} to {},{} {}x{} (realtime)",
+                    stem::trace!(
+                        "Window resize moved surface={} to {},{} {}x{} (realtime)",
                         grab.surface_id,
                         resized.new_rect.x,
                         resized.new_rect.y,
@@ -1073,7 +1073,7 @@ impl InputState {
         self.cursor_kind = next;
         self.pending_cursor_motion = true;
         mark_cursor_rect(damage, self.visible_x, self.visible_y);
-        stem::debug!("bloom: cursor kind {:?}", next);
+        stem::debug!("Cursor kind {:?}", next);
     }
 
     fn defer_cursor_motion(&mut self, dx: i16, dy: i16, timestamp_ns: u64) {
@@ -1086,7 +1086,7 @@ impl InputState {
         self.deferred_cursor_events = self.deferred_cursor_events.saturating_add(1);
         if POINTER_MOVE_LOGS.fetch_add(1, Ordering::Relaxed) < MAX_STARTUP_LOGS {
             stem::trace!(
-                "bloom: deferred cursor motion dx={} dy={} queued={} target={},{}",
+                "Deferred cursor motion dx={} dy={} queued={} target={},{}",
                 dx,
                 dy,
                 self.deferred_cursor_events,
@@ -1307,7 +1307,7 @@ impl BloomInputTrace {
         let start_ns = stem::monotonic_ns();
         if enabled {
             stem::trace!(
-                "bloom: handle_bristle_event entry event={} type={} start_ns={}",
+                "Handle_bristle_event entry event={} type={} start_ns={}",
                 event_no,
                 event_type_name(event_type),
                 start_ns
@@ -1322,7 +1322,7 @@ impl Drop for BloomInputTrace {
         if self.enabled {
             let end_ns = stem::monotonic_ns();
             stem::trace!(
-                "bloom: handle_bristle_event exit event={} type={} elapsed_ns={}",
+                "Handle_bristle_event exit event={} type={} elapsed_ns={}",
                 self.event_no,
                 event_type_name(self.event_type),
                 end_ns.saturating_sub(self.start_ns)
@@ -1484,13 +1484,13 @@ fn send_close_requested_to_owner(scene: &Scene, surface_id: u32) {
         return;
     };
     match msg_send(pid, KIND_UI_EVENT, &buf[..len]) {
-        Ok(()) => stem::info!(
-            "bloom: sent CloseRequested to app inbox pid={} surface={}",
+        Ok(()) => stem::debug!(
+            "Sent CloseRequested to app inbox pid={} surface={}",
             pid,
             surface_id
         ),
         Err(err) => stem::warn!(
-            "bloom: failed to send CloseRequested to app inbox pid={} surface={} err={:?}",
+            "Failed to send CloseRequested to app inbox pid={} surface={} err={:?}",
             pid,
             surface_id,
             err
