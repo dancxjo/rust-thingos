@@ -23,6 +23,11 @@ impl LoongArch64Runtime {
 pub use paging::LoongArch64AddressSpace;
 pub use task::LoongArch64Context;
 
+const UART_BASE: usize = 0x1fe0_01e0;
+const UART_LSR: usize = UART_BASE + 5;
+const UART_LSR_DR: u8 = 0x01;
+const UART_LSR_THRE: u8 = 0x20;
+
 impl ArchRuntime for LoongArch64Runtime {
     type Context = LoongArch64Context;
     type AddressSpace = LoongArch64AddressSpace;
@@ -34,20 +39,16 @@ impl ArchRuntime for LoongArch64Runtime {
         }
     }
     fn putchar(&self, c: u8) {
-        unsafe {
-            let uart = 0x1fe001e0 as *mut u8;
-            core::ptr::write_volatile(uart, c);
-        }
+        serial_putchar(c);
+    }
+    fn putbuf(&self, buf: &[u8]) {
+        early_serial_write(buf);
     }
     fn getchar(&self) -> Option<u8> {
-        unsafe {
-            let lsr = core::ptr::read_volatile(0x1fe001e5 as *const u8);
-            if (lsr & 0x01) != 0 {
-                Some(core::ptr::read_volatile(0x1fe001e0 as *const u8))
-            } else {
-                None
-            }
-        }
+        serial_getchar()
+    }
+    fn arm_serial_tx_irq(&self) {
+        crate::console::serial_flush_deferred_idle();
     }
 
     fn halt(&self) -> ! {
@@ -215,6 +216,37 @@ struct DumbKernelAlloc;
 impl FrameAllocatorHook for DumbKernelAlloc {
     fn alloc_frame(&self) -> Option<u64> {
         kernel::memory::alloc_frame()
+    }
+}
+
+pub fn early_serial_write(buf: &[u8]) {
+    for &b in buf {
+        serial_putchar(b);
+    }
+}
+
+fn serial_putchar(c: u8) {
+    unsafe {
+        let mut spins = 0u32;
+        while (core::ptr::read_volatile(UART_LSR as *const u8) & UART_LSR_THRE) == 0 {
+            if spins >= 100_000 {
+                break;
+            }
+            spins = spins.saturating_add(1);
+            core::hint::spin_loop();
+        }
+        core::ptr::write_volatile(UART_BASE as *mut u8, c);
+    }
+}
+
+fn serial_getchar() -> Option<u8> {
+    unsafe {
+        let lsr = core::ptr::read_volatile(UART_LSR as *const u8);
+        if (lsr & UART_LSR_DR) != 0 {
+            Some(core::ptr::read_volatile(UART_BASE as *const u8))
+        } else {
+            None
+        }
     }
 }
 

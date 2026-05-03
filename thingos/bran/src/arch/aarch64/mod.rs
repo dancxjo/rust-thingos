@@ -1,9 +1,9 @@
 use crate::runtime::ArchRuntime;
 use core::arch::{asm, naked_asm};
-use kernel::time::MonotonicClamp;
 use kernel::{FrameAllocatorHook, IrqState, MapKind, MapPerms, UserEntry, UserTaskSpec};
 
 pub mod paging;
+pub mod serial;
 pub mod simd;
 pub mod syscall;
 pub mod task;
@@ -17,17 +17,16 @@ impl FrameAllocatorHook for DumbAlloc {
     }
 }
 
-static UART_MAPPED: core::sync::atomic::AtomicBool = core::sync::atomic::AtomicBool::new(false);
 static CURRENT_TID: core::sync::atomic::AtomicU64 = core::sync::atomic::AtomicU64::new(0);
 
 pub struct AArch64Runtime {
-    serial: SerialPort,
+    serial: serial::SerialPort,
 }
 
 impl AArch64Runtime {
     pub const fn new() -> Self {
         Self {
-            serial: SerialPort::new(),
+            serial: serial::SerialPort::new(),
         }
     }
 }
@@ -129,43 +128,34 @@ impl ArchRuntime for AArch64Runtime {
                 &DumbAlloc
             };
 
-            if self.map_page(aspace, uart_virt, uart_phys, perms, allocator).is_ok() {
-                UART_MAPPED.store(true, core::sync::atomic::Ordering::Release);
-            }
+            let _ = self.map_page(aspace, uart_virt, uart_phys, perms, allocator);
+            self.serial.init(hhdm_offset);
         }
     }
 
     fn putchar(&self, c: u8) {
-        // 1. Semihosting fallback (always works, very slow)
-        let ch = c;
-        unsafe {
-            core::arch::asm!(
-                "hlt #0xF000",
-                in("w0") 0x03,
-                in("x1") &ch,
-                options(nostack, preserves_flags)
-            );
-        }
-
-        // 2. PL011 UART0 via HHDM (only if mapped)
-        if UART_MAPPED.load(core::sync::atomic::Ordering::Acquire) {
-            let hhdm = unsafe { paging::get_hhdm_offset() };
-            let uart_base = 0x0900_0000u64 + hhdm;
-            let uart = uart_base as *mut u32;
-
-            unsafe {
-                // UARTFR (Flag Register) offset 0x18 (6 * 4). TXFF is bit 5.
-                let mut timeout = 1000u32;
-                while (core::ptr::read_volatile(uart.add(6)) & 0x20) != 0 && timeout > 0 {
-                    timeout -= 1;
-                }
-                if timeout > 0 {
-                    core::ptr::write_volatile(uart, c as u32);
-                }
-            }
-        }
+        self.serial.putchar(c);
     }
-    // getchar: default None (semihosting has no standard getchar)
+
+    fn putbuf(&self, buf: &[u8]) {
+        self.serial.putbuf(buf);
+    }
+
+    fn getchar(&self) -> Option<u8> {
+        self.serial.getchar()
+    }
+
+    fn serial_tx_ready(&self) -> bool {
+        serial::tx_ready()
+    }
+
+    fn write_serial_fifo_burst(&self, data: &[u8]) -> usize {
+        serial::write_fifo_burst(data)
+    }
+
+    fn arm_serial_tx_irq(&self) {
+        crate::console::serial_flush_deferred_idle();
+    }
 
     fn halt(&self) -> ! {
         hcf()
@@ -422,46 +412,15 @@ impl ArchRuntime for AArch64Runtime {
         CURRENT_TID.store(tid, core::sync::atomic::Ordering::Relaxed);
     }
 }
+
+pub fn early_serial_write(buf: &[u8]) {
+    serial::early_serial_write(buf);
+}
+
 struct ProxyAllocator;
 impl FrameAllocatorHook for ProxyAllocator {
     fn alloc_frame(&self) -> Option<u64> {
         kernel::memory::alloc_frame()
-    }
-}
-
-pub struct SerialPort {
-    pub clamp: MonotonicClamp,
-}
-
-impl SerialPort {
-    pub const fn new() -> Self {
-        Self {
-            clamp: MonotonicClamp::new(),
-        }
-    }
-
-    fn putchar(&self, c: u8) {
-        // 2. PL011 UART0 (standard on QEMU virt)
-        // We use the HHDM mapping if initialized, or fall back to physical if very early.
-        // Limine usually maps the first 4GiB of physical memory at HHDM_OFFSET.
-        let hhdm = unsafe { paging::get_hhdm_offset() };
-        let uart_base = 0x09000000u64 + hhdm;
-        let uart = uart_base as *mut u32;
-
-        unsafe {
-            // UARTFR (Flag Register) is at offset 0x18. TXFF is bit 5.
-            // NON-BLOCKING: If the FIFO is full for too long (e.g. no one reading
-            // the serial socket), drop the byte rather than hanging the kernel.
-            let mut timeout = 1000u32;
-            while (core::ptr::read_volatile(uart.add(6)) & (1 << 5)) != 0 && timeout > 0 {
-                timeout -= 1;
-            }
-
-            if timeout > 0 {
-                // UARTDR (Data Register) is at offset 0x00.
-                core::ptr::write_volatile(uart, c as u32);
-            }
-        }
     }
 }
 

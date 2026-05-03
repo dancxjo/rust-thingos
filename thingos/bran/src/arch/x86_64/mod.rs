@@ -176,32 +176,7 @@ impl X86_64Runtime {
     }
 
     fn early_serial_write(&self, msg: &[u8]) {
-        unsafe {
-            let port = 0x3f8u16;
-            for &b in msg {
-                let mut spins = 0u32;
-                loop {
-                    let lsr: u8;
-                    core::arch::asm!(
-                        "in al, dx",
-                        out("al") lsr,
-                        in("dx") port + 5,
-                        options(nostack, preserves_flags)
-                    );
-                    if (lsr & 0x20) != 0 || spins >= 100_000 {
-                        break;
-                    }
-                    spins = spins.saturating_add(1);
-                    core::hint::spin_loop();
-                }
-                core::arch::asm!(
-                    "out dx, al",
-                    in("dx") port,
-                    in("al") b,
-                    options(nostack, preserves_flags)
-                );
-            }
-        }
+        early_serial_write(msg);
     }
 
     fn lapic_mmio_is_mapped(&self) -> bool {
@@ -240,6 +215,35 @@ impl X86_64Runtime {
         }
 
         self.lapic_mmio_is_mapped()
+    }
+}
+
+pub fn early_serial_write(msg: &[u8]) {
+    unsafe {
+        let port = 0x3f8u16;
+        for &b in msg {
+            let mut spins = 0u32;
+            loop {
+                let lsr: u8;
+                core::arch::asm!(
+                    "in al, dx",
+                    out("al") lsr,
+                    in("dx") port + 5,
+                    options(nostack, preserves_flags)
+                );
+                if (lsr & 0x20) != 0 || spins >= 100_000 {
+                    break;
+                }
+                spins = spins.saturating_add(1);
+                core::hint::spin_loop();
+            }
+            core::arch::asm!(
+                "out dx, al",
+                in("dx") port,
+                in("al") b,
+                options(nostack, preserves_flags)
+            );
+        }
     }
 }
 

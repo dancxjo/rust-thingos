@@ -22,47 +22,13 @@ use requests::{BASE_REVISION, FRAMEBUFFER_REQUEST};
 pub static RUNTIME: arch::CurrentRuntime = arch::create_runtime();
 const EARLY_BOOT_TRACE_ENABLED: bool = false;
 
-#[cfg(target_arch = "x86_64")]
 fn early_serial_write(msg: &[u8]) {
     if !EARLY_BOOT_TRACE_ENABLED {
         let _ = msg;
         return;
     }
-    unsafe {
-        let port = 0x3f8u16;
-        for &b in msg {
-            // Wait for THR empty.
-            let mut spins = 0u32;
-            loop {
-                let lsr: u8;
-                core::arch::asm!(
-                    "in al, dx",
-                    out("al") lsr,
-                    in("dx") port + 5,
-                    options(nostack, preserves_flags)
-                );
-                if (lsr & 0x20) != 0 {
-                    break;
-                }
-                if spins >= 100_000 {
-                    // Do not wedge boot diagnostics forever if UART THRE never appears.
-                    break;
-                }
-                spins = spins.saturating_add(1);
-                core::hint::spin_loop();
-            }
-            core::arch::asm!(
-                "out dx, al",
-                in("dx") port,
-                in("al") b,
-                options(nostack, preserves_flags)
-            );
-        }
-    }
+    arch::early_serial_write(msg);
 }
-
-#[cfg(not(target_arch = "x86_64"))]
-fn early_serial_write(_msg: &[u8]) {}
 
 fn init_onscreen_terminal() {
     let Some(response) = FRAMEBUFFER_REQUEST.get_response() else {
@@ -76,17 +42,8 @@ fn init_onscreen_terminal() {
 
 #[unsafe(no_mangle)]
 unsafe extern "C" fn kmain() -> ! {
+    arch::early_serial_write(b"KMAIN\r\n");
     early_serial_write(b"[bran] kmain enter\r\n");
-
-    // Ultra-early Proof of Life (semihosting)
-    #[cfg(target_arch = "aarch64")]
-    {
-        unsafe {
-            for &b in b"KMAIN\r\n" {
-                core::arch::asm!("hlt #0xF000", in("w0") 0x03, in("x1") &b);
-            }
-        }
-    }
 
     // Architecture-specific early initialization (e.g., stack mode switching on AArch64)
     unsafe {
@@ -143,15 +100,7 @@ fn panic(info: &core::panic::PanicInfo) -> ! {
     crate::console::flush_sync();
     crate::console::serial_flush_sync();
 
-    // Semihosting FAULT marker
-    #[cfg(target_arch = "aarch64")]
-    {
-        unsafe {
-            for &b in b"FAULT\r\n" {
-                core::arch::asm!("hlt #0xF000", in("w0") 0x03, in("x1") &b);
-            }
-        }
-    }
+    arch::early_serial_write(b"FAULT\r\n");
 
     hcf();
 }

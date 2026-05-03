@@ -20,6 +20,26 @@ pub use riscv64::hcf;
 #[cfg(target_arch = "x86_64")]
 pub use x86_64::hcf;
 
+#[cfg(target_arch = "aarch64")]
+pub fn early_serial_write(buf: &[u8]) {
+    aarch64::early_serial_write(buf);
+}
+
+#[cfg(target_arch = "loongarch64")]
+pub fn early_serial_write(buf: &[u8]) {
+    loongarch64::early_serial_write(buf);
+}
+
+#[cfg(target_arch = "riscv64")]
+pub fn early_serial_write(buf: &[u8]) {
+    riscv64::early_serial_write(buf);
+}
+
+#[cfg(target_arch = "x86_64")]
+pub fn early_serial_write(buf: &[u8]) {
+    x86_64::early_serial_write(buf);
+}
+
 #[cfg(target_arch = "x86_64")]
 pub type CurrentRuntime = crate::runtime::Runtime<x86_64::X86_64Runtime>;
 #[cfg(target_arch = "aarch64")]

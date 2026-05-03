@@ -39,8 +39,14 @@ impl ArchRuntime for RISCV64Runtime {
     fn putchar(&self, c: u8) {
         self.serial.putchar(c);
     }
+    fn putbuf(&self, buf: &[u8]) {
+        self.serial.putbuf(buf);
+    }
     fn getchar(&self) -> Option<u8> {
         self.serial.getchar()
+    }
+    fn arm_serial_tx_irq(&self) {
+        crate::console::serial_flush_deferred_idle();
     }
     fn halt(&self) -> ! {
         hcf()
@@ -221,6 +227,10 @@ impl FrameAllocatorHook for DumbKernelAlloc {
     fn alloc_frame(&self) -> Option<u64> {
         kernel::memory::alloc_frame()
     }
+}
+
+pub fn early_serial_write(buf: &[u8]) {
+    serial::early_serial_write(buf);
 }
 
 pub fn hcf() -> ! {
