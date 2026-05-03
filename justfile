@@ -290,14 +290,36 @@ test *args:
     cargo test \
         -p abi \
         -p abi-macros \
-        -p pciids \
-        -p xtask \
-        -p stem \
-        -p stem-macros \
+        -p accel2d_cpu \
+        -p bdd \
+        -p blossom \
+        -p bristle \
+        -p display_proto_tests \
+        -p fat \
+        -p fb_common \
+        -p http \
+        -p httpsd \
+        -p ipc_helpers \
+        -p iso9660 \
+        -p kindc \
         -p llm \
         -p llm_stub \
-        -p fb_common \
-        -p kindc \
+        -p mesocarp \
+        -p netd \
+        -p pciids \
+        -p petals \
+        -p pistil-types \
+        -p stem \
+        -p stem-macros \
+        -p stile \
+        -p svg \
+        -p terminal_core \
+        -p thingos \
+        -p thingos_guardrail_tests \
+        -p xtask \
+        {{args}}
+    cargo test \
+        -p pistil \
         {{args}}
 
 # Check everything (compilation + UI split).

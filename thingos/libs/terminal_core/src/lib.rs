@@ -147,8 +147,6 @@ impl TermModel {
         for dirty in &mut self.dirty_rows {
             *dirty = true;
         }
-        self.cursor_col = 0;
-        self.cursor_row = 0;
     }
 
     fn scroll(&mut self) {
@@ -377,5 +375,30 @@ impl TermModel {
     pub fn write_bytes_lossy(&mut self, bytes: &[u8], font: &Font) {
         let text = String::from_utf8_lossy(bytes);
         self.write_str(&text, font);
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    fn font() -> Font {
+        Font::from_unifont_hex("")
+    }
+
+    #[test]
+    fn csi_clear_screen_preserves_cursor_position() {
+        let font = font();
+        let mut model = TermModel::new(5, 3);
+
+        model.write_str("abc", &font);
+        model.write_str("\x1b[2;4H", &font);
+        let cursor_before = (model.cursor_col, model.cursor_row);
+
+        model.write_str("\x1b[2J", &font);
+
+        assert_eq!((model.cursor_col, model.cursor_row), cursor_before);
+        assert!(model.cells.iter().all(|cell| cell.ch == ' '));
+        assert!(model.dirty_rows.iter().all(|dirty| *dirty));
     }
 }
