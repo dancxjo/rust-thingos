@@ -344,6 +344,22 @@ async fn compositor_emits_surface_configure(world: &mut ThingOsWorld) -> Result<
     }
 }
 
+/// `And the compositor does not reserve titlebar chrome for the toplevel`
+#[then("the compositor does not reserve titlebar chrome for the toplevel")]
+async fn compositor_does_not_reserve_titlebar_chrome(
+    world: &mut ThingOsWorld,
+) -> Result<(), StepError> {
+    let log = world.get_serial_log().await;
+    if log.contains("registered titlebar drag zone") || log.contains("titlebar height") {
+        Err(StepError(
+            "Compositor registered titlebar chrome during xdg_toplevel setup".to_string(),
+        ))
+    } else {
+        eprintln!("│  │  │      ✅ no compositor titlebar chrome reservation observed");
+        Ok(())
+    }
+}
+
 /// `And the serial from xdg_surface.configure is greater than zero`
 #[then("the serial from xdg_surface.configure is greater than zero")]
 async fn configure_serial_greater_than_zero(world: &mut ThingOsWorld) -> Result<(), StepError> {

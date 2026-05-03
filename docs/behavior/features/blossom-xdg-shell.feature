@@ -28,6 +28,7 @@ Feature: blossom xdg-shell lifecycle
     Then the compositor emits xdg_toplevel.configure with width=0 height=0 and empty states
     And the compositor then emits xdg_surface.configure with a fresh serial
     And the serial from xdg_surface.configure is greater than zero
+    And the compositor does not reserve titlebar chrome for the toplevel
 
   Scenario: calling get_toplevel a second time on the same xdg_surface errors
     Given the client has an xdg_surface that already has a toplevel role

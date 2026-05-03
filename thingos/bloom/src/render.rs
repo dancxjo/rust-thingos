@@ -1,3 +1,4 @@
+use alloc::string::String;
 use alloc::vec::Vec;
 
 use abi::pixel::PixelFormat;
@@ -100,6 +101,7 @@ pub struct CompositorVisuals {
     cursor_variants: Vec<(CursorKind, CursorBuffer)>,
     pointer_overlay: Option<PointerOverlayBuffer>,
     runbox_overlay: Option<RunBoxOverlayBuffer>,
+    launcher_overlay: Option<LauncherOverlayBuffer>,
     body_overlays: Vec<ChromeOverlayBuffer>,
     chrome_overlays: Vec<ChromeOverlayBuffer>,
     pistil: Option<PistilLib>,
@@ -189,6 +191,13 @@ struct RunBoxOverlayBuffer {
     height: u32,
 }
 
+struct LauncherOverlayBuffer {
+    texture: Texture,
+    buffer_id: u32,
+    width: u32,
+    height: u32,
+}
+
 struct ChromeOverlayBuffer {
     surface_id: u32,
     texture: Texture,
@@ -207,6 +216,7 @@ impl CompositorVisuals {
             cursor_variants: Vec::new(),
             pointer_overlay: None,
             runbox_overlay: None,
+            launcher_overlay: None,
             body_overlays: Vec::new(),
             chrome_overlays: Vec::new(),
             pistil: None,
@@ -949,6 +959,72 @@ impl CompositorVisuals {
 
         self.runbox_overlay = Some(RunBoxOverlayBuffer { texture, buffer_id, width, height });
         stem::debug!("Run dialog overlay ready: buffer={} size={}x{}", buffer_id, width, height);
+        Some(())
+    }
+
+    pub fn launcher_overlay_plane(
+        &mut self,
+        display: &DisplayBackend,
+        state: &blossom::launcher::LauncherState,
+    ) -> Option<OverlayPlane> {
+        if !state.visible {
+            return None;
+        }
+        self.ensure_launcher_overlay(display)?;
+        let (output_w, output_h) = display.output_size();
+        let placement = blossom::launcher::launcher_rect(output_w, output_h);
+
+        let overlay = self.launcher_overlay.as_mut()?;
+        draw_launcher_overlay(
+            overlay.texture.as_slice_mut(),
+            overlay.width,
+            overlay.height,
+            state,
+            self.pistil.as_ref().and_then(|lib| lib.draw_text),
+            self.pistil.as_ref().and_then(|lib| lib.draw_svg_icon),
+        );
+
+        Some(OverlayPlane {
+            buffer_id: overlay.buffer_id,
+            x: placement.x,
+            y: placement.y,
+            width: overlay.width,
+            height: overlay.height,
+        })
+    }
+
+    fn ensure_launcher_overlay(&mut self, display: &DisplayBackend) -> Option<()> {
+        let width = blossom::launcher::LAUNCHER_WIDTH;
+        let height = blossom::launcher::LAUNCHER_HEIGHT;
+        if matches!(
+            self.launcher_overlay.as_ref(),
+            Some(overlay) if overlay.width == width && overlay.height == height
+        ) {
+            return Some(());
+        }
+
+        let texture = Texture::new("bloom.compositor.launcher_overlay", width, height, 4)?;
+        let buffer_id = display.import_buffer(
+            texture.fd,
+            width,
+            height,
+            texture.stride,
+            PixelFormat::Bgra8888,
+            0,
+            0,
+        )?;
+
+        if let Some(old) = self.launcher_overlay.take() {
+            display.release_buffer(old.buffer_id);
+        }
+
+        self.launcher_overlay = Some(LauncherOverlayBuffer { texture, buffer_id, width, height });
+        stem::debug!(
+            "Application launcher overlay ready: buffer={} size={}x{}",
+            buffer_id,
+            width,
+            height
+        );
         Some(())
     }
 }
@@ -2251,6 +2327,194 @@ fn draw_runbox_overlay(
         "Run",
         0xFF111318,
     );
+}
+
+fn draw_launcher_overlay(
+    dst: &mut [u32],
+    width: u32,
+    height: u32,
+    state: &blossom::launcher::LauncherState,
+    pistil_draw_text: Option<DrawTextFn>,
+    pistil_draw_svg_icon: Option<DrawSvgIconFn>,
+) {
+    dst.fill(0);
+    fill_rect(dst, width, 0, 0, width, height, 0xF516181D);
+    draw_rect_stroke(dst, width, height, 0, 0, width, height, 1, 0xFF2A2F3D);
+
+    let Ok((tree, nodes)) = blossom::launcher::launcher_tree(state) else {
+        draw_overlay_text(
+            pistil_draw_text,
+            dst,
+            width,
+            height,
+            16,
+            32,
+            20.0,
+            "Applications",
+            0xFFF1F4F8,
+        );
+        return;
+    };
+
+    draw_tree_text(&tree, nodes.title, dst, width, height, pistil_draw_text, 20.0, 0xFFF1F4F8);
+
+    for tile in nodes.tiles {
+        let Ok(tile_box) = tree.global_layout_box(tile.node) else {
+            continue;
+        };
+        let tile_node = tree.node(tile.node);
+        let bg = tile_node
+            .and_then(|node| node.style.background_color)
+            .map(color_argb)
+            .unwrap_or(0xFF242933);
+        let border =
+            if state.pressed_index == Some(tile.entry_index) { 0xFFD8A657 } else { 0xFF343B47 };
+        fill_rect(
+            dst,
+            width,
+            tile_box.x as i32,
+            tile_box.y as i32,
+            tile_box.width as u32,
+            tile_box.height as u32,
+            bg,
+        );
+        draw_rect_stroke(
+            dst,
+            width,
+            height,
+            tile_box.x as i32,
+            tile_box.y as i32,
+            tile_box.width as u32,
+            tile_box.height as u32,
+            1,
+            border,
+        );
+
+        draw_launcher_icon(&tree, tile.icon, dst, width, height, pistil_draw_svg_icon);
+        draw_tree_text(&tree, tile.label, dst, width, height, pistil_draw_text, 15.0, 0xFFF1F4F8);
+        draw_tree_text(&tree, tile.path, dst, width, height, pistil_draw_text, 10.0, 0xFF9DA8B7);
+    }
+
+    draw_tree_text(&tree, nodes.status, dst, width, height, pistil_draw_text, 12.0, 0xFFADB7C7);
+}
+
+fn draw_launcher_icon(
+    tree: &petals::UiTree,
+    node_id: petals::NodeId,
+    dst: &mut [u32],
+    stride: u32,
+    height: u32,
+    pistil_draw_svg_icon: Option<DrawSvgIconFn>,
+) {
+    let Ok(icon_box) = tree.global_layout_box(node_id) else {
+        return;
+    };
+    let color =
+        tree.node(node_id).and_then(|node| node.style.color).map(color_argb).unwrap_or(0xFF8FD1FF);
+    if let (Some(draw_svg), Some(path)) =
+        (pistil_draw_svg_icon, petals::node_icon_path(tree, node_id))
+    {
+        if call_draw_svg_icon(
+            draw_svg,
+            path,
+            dst,
+            stride,
+            height,
+            icon_box.x as i32,
+            icon_box.y as i32,
+            icon_box.width as u32,
+            icon_box.height as u32,
+            color,
+        ) == 0
+        {
+            return;
+        }
+    }
+
+    let glyph = tree
+        .node(node_id)
+        .and_then(|node| match node.attrs.get("glyph") {
+            Some(petals::AttrValue::Str(value)) => value.chars().next(),
+            _ => None,
+        })
+        .unwrap_or('?');
+    let mut fallback = String::new();
+    fallback.push(glyph);
+    draw_overlay_text(
+        None,
+        dst,
+        stride,
+        height,
+        icon_box.x as i32 + 8,
+        icon_box.y as i32 + icon_box.height as i32 - 7,
+        18.0,
+        &fallback,
+        color,
+    );
+}
+
+fn draw_tree_text(
+    tree: &petals::UiTree,
+    node_id: petals::NodeId,
+    dst: &mut [u32],
+    stride: u32,
+    height: u32,
+    pistil_draw_text: Option<DrawTextFn>,
+    fallback_size: f32,
+    fallback_color: u32,
+) {
+    let Some(text) = tree.node(node_id).and_then(text_attr) else {
+        return;
+    };
+    let Ok(layout) = tree.global_layout_box(node_id) else {
+        return;
+    };
+    let Some(node) = tree.node(node_id) else {
+        return;
+    };
+    let px_size = node.style.font_size.unwrap_or(fallback_size);
+    let color = node.style.color.map(color_argb).unwrap_or(fallback_color);
+    let text = ellipsize_ascii(text, text_capacity(layout.width, px_size));
+    draw_overlay_text(
+        pistil_draw_text,
+        dst,
+        stride,
+        height,
+        layout.x as i32,
+        layout.y as i32 + px_size as i32,
+        px_size,
+        &text,
+        color,
+    );
+}
+
+fn text_attr(node: &petals::Node) -> Option<&str> {
+    match node.attrs.get("text") {
+        Some(petals::AttrValue::Str(value)) => Some(value.as_str()),
+        _ => None,
+    }
+}
+
+fn text_capacity(width: f32, px_size: f32) -> usize {
+    let advance = (px_size * 0.62).max(6.0);
+    ((width / advance) as usize).max(1)
+}
+
+fn ellipsize_ascii(text: &str, capacity: usize) -> String {
+    if text.chars().count() <= capacity {
+        return String::from(text);
+    }
+    let mut out = String::new();
+    let keep = capacity.saturating_sub(1);
+    for ch in text.chars().take(keep) {
+        out.push(ch);
+    }
+    out.push('~');
+    out
+}
+
+fn color_argb(color: petals::Color) -> u32 {
+    ((color.a as u32) << 24) | ((color.r as u32) << 16) | ((color.g as u32) << 8) | color.b as u32
 }
 
 fn draw_pointer_overlay(

@@ -3,14 +3,11 @@ use alloc::string::{String, ToString};
 use alloc::vec::Vec;
 use core::sync::atomic::{AtomicU32, AtomicU64, Ordering};
 
-use abi::hid::{
-    BristleEventHeader, EventType, Key, KeyEventPayload, PointerButtonPayload, PointerMovePayload,
-    ScrollPayload,
-};
+use abi::hid::{EventType, Key, KeyEventPayload};
 use abi::{KindId, ui_event};
 use stem::syscall::message::msg_send;
 use stem::syscall::port_send_all;
-use stem::syscall::vfs::{vfs_close, vfs_open};
+use stem::syscall::vfs::{vfs_close, vfs_open, vfs_readdir};
 
 use crate::damage::DamageTracker;
 use crate::protocol::{
@@ -76,6 +73,8 @@ pub struct InputState {
     resize_sent_this_frame: bool,
     runbox: blossom::runbox::RunState,
     runbox_keyboard_modal: bool,
+    launcher: blossom::launcher::LauncherState,
+    launcher_keyboard_modal: bool,
 }
 
 #[derive(Clone, Copy, Debug)]
@@ -118,11 +117,17 @@ impl InputState {
             resize_sent_this_frame: false,
             runbox: blossom::runbox::RunState::new(),
             runbox_keyboard_modal: false,
+            launcher: blossom::launcher::LauncherState::new(),
+            launcher_keyboard_modal: false,
         }
     }
 
     pub fn runbox(&self) -> &blossom::runbox::RunState {
         &self.runbox
+    }
+
+    pub fn launcher(&self) -> &blossom::launcher::LauncherState {
+        &self.launcher
     }
 
     pub fn is_resizing(&self) -> bool {
@@ -218,6 +223,10 @@ impl InputState {
             return;
         };
 
+        if self.launcher.visible {
+            return;
+        }
+
         let flush_count = COALESCE_FLUSH_LOGS.fetch_add(1, Ordering::Relaxed);
         if flush_count < MAX_STARTUP_LOGS {
             let pre = COALESCE_PRE.load(Ordering::Relaxed);
@@ -310,6 +319,16 @@ impl InputState {
         if self.update_pointer_grab(scene, damage, wayland_evt_write) {
             return true;
         }
+        if self.launcher.visible {
+            mark_cursor_damage(
+                damage,
+                self.visible_x,
+                self.visible_y,
+                self.pointer_x,
+                self.pointer_y,
+            );
+            return true;
+        }
         self.update_cursor_kind(scene, damage);
         true
     }
@@ -365,6 +384,16 @@ impl InputState {
                 if self.update_pointer_grab(scene, damage, wayland_evt_write) {
                     return true;
                 }
+                if self.launcher.visible {
+                    mark_cursor_damage(
+                        damage,
+                        self.visible_x,
+                        self.visible_y,
+                        self.pointer_x,
+                        self.pointer_y,
+                    );
+                    return true;
+                }
                 self.update_cursor_kind(scene, damage);
                 immediate_repaint = true;
                 // Coalesce: keep only the latest timestamp; focus lookup and
@@ -398,6 +427,25 @@ impl InputState {
                 );
                 if btn.button == 0 {
                     self.primary_button_down = true;
+                }
+                if self.launcher.visible {
+                    if btn.button == 0 {
+                        let _ = self.launcher.press_at(
+                            self.output_w as u32,
+                            self.output_h as u32,
+                            self.pointer_x,
+                            self.pointer_y,
+                        );
+                    }
+                    damage.mark_full(self.output_w as u32, self.output_h as u32);
+                    mark_cursor_damage(
+                        damage,
+                        self.visible_x,
+                        self.visible_y,
+                        self.pointer_x,
+                        self.pointer_y,
+                    );
+                    return true;
                 }
                 // Flush any pending coalesced motion so clients see the latest
                 // position before the button event (preserves ordering).
@@ -519,6 +567,30 @@ impl InputState {
                 if btn.button == 0 {
                     self.primary_button_down = false;
                 }
+                if self.launcher.visible {
+                    if btn.button == 0 {
+                        if let Some(path) = self.launcher.release_at(
+                            self.output_w as u32,
+                            self.output_h as u32,
+                            self.pointer_x,
+                            self.pointer_y,
+                        ) {
+                            self.launcher.close();
+                            launch_application_path(&path);
+                        } else {
+                            self.launcher.close();
+                        }
+                    }
+                    damage.mark_full(self.output_w as u32, self.output_h as u32);
+                    mark_cursor_damage(
+                        damage,
+                        self.visible_x,
+                        self.visible_y,
+                        self.pointer_x,
+                        self.pointer_y,
+                    );
+                    return true;
+                }
                 // Flush any pending coalesced motion before the button-up event.
                 // flush_pointer_motion calls update_pointer_focus internally
                 // when motion was pending; only call it directly when there
@@ -572,6 +644,9 @@ impl InputState {
                 let mut p = [0u8; abi::hid::WaylandPointerAxis::SIZE];
                 p.copy_from_slice(&payload[..abi::hid::WaylandPointerAxis::SIZE]);
                 let axis = abi::hid::WaylandPointerAxis::from_bytes(&p);
+                if self.launcher.visible {
+                    return true;
+                }
                 if let Some(surface_id) = scene.pointer_focus {
                     if scene.surface_client(surface_id).is_some() {
                         let dx = if axis.axis == 1 { axis.value as i16 } else { 0 };
@@ -612,15 +687,9 @@ impl InputState {
                 }
                 let wm_action =
                     blossom::input::handle_hotkey(key.key(), key.mods(), key.is_repeat());
-                if matches!(
-                    wm_action,
-                    blossom::input::WmAction::ToggleRunBox
-                        | blossom::input::WmAction::ToggleLauncher
-                ) && self.forward_shell_shortcut(scene, wayland_evt_write, key, timestamp_ns)
-                {
-                    return true;
-                }
                 if matches!(wm_action, blossom::input::WmAction::ToggleRunBox) {
+                    self.launcher.close();
+                    self.launcher_keyboard_modal = false;
                     let visible = self.runbox.toggle();
                     self.runbox_keyboard_modal = true;
                     damage.mark_full(self.output_w as u32, self.output_h as u32);
@@ -628,6 +697,28 @@ impl InputState {
                         stem::info!("Run dialog. Input field focused");
                     } else {
                         stem::info!("Run dialog closed");
+                    }
+                    return true;
+                }
+                if matches!(wm_action, blossom::input::WmAction::ToggleLauncher) {
+                    self.runbox.close();
+                    self.runbox_keyboard_modal = false;
+                    let visible = self.launcher.toggle(discover_applications());
+                    self.launcher_keyboard_modal = true;
+                    damage.mark_full(self.output_w as u32, self.output_h as u32);
+                    if visible {
+                        stem::info!("Application launcher opened");
+                    } else {
+                        stem::info!("Application launcher closed");
+                    }
+                    return true;
+                }
+                if self.launcher.visible {
+                    if key.key() == Key::Escape {
+                        self.launcher.close();
+                        self.launcher_keyboard_modal = true;
+                        damage.mark_full(self.output_w as u32, self.output_h as u32);
+                        stem::info!("Application launcher closed");
                     }
                     return true;
                 }
@@ -698,10 +789,7 @@ impl InputState {
                         return true;
                     }
                     blossom::input::WmAction::ToggleRunBox => {}
-                    blossom::input::WmAction::ToggleLauncher => {
-                        stem::warn!("No shell surface registered for launcher shortcut");
-                        return true;
-                    }
+                    blossom::input::WmAction::ToggleLauncher => {}
                     blossom::input::WmAction::None => {}
                 }
                 if let Some(surface_id) = scene.keyboard_focus {
@@ -735,6 +823,12 @@ impl InputState {
                 let key = KeyEventPayload::from_bytes(&p);
                 self.keyboard_modifiers = key.mods;
                 if is_pointer_overlay_toggle(key) {
+                    return false;
+                }
+                if self.launcher.visible || self.launcher_keyboard_modal {
+                    if key.mods == 0 {
+                        self.launcher_keyboard_modal = self.launcher.visible;
+                    }
                     return false;
                 }
                 if self.runbox.visible || self.runbox_keyboard_modal {
@@ -771,43 +865,6 @@ impl InputState {
             _ => {}
         }
         immediate_repaint
-    }
-
-    fn forward_shell_shortcut(
-        &self,
-        scene: &Scene,
-        wayland_evt_write: Option<u32>,
-        key: KeyEventPayload,
-        timestamp_ns: u64,
-    ) -> bool {
-        let Some(surface_id) = scene.global_shortcut_surface() else {
-            return false;
-        };
-        let Some(client_id) = scene.surface_client(surface_id) else {
-            return false;
-        };
-        let ev = KeyboardKeyEvent {
-            header: msg_header(EVT_KEYBOARD_KEY),
-            surface_id,
-            key: key.key,
-            pressed: pressed_flag(true),
-            modifiers: key.mods,
-            repeat: if key.is_repeat() { 1 } else { 0 },
-            _pad: [0; 3],
-            timestamp_ns,
-        };
-        send_client_event(scene, client_id, KIND_KEYBOARD_KEY, &to_vec(&ev));
-        send_wayland_keyboard_key(
-            wayland_evt_write,
-            surface_id,
-            key.key,
-            true,
-            key.mods,
-            key.is_repeat(),
-            timestamp_ns,
-        );
-        stem::debug!("Forwarded shell shortcut to surface {}", surface_id);
-        true
     }
 
     fn update_pointer_focus(&mut self, scene: &mut Scene, wayland_evt_write: Option<u32>) {
@@ -1604,6 +1661,21 @@ impl blossom::runbox::Launcher for BloomLauncher {
     }
 }
 
+fn launch_application_path(path: &str) {
+    let launcher = BloomLauncher;
+    match blossom::runbox::Launcher::run(&launcher, path) {
+        blossom::runbox::LaunchResult::Started { pid } => {
+            stem::info!("Launched {} as pid {}", path, pid);
+        }
+        blossom::runbox::LaunchResult::NotFound => {
+            stem::warn!("Could not launch '{}': command not found", path);
+        }
+        blossom::runbox::LaunchResult::Failed => {
+            stem::warn!("Could not launch '{}'", path);
+        }
+    }
+}
+
 fn resolve_run_command(program: &str) -> Option<String> {
     if program.contains('/') {
         return file_exists(program).then(|| program.to_string());
@@ -1615,6 +1687,59 @@ fn resolve_run_command(program: &str) -> Option<String> {
         }
     }
     None
+}
+
+fn discover_applications() -> Vec<petals::ApplicationEntry> {
+    let Ok(fd) = vfs_open("/applications", abi::syscall::vfs_flags::O_RDONLY) else {
+        return Vec::new();
+    };
+
+    let mut names = Vec::new();
+    let mut buf = [0u8; 4096];
+    loop {
+        match vfs_readdir(fd, &mut buf) {
+            Ok(0) => break,
+            Ok(n) => collect_application_names(&buf[..n], &mut names),
+            Err(_) => break,
+        }
+    }
+    let _ = vfs_close(fd);
+
+    names.sort();
+    names.dedup();
+    let mut entries = Vec::new();
+    for name in names {
+        let path = alloc::format!("/applications/{}", name);
+        if !file_exists(&path) {
+            continue;
+        }
+        entries.push(petals::ApplicationEntry {
+            name: petals::display_name_from_path(&path),
+            path,
+            glyph: String::from(petals::glyph_for_application(&name)),
+        });
+    }
+    entries
+}
+
+fn collect_application_names(buf: &[u8], names: &mut Vec<String>) {
+    let mut offset = 0;
+    while offset < buf.len() {
+        let mut end = offset;
+        while end < buf.len() && buf[end] != 0 {
+            end += 1;
+        }
+        if let Ok(name) = core::str::from_utf8(&buf[offset..end]) {
+            if is_application_entry_name(name) {
+                names.push(String::from(name));
+            }
+        }
+        offset = end.saturating_add(1);
+    }
+}
+
+fn is_application_entry_name(name: &str) -> bool {
+    !name.is_empty() && name != "." && name != ".." && !name.starts_with('.')
 }
 
 fn file_exists(path: &str) -> bool {

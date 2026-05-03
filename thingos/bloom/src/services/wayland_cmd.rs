@@ -89,22 +89,6 @@ impl WaylandCommandService {
         }
         let reply_port = u32::from_ne_bytes(data[4..8].try_into().unwrap_or([0; 4]));
         let bloom_id = world.scene.create_surface(self.wayland_client_id).unwrap_or(0);
-        if bloom_id != 0 {
-            let _ = world.scene.set_surface_chrome(
-                self.wayland_client_id,
-                bloom_id,
-                SurfaceChrome {
-                    titlebar_height: blossom::DEFAULT_TITLEBAR_HEIGHT,
-                    frame_thickness: blossom::DEFAULT_FRAME_THICKNESS,
-                },
-            );
-            stem::info!(
-                "bloom: registered titlebar drag zone surface={} height={} frame={}",
-                bloom_id,
-                blossom::DEFAULT_TITLEBAR_HEIGHT,
-                blossom::DEFAULT_FRAME_THICKNESS
-            );
-        }
         debug!("wayland-cmd: created surface bloom_id={}", bloom_id);
         let _ = port_send_all(reply_port, &bloom_id.to_ne_bytes());
         if bloom_id != 0 {

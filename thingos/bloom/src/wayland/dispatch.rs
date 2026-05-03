@@ -2342,9 +2342,7 @@ fn flush_synchronized_subsurfaces(
 
 /// Execute blossom commands by sending Wayland events back to the client.
 ///
-/// Commands that produce outgoing IPC to the main thread are written to
-/// `cmd_write` directly.
-pub fn send_blossom_commands(client: &mut WaylandClient, cmds: &[BlossomCommand], cmd_write: u32) {
+pub fn send_blossom_commands(client: &mut WaylandClient, cmds: &[BlossomCommand], _cmd_write: u32) {
     use crate::wayland::wire::encode_array;
 
     for cmd in cmds {
@@ -2403,16 +2401,6 @@ pub fn send_blossom_commands(client: &mut WaylandClient, cmds: &[BlossomCommand]
                 blossom_debug!("wayland-server: surface {} ready for mapping", surface);
                 // No outgoing Wayland event needed; the compositor will map
                 // the surface based on the commit IPC command.
-            }
-            BlossomCommand::SetToplevelChrome { surface, titlebar_height, frame_thickness } => {
-                blossom_debug!(
-                    "wayland-server: surface {} titlebar height {} frame {}",
-                    surface,
-                    titlebar_height,
-                    frame_thickness
-                );
-                let msg = ipc::encode_set_chrome(*surface, *titlebar_height, *frame_thickness);
-                let _ = stem::syscall::port_send_all(cmd_write, &msg);
             }
             BlossomCommand::CloseToplevel { toplevel } => {
                 // xdg_toplevel.close()

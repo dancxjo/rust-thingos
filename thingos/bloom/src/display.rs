@@ -352,6 +352,7 @@ impl DisplayBackend {
         chrome_overlays: &[WindowOverlayPlane],
         pointer_overlay: Option<OverlayPlane>,
         runbox_overlay: Option<OverlayPlane>,
+        launcher_overlay: Option<OverlayPlane>,
         cursor: Option<CursorPlane>,
         flags: CommitFlags,
         corner_radius: u8,
@@ -368,6 +369,7 @@ impl DisplayBackend {
                 chrome_overlays,
                 pointer_overlay,
                 runbox_overlay,
+                launcher_overlay,
                 cursor,
                 corner_radius,
             );
@@ -470,6 +472,9 @@ impl DisplayBackend {
         // 4. Diagnostic/modal overlays. These are intentionally above the
         // wallpaper and client surfaces so coordinates and modal UI stay visible.
         if let Some(overlay) = runbox_overlay {
+            push_overlay_commit(&mut planes, &mut plane_count, overlay, i32::MAX - 2);
+        }
+        if let Some(overlay) = launcher_overlay {
             push_overlay_commit(&mut planes, &mut plane_count, overlay, i32::MAX - 2);
         }
 
@@ -637,6 +642,7 @@ impl DisplayBackend {
         chrome_overlays: &[WindowOverlayPlane],
         pointer_overlay: Option<OverlayPlane>,
         runbox_overlay: Option<OverlayPlane>,
+        launcher_overlay: Option<OverlayPlane>,
         cursor: Option<CursorPlane>,
         corner_radius: u8,
     ) -> PresentResult {
@@ -749,6 +755,18 @@ impl DisplayBackend {
 
         // 3. Modal and diagnostic overlays (above all windows).
         if let Some(overlay) = runbox_overlay {
+            if !batch.is_full() {
+                let dst = Rect {
+                    x: overlay.x.max(0) as u32,
+                    y: overlay.y.max(0) as u32,
+                    w: overlay.width,
+                    h: overlay.height,
+                };
+                let src = Rect { x: 0, y: 0, w: overlay.width, h: overlay.height };
+                batch.alpha_blit(BufferId(overlay.buffer_id), src, BufferId(0), dst, 255);
+            }
+        }
+        if let Some(overlay) = launcher_overlay {
             if !batch.is_full() {
                 let dst = Rect {
                     x: overlay.x.max(0) as u32,

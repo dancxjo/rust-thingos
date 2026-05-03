@@ -19,9 +19,8 @@
 //! # Initial configure sequence
 //!
 //! When `get_toplevel` is called, `blossom` immediately emits:
-//! 1. [`BlossomCommand::SetToplevelChrome`] — declares v1 title-bar hit geometry
-//! 2. [`BlossomCommand::SendXdgToplevelConfigure`] — `(width=0, height=0, states=[])`
-//! 3. [`BlossomCommand::SendXdgSurfaceConfigure`] — carries the pending serial
+//! 1. [`BlossomCommand::SendXdgToplevelConfigure`] — `(width=0, height=0, states=[])`
+//! 2. [`BlossomCommand::SendXdgSurfaceConfigure`] — carries the pending serial
 //!
 //! After the client calls `ack_configure(serial)` and then commits a buffer,
 //! blossom emits [`BlossomCommand::MarkSurfaceReadyForMapping`].
@@ -66,11 +65,6 @@ pub type PopupId = ObjectId;
 pub type ClientId = u32;
 /// A monotonically increasing serial used to pair configure/ack_configure.
 pub type ConfigureSerial = u32;
-
-/// Initial compositor-known title bar height for v1 toplevel chrome.
-pub const DEFAULT_TITLEBAR_HEIGHT: u32 = 28;
-/// Initial compositor-known frame thickness for v1 toplevel chrome.
-pub const DEFAULT_FRAME_THICKNESS: u32 = 6;
 
 // ── xdg_positioner constants ─────────────────────────────────────────────────
 
@@ -447,9 +441,6 @@ pub enum BlossomCommand {
     /// The surface has completed the configure/ack handshake and committed a
     /// buffer; it is now eligible to be made visible (mapped).
     MarkSurfaceReadyForMapping { surface: SurfaceId },
-    /// The compositor should treat the top strip of this toplevel surface as
-    /// shell chrome that can receive compositor-owned pointer gestures.
-    SetToplevelChrome { surface: SurfaceId, titlebar_height: u32, frame_thickness: u32 },
     /// The compositor should send `xdg_toplevel.close` and initiate teardown.
     CloseToplevel { toplevel: ToplevelId },
     /// Send `xdg_popup.popup_done` to the client, dismissing the popup.
@@ -694,7 +685,6 @@ impl Blossom {
         }
 
         surface.role = Some(XdgRole::Toplevel(toplevel_id));
-        let wl_surface = surface.wl_surface;
 
         self.toplevels.insert(
             toplevel_id,
@@ -715,11 +705,6 @@ impl Blossom {
         surf.pending_configures.push_back(serial);
 
         Ok(vec![
-            BlossomCommand::SetToplevelChrome {
-                surface: wl_surface,
-                titlebar_height: DEFAULT_TITLEBAR_HEIGHT,
-                frame_thickness: DEFAULT_FRAME_THICKNESS,
-            },
             BlossomCommand::SendXdgToplevelConfigure {
                 client,
                 xdg_toplevel: toplevel_id,
@@ -1294,15 +1279,7 @@ mod tests {
         make_xdg_surface(&mut b);
         let cmds = make_toplevel(&mut b);
 
-        assert_eq!(cmds.len(), 3, "get_toplevel must emit chrome + configure commands");
-
-        let has_chrome = cmds.iter().any(|c| {
-            matches!(c, BlossomCommand::SetToplevelChrome { surface, titlebar_height, frame_thickness }
-                if *surface == SURFACE_ID
-                    && *titlebar_height == DEFAULT_TITLEBAR_HEIGHT
-                    && *frame_thickness == DEFAULT_FRAME_THICKNESS)
-        });
-        assert!(has_chrome, "must emit toplevel chrome metadata");
+        assert_eq!(cmds.len(), 2, "get_toplevel must emit configure commands");
 
         let has_tl_configure = cmds.iter().any(|c| {
             matches!(c, BlossomCommand::SendXdgToplevelConfigure { xdg_toplevel, width, height, states, .. }

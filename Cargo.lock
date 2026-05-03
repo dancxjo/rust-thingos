@@ -713,6 +713,7 @@ dependencies = [
  "abi",
  "blossom",
  "libdl",
+ "petals",
  "pistil-types",
  "spin",
  "stem",

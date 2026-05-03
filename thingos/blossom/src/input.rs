@@ -22,7 +22,7 @@ pub fn handle_hotkey(key: Key, mods: Mods, is_repeat: bool) -> WmAction {
         return WmAction::ToggleRunBox;
     }
 
-    if key == Key::Space && mods.has_meta() {
+    if (key == Key::L || key == Key::Space) && mods.has_meta() {
         return WmAction::ToggleLauncher;
     }
 
@@ -59,5 +59,10 @@ mod tests {
             handle_hotkey(Key::Space, Mods(Mods::META), false),
             WmAction::ToggleLauncher
         ));
+    }
+
+    #[test]
+    fn meta_l_toggles_launcher() {
+        assert!(matches!(handle_hotkey(Key::L, Mods(Mods::META), false), WmAction::ToggleLauncher));
     }
 }

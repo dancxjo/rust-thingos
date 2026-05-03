@@ -31,3 +31,11 @@ Feature: Keyboard Shortcut Relocation
     And I wait for the serial output to contain "bloom: registered bristle pointer sink"
     And I press super+r
     Then the serial output should contain "Run dialog. Input field focused" within 10s
+
+  Scenario: Super+L opens the application launcher
+    Given the machine is booted
+    When I wait for the shell prompt
+    And I wait for the serial output to contain "bloom: registered bristle pointer sink"
+    And I press super+l
+    Then the serial output should contain "Application launcher opened" within 10s
+    And the serial output should contain "Application launcher overlay ready" within 10s
