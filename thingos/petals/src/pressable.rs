@@ -83,7 +83,8 @@ pub struct PressConfig {
     pub repeat_rate_ms: u64,
     /// Pixels of pointer travel that cancel the press (when `cancel_on_leave` is `true`).
     pub move_tolerance_px: f32,
-    /// Cancel the press when the pointer moves beyond [`move_tolerance_px`].
+    /// Cancel the press when the pointer moves beyond [`move_tolerance_px`] from
+    /// the origin position at which the press began.
     pub cancel_on_leave: bool,
 }
 
@@ -233,7 +234,11 @@ impl Pressable {
 
     fn begin_press(&mut self, source: ActiveSource, now_ns: u64) -> Vec<PressEvent> {
         self.source = Some(source);
-        self.state = PressState { is_pressed: true, press_started_at: Some(now_ns), is_long_press: false };
+        self.state = PressState {
+            is_pressed: true,
+            press_started_at: Some(now_ns),
+            is_long_press: false,
+        };
         self.long_press_fired = false;
         self.last_repeat_ns = None;
         alloc::vec![PressEvent::Press]
