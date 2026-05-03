@@ -75,6 +75,6 @@ cat sample.raw | chime
 ## Relevant Source Files
 
 - `drivers/virtio_sound/src/main.rs`
-- `drivers/chime/src/main.rs`
+- `thingos/utils/chime/src/main.rs`
 - `abi/src/driver_interface.rs`
 - `cambium/src/catalog.rs`

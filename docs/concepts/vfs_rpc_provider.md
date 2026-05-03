@@ -6,7 +6,7 @@ Thing-OS, from registration through normal operation to clean shutdown.
 Implementation references:
 - `kernel/src/vfs/provider.rs` — kernel-side `ProviderFs`
 - `abi/src/vfs_rpc.rs` — wire format and op codes
-- `userspace/iso9660d/` — reference provider implementation
+- `thingos/drivers/iso9660d/` — reference provider implementation
 - `libs/ipc_helpers/` — provider server-loop helper library
 
 ---
@@ -354,7 +354,7 @@ the full per-service migration roadmap see:
 - `abi/src/vfs_rpc.rs` — wire types
 - `kernel/src/vfs/provider.rs` — kernel `ProviderFs`
 - `kernel/src/syscall/handlers/vfs.rs` — `SYS_FS_MOUNT` handler
-- `userspace/iso9660d/src/main.rs` — reference implementation
+- `thingos/drivers/iso9660d/src/main.rs` — reference implementation
 - `libs/ipc_helpers/src/provider.rs` — provider server-loop helper
 - `docs/concepts/supervisor_protocol.md` — registration handshake
 - `docs/concepts/ipc.md` — IPC overview

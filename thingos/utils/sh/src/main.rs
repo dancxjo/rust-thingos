@@ -1136,7 +1136,7 @@ fn spawn_job(
     }
 
     for (idx, cmd) in cmds.iter().enumerate() {
-        stem::debug!("sh: spawning job cmd='{}'", cmd.program);
+        stem::trace!("Spawning job cmd='{}'", cmd.program);
         #[cfg(feature = "spawn-timing")]
         let t_path_probe_start = stem::syscall::monotonic_ns();
         let path = resolve_executable_path(cmd.program, &path_prefixes)?;
@@ -1180,7 +1180,7 @@ fn spawn_job(
             if background { stdio_mode::handle(bg_out.unwrap()) } else { stdio_mode::INHERIT };
 
         let argv_display: Vec<_> = argv.iter().map(|arg| String::from_utf8_lossy(arg)).collect();
-        stem::debug!("sh: spawning '{}' with argv={:?}", path, argv_display);
+        stem::trace!("Spawning '{}' with argv={:?}", path, argv_display);
         #[cfg(feature = "spawn-timing")]
         let t_spawn_call = stem::syscall::monotonic_ns();
         match syscall::spawn_process_ex(
@@ -1197,8 +1197,8 @@ fn spawn_job(
                 #[cfg(feature = "spawn-timing")]
                 let t_spawn_return = stem::syscall::monotonic_ns();
                 let pid = resp.child_pid;
-                stem::debug!(
-                    "sh: spawned '{}' pid={} idx={} background={} pending_pgid={}",
+                stem::trace!(
+                    "Spawned '{}' pid={} idx={} background={} pending_pgid={}",
                     path,
                     pid,
                     idx,
@@ -1210,10 +1210,10 @@ fn spawn_job(
                 if pgid == 0 {
                     pgid = pid;
                     let _ = signal::setpgid(pid as i32, pid as i32);
-                    stem::debug!("sh: setpgid leader pid={} -> pgid={}", pid, pid);
+                    stem::trace!("Setpgid leader pid={} -> pgid={}", pid, pid);
                 } else {
                     let _ = signal::setpgid(pid as i32, pgid as i32);
-                    stem::debug!("sh: setpgid member pid={} -> pgid={}", pid, pgid);
+                    stem::trace!("Setpgid member pid={} -> pgid={}", pid, pgid);
                 }
                 #[cfg(feature = "spawn-timing")]
                 let t_after_setpgid = stem::syscall::monotonic_ns();
@@ -1270,7 +1270,7 @@ fn spawn_job(
 }
 
 fn cleanup_fds(pipes: &[[u32; 2]], transient_fds: &[u32], bg_in: Option<u32>, bg_out: Option<u32>) {
-    stem::debug!("sh: cleaning up {} pipes", pipes.len());
+    stem::trace!("Cleaning up {} pipes", pipes.len());
     for (idx, pair) in pipes.iter().enumerate() {
         stem::trace!("sh: closing pipe {} ends: read={} write={}", idx, pair[0], pair[1]);
         let _ = syscall::vfs_close(pair[0]);

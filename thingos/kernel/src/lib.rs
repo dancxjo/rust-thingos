@@ -1054,6 +1054,19 @@ pub fn start<R: BootRuntime>(runtime: &'static R) -> ! {
     let kernel_cmdline = runtime.get_kernel_cmdline();
     let use_kernel_terminal = parse_cmdline_bool_key(kernel_cmdline, "kernel.terminal");
 
+    if let Some(level) = parse_cmdline_loglevel(kernel_cmdline) {
+        crate::logging::set_log_level(level);
+        crate::logging::set_serial_log_level(level);
+    }
+    if let Some(level) = parse_cmdline_serial_loglevel(kernel_cmdline) {
+        crate::logging::set_serial_log_level(level);
+    }
+
+    boot_trace(runtime, b"[kernel:start] early simd init begin\r\n");
+    kinfo!("Initializing SIMD...");
+    runtime.simd_init_cpu();
+    boot_trace(runtime, b"[kernel:start] early simd init ok\r\n");
+
     let early_fb = runtime.framebuffer();
     if let Some(fb) = early_fb {
         if use_kernel_terminal {
@@ -1066,14 +1079,6 @@ pub fn start<R: BootRuntime>(runtime: &'static R) -> ! {
                 "Framebuffer initialized",
             );
         }
-    }
-
-    if let Some(level) = parse_cmdline_loglevel(kernel_cmdline) {
-        crate::logging::set_log_level(level);
-        crate::logging::set_serial_log_level(level);
-    }
-    if let Some(level) = parse_cmdline_serial_loglevel(kernel_cmdline) {
-        crate::logging::set_serial_log_level(level);
     }
 
     unsafe { crate::logging::init(runtime) };
@@ -1182,11 +1187,7 @@ pub fn start<R: BootRuntime>(runtime: &'static R) -> ! {
     boot_trace(runtime, b"[kernel:start] framebuffer/devfs ok\r\n");
     crate::boot_progress::push(crate::boot_progress::BootPhase::Display, "Display registry ready");
 
-    boot_trace(runtime, b"[kernel:start] kinfo(simd) begin\r\n");
-    kinfo!("Initializing SIMD...");
-    boot_trace(runtime, b"[kernel:start] kinfo(simd) ok\r\n");
-    runtime.simd_init_cpu();
-    boot_trace(runtime, b"[kernel:start] simd init ok\r\n");
+    boot_trace(runtime, b"[kernel:start] simd milestone\r\n");
     crate::boot_progress::push(crate::boot_progress::BootPhase::Simd, "SIMD ready");
 
     boot_trace(runtime, b"[kernel:start] kinfo(entropy) begin\r\n");

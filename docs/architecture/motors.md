@@ -126,7 +126,6 @@ make it obvious which path is canonical and which is scaffolding.
 | Binary | Interface | Notes |
 |---|---|---|
 | `drivers/hwrng` | `DriverV1` | Reference driver Seed migration |
-| `userspace/hello_stdio` | `ProgramV1` | Reference program Seed migration (plain `main` entry) |
 
 ## Plain `main` programs
 

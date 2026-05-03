@@ -118,10 +118,7 @@ cambium/src/main.rs
       Wakes on: typed inbox messages (THINGOS_JOB_EXIT), /sys/devices VFS
       watch events, and a 30 s reconcile timeout.
 
-drivers/beeper/src/main.rs:233,385
-  [R] vfs_poll — one-shot stdin probe + blocking audio-ring wait
-
-drivers/chime/src/main.rs:303,332,502
+utils/chime/src/main.rs:303,332,502
   [R] vfs_poll — stdin probe + blocking audio-ring wait
 
 drivers/display_virtio_gpu/src/main.rs:225
@@ -142,20 +139,8 @@ sprout/src/supervisor.rs
 stem/src/pal/net.rs:122
   [R] vfs_poll — network PAL socket readiness
 
-utils/input_echo/src/main.rs:93
-  [R] vfs_poll([port_fd], MAX) — input echo blocking loop
-
 utils/netd/src/main.rs:571
   [R] vfs_poll — 5 ms tick for network daemon
-
-utils/placed/src/main.rs:100
-  [R] vfs_poll — watch loop for placement daemon
-
-utils/poll_mux/src/main.rs:43,55,67,78,102
-  [R] vfs_poll — multiplexing self-test (pipe + port + inbox + VFS file)
-
-utils/terminal/src/main.rs:765
-  [R] vfs_poll — terminal input readiness check
 
 
 ━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
@@ -220,14 +205,6 @@ bloom/src/protocol.rs:142,168-169 / bloom/src/input.rs:234,239
   [S] ConnectInboxRequest — client can register input_pid to receive
       typed pointer/keyboard events via inbox instead of port
 
-utils/ipc_inbox_demo/src/main.rs
-  [S] Reference demo: self-send + InboxReceiver::try_recv round-trip
-      + broadcast_typed to process group
-
-utils/poll_mux/src/main.rs:32,84-95
-  [S] inbox_fd in mixed poll — self-test that inbox FD participates in poll
-
-
 ━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
 4. VFS PROVIDER RPC LOOP  [V]
    ProviderLoop / vfs_rpc / SYS_FS_MOUNT
@@ -263,10 +240,6 @@ drivers/display_bootfb/src/vfs_provider.rs
 
 drivers/virtio_netd/src/vfs_provider.rs
   [V] NetProvider — ProviderLoop serving /dev/net/virtio0/{rx,tx}
-
-utils/ipc_provider_demo/src/main.rs
-  [V] Reference demo: port_create → vfs_mount → ServiceProviderLoop dispatch
-  [V]   inbox control messages (shutdown, lifecycle) handled concurrently with RPC
 
 drivers/display_bootfb/src/driver.rs, drivers/display_virtio_gpu/src/main.rs
   [V] VFS RPC dispatch inside GPU / bootfb main loops (inline, not ProviderLoop)
@@ -359,10 +332,6 @@ stem/src/kinds/mod.rs
   [S] DriverReadyV1 — #[repr(C)] wire payload: version, flags, pid,
       task_id, status, reserved
 
-utils/ipc_service_demo/src/main.rs
-  [D] Reference demo: RpcServer port-based request/reply service
-
-
 ━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
 6. BULK DATA PATH  [B]
    memfd / shared_memory / DMA ring buffers
@@ -379,10 +348,7 @@ cambium/src/spawn.rs:103-160
   [B] memfd_create("driver.boot") / memfd_create("driver.ctx")
       — bootstrap context (DriverEntryCtx) passed to driver via memfd
 
-drivers/beeper/src/main.rs:104
-  [B] memfd_create("audio-ring") — audio PCM ring buffer
-
-drivers/chime/src/main.rs:109
+utils/chime/src/main.rs:109
   [B] memfd_create("audio-ring") — audio PCM ring buffer
 
 drivers/display_bootfb/src/main.rs:110,162
@@ -394,10 +360,6 @@ drivers/display_virtio_gpu/src/main.rs:366,1364-1386
 
 drivers/ahci_disk/src/main.rs:158,306,586-596
   [B] static DMA_BUFFER; SYS_DEVICE_DMA_PHYS — AHCI command/data DMA
-
-utils/ipc_memfd_demo/src/main.rs
-  [B] Reference demo: memfd create → vm_map → share handle via port
-
 
 ━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
 7. COMPATIBILITY SHIMS / LEGACY PORTS  [C]
@@ -449,10 +411,6 @@ kernel/src/sched/spawn.rs:958,1024,1084,1267-1293,1597-1623
 kernel/src/syscall/handlers/vfs.rs:710
   [K] SYS_FS_PIPE → create_fd_pair_with_id; returns (read_fd, write_fd)
 
-utils/ipc_pipe_demo/src/main.rs
-  [R] Reference demo: pipe create → write → read round-trip
-
-
 ━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
 9. UNIX SOCKETS  [C/V]
    Stream sockets for POSIX compatibility layer
@@ -488,8 +446,8 @@ cambium/src/spawn.rs:103,153
   [S] ManagedDriver::spawn_legacy / spawn_catalog — exec via memfd context
 
 sprout/src/pipelines.rs
-  [S] Pipeline spawn helpers: display, terminal, nectar, fetchd, bloom,
-      serial shell, mount, netd, iso9660d
+  [S] Pipeline spawn helpers: display, bloom, serial shell, mount, netd,
+      iso9660d
 
 sprout/src/supervisor.rs:339,580,610,627
   [S] Supervisor::run — spawns cambium, netd, iso9660d
@@ -498,19 +456,6 @@ sprout/src/supervisor.rs:339,580,610,627
 ━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
 11. ACCIDENTAL / AD-HOC CONCURRENCY  [A]
 ━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
-
-utils/smallsh/src/process_pool/mod.rs
-  [A] ProcessPool — ad-hoc child-process reaping without WaitSet;
-      uses manual SIGCHLD / waitpid (POSIX compat layer)
-
-utils/tests/test_threads/src/main.rs
-  [A] Raw SYS_SPAWN_THREAD test harness — intentional for testing only
-
-utils/tests/test_thread_std/src/main.rs
-  [A] std::thread::spawn test — intentional for std compat testing
-
-utils/tests/test_futex/src/main.rs
-  [A] Futex-based synchronisation test — low-level compat test
 
 drivers/driver_wasm_host/src/main.rs
   [A] WASM driver host: inline blocking I/O, no structured event loop

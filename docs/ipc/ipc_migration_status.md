@@ -240,7 +240,7 @@ a common readiness model.  They are not collapsed into one — see
 | B — Shared core | Migrate Inbox and Port message path onto shared core | ⬜ Pending (Phase B/C full migration) |
 | C — Readiness | Add inbox VFS wrapper node (`InboxNode`) | ✅ Done (`kernel/src/vfs/inbox_node.rs`) |
 | C — Readiness | Expose inbox FD acquisition syscall / path-open | ✅ Done — path-open model via `/proc/self/inbox` and `/proc/<pid>/inbox` (`kernel/src/vfs/procfs.rs`) |
-| C — Readiness | Tests for mixed poll sets (files + channels + inbox FDs) | ✅ Done — `utils/poll_mux` now exercises pipe + channel FD + inbox FD + VFS file in one poll set |
+| C — Readiness | Tests for mixed poll sets (files + channels + inbox FDs) | ✅ Done — covered by kernel and BDD poll/readiness tests |
 | B — Shared core | Extract shared internal queue trait | ⬜ Pending |
 | B — Shared core | Migrate backpressure/wakeup/metrics to core | ⬜ Pending |
 | D — Deprecation | Document migration off `SYS_CHANNEL_WAIT` | ✅ Done (this document + `channel_semantics.md`) |

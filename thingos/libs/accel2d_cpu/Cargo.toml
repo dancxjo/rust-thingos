@@ -3,6 +3,9 @@ name = "accel2d_cpu"
 version = "0.1.0"
 edition = "2021"
 
+[lints.rust]
+unexpected_cfgs = { level = "warn", check-cfg = ['cfg(target_os, values("thingos"))'] }
+
 [features]
 # Enable SIMD fast paths (SSE2/AVX2 on x86/x86_64).  Disable for bringup/debug.
 default = ["simd"]

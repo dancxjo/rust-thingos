@@ -678,8 +678,8 @@ fn maybe_log_display_watchdog(
     // Classify the current RPC state for freeze diagnosis:
     //   open_rpc_ms > 0  → provider has entered but not exited (stuck inside provider)
     //   open_rpc_ms == 0 → all RPCs have completed (no stall in provider path)
-    debug!(
-        "display watchdog: rpc_enter={}({}) rpc_exit={}({}) status={} corr={} req_id={} resp_port={} provider_tid={} open_rpc_ms={} last_rpc_ms={} frame={} present_seq={} pool_free={} pool_acquired={} pool_in_flight={} imports={} commits={} failed_imports={} failed_commits={} damage_rects={} damage_area={} vfs_pending_bytes={}.",
+    trace!(
+        "Watchdog rpc_enter={}({}) rpc_exit={}({}) status={} corr={} req_id={} resp_port={} provider_tid={} open_rpc_ms={} last_rpc_ms={} frame={} present_seq={} pool_free={} pool_acquired={} pool_in_flight={} imports={} commits={} failed_imports={} failed_commits={} damage_rects={} damage_area={} vfs_pending_bytes={}",
         driver.rpc_diag.last_entered_seq,
         display_op_name(driver.rpc_diag.last_entered_op),
         driver.rpc_diag.last_exited_seq,
@@ -1231,7 +1231,7 @@ fn dispatch_display_device_call(
     match op {
         DISPLAY_OP_GET_INFO => {
             let _ = refresh_display_mode(driver);
-            stem::debug!("display.phase=device_call_enter op=GET_INFO");
+            stem::trace!("display.phase=device_call_enter op=GET_INFO");
             stem::trace!("DISP: DISPLAY_OP_GET_INFO requested");
             let mut caps = DisplayCaps::ATOMIC
                 | DisplayCaps::DMABUF_IMPORT
@@ -1286,7 +1286,7 @@ fn dispatch_display_device_call(
                     core::mem::size_of::<DisplayInfo>(),
                 )
             };
-            stem::debug!(
+            stem::trace!(
                 "display.phase=device_call_exit op=GET_INFO result=ok width={} height={}",
                 driver.disp_width,
                 driver.disp_height

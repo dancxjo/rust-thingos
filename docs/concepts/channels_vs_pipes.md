@@ -144,7 +144,7 @@ comments and tracked in
 
 | Component | File | What it does wrong | Correct approach |
 |-----------|------|--------------------|-----------------|
-| `chime` | `drivers/chime/src/main.rs` | Sends raw PCM audio chunks over a channel | Pipe (or memfd ring) for the PCM stream; channel for discovery/control |
+| `chime` | `thingos/utils/chime/src/main.rs` | Sends raw PCM audio chunks over a channel | Pipe (or memfd ring) for the PCM stream; channel for discovery/control |
 | `hdaudio` | `drivers/hdaudio/src/main.rs` | Receives raw PCM audio chunks via `channel_recv` | Pipe (or memfd ring) for the PCM stream; channel for discovery/control |
 | `virtio_sound` | `drivers/virtio_sound/src/main.rs` | Same as hdaudio | Same |
 

@@ -180,7 +180,7 @@ Require explicit capability to receive:
 ### Phase 0: Skeleton
 - Bristle receives `RawKeyEdge` from PS/2 keyboard driver
 - Maintains pressed/mod state
-- Routes events to one subscribed app (`input_echo`)
+- Routes events to one subscribed app
 
 ### Phase 1: Mouse + Focus
 - Add PS/2 mouse (pointer move + buttons)

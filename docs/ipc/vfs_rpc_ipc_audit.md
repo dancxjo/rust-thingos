@@ -152,7 +152,6 @@ the overarching IPC migration issue for ordering.
 | `virtio_netd` | Channel + raw header (**migrated**) | Channel + `ProviderLoop` | Done in this branch |
 | `virtio_sound` | Channel + raw header (**migrated**) | Channel + `ProviderLoop` | Done in this branch |
 | `iso9660d` | Channel + `ProviderLoop` | No change needed | Already uses the canonical helper |
-| `ipc_provider_demo` | Channel + `ProviderLoop` | No change needed | Already uses the canonical helper |
 | `userspace/netd` | Channel + raw header | Channel + `ProviderLoop` | FIXME added; full migration in follow-up PR |
 | PCM audio stream (`out0`) | Channel (bulk PCM over VFS Write) | Pipe or memfd ring | See `channels_vs_pipes.md` §6 — anti-pattern |
 | Network RX/TX stream | Channel (bulk frames over VFS Read/Write) | Pipe (rx/tx) | Length-prefixed frames over pipe avoids channel overhead |
@@ -190,9 +189,8 @@ the overarching IPC migration issue for ordering.
 | `drivers/display_bootfb/src/vfs_provider.rs` | Reference: canonical `ProviderLoop` usage |
 | `drivers/virtio_netd/src/vfs_provider.rs` | Migrated: `ProviderLoop` prototype |
 | `drivers/virtio_sound/src/main.rs` | Migrated: `ProviderLoop` with hardware event loop |
-| `userspace/iso9660d/src/main.rs` | Reference: canonical `ProviderLoop` usage |
-| `userspace/netd/src/vfs_provider.rs` | Pending: FIXME comment added |
-| `userspace/ipc_provider_demo/src/main.rs` | Reference: minimal provider skeleton |
+| `thingos/drivers/iso9660d/src/main.rs` | Reference: canonical `ProviderLoop` usage |
+| `thingos/utils/netd/src/vfs_provider.rs` | Pending: FIXME comment added |
 
 ---
 

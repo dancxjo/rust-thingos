@@ -743,9 +743,29 @@ mod simd_x86 {
         if cached != 0 {
             return cached == 2;
         }
+
+        #[cfg(target_os = "thingos")]
+        {
+            // Thing-OS currently saves/restores FXSAVE-sized SIMD state. Keep
+            // target userspace on SSE2 until the kernel owns AVX XSAVE state.
+            AVX2_AVAILABLE.store(1, Ordering::Relaxed);
+            return false;
+        }
+
         // CPUID leaf 7, sub-leaf 0: EBX bit 5 = AVX2.
-        let cpuid = __cpuid_count(7, 0);
-        let available = (cpuid.ebx & (1 << 5)) != 0;
+        let available = {
+            let features = __cpuid_count(1, 0);
+            let osxsave = (features.ecx & (1 << 27)) != 0;
+            let avx = (features.ecx & (1 << 28)) != 0;
+            if !osxsave || !avx {
+                false
+            } else {
+                let xcr0 = unsafe { _xgetbv(0) };
+                let avx_state_enabled = (xcr0 & 0b111) == 0b111;
+                let cpuid = __cpuid_count(7, 0);
+                avx_state_enabled && (cpuid.ebx & (1 << 5)) != 0
+            }
+        };
         AVX2_AVAILABLE.store(if available { 2 } else { 1 }, Ordering::Relaxed);
         available
     }

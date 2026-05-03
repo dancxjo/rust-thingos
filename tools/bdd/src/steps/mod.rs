@@ -14,6 +14,5 @@ mod first_run;
 pub mod helpers;
 mod ps2_stress;
 mod service_loop;
-mod shutdown;
 
 pub use helpers::StepError;

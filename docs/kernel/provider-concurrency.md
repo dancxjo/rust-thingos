@@ -131,7 +131,7 @@ where most time is spent waiting rather than computing.
    kernel would regress performance for providers that *are* parallel.
 
 2. **Provider parallelism work belongs in userspace**: update the relevant
-   provider binary (e.g. `utils/httpsd/`, `utils/iso9660d/`) to adopt one of
+   provider binary (e.g. `thingos/httpsd/`, `thingos/drivers/iso9660d/`) to adopt one of
    the patterns above.
 
 3. **Test with concurrent kernel callers**: a provider that spawns worker

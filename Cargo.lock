@@ -1788,13 +1788,6 @@ dependencies = [
 ]
 
 [[package]]
-name = "cwd_test"
-version = "0.1.0"
-dependencies = [
- "stem",
-]
-
-[[package]]
 name = "cxx"
 version = "1.0.194"
 source = "registry+https://github.com/rust-lang/crates.io-index"
@@ -2523,13 +2516,6 @@ dependencies = [
 ]
 
 [[package]]
-name = "env_roundtrip"
-version = "0.1.0"
-dependencies = [
- "stem",
-]
-
-[[package]]
 name = "equator"
 version = "0.4.2"
 source = "registry+https://github.com/rust-lang/crates.io-index"
@@ -2704,14 +2690,6 @@ dependencies = [
  "serde",
  "serde_json",
  "tidy",
-]
-
-[[package]]
-name = "fetchd"
-version = "0.1.0"
-dependencies = [
- "abi",
- "stem",
 ]
 
 [[package]]
@@ -3398,22 +3376,6 @@ source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "2304e00983f87ffb38b55b444b5e3b60a884b5d30c0fca7d82fe33449bbe55ea"
 
 [[package]]
-name = "hello_std"
-version = "0.1.0"
-dependencies = [
- "abi",
- "stem",
-]
-
-[[package]]
-name = "hello_stdio"
-version = "0.1.0"
-dependencies = [
- "abi",
- "stem",
-]
-
-[[package]]
 name = "hermit-abi"
 version = "0.5.2"
 source = "registry+https://github.com/rust-lang/crates.io-index"
@@ -3842,14 +3804,6 @@ dependencies = [
 ]
 
 [[package]]
-name = "input_echo"
-version = "0.1.0"
-dependencies = [
- "abi",
- "stem",
-]
-
-[[package]]
 name = "installer"
 version = "0.0.0"
 dependencies = [
@@ -3937,49 +3891,6 @@ dependencies = [
 ]
 
 [[package]]
-name = "ipc_inbox_demo"
-version = "0.1.0"
-dependencies = [
- "abi",
- "ipc_helpers",
- "stem",
-]
-
-[[package]]
-name = "ipc_memfd_demo"
-version = "0.1.0"
-dependencies = [
- "abi",
- "stem",
-]
-
-[[package]]
-name = "ipc_pipe_demo"
-version = "0.1.0"
-dependencies = [
- "abi",
- "stem",
-]
-
-[[package]]
-name = "ipc_provider_demo"
-version = "0.1.0"
-dependencies = [
- "abi",
- "ipc_helpers",
- "stem",
-]
-
-[[package]]
-name = "ipc_service_demo"
-version = "0.1.0"
-dependencies = [
- "abi",
- "ipc_helpers",
- "stem",
-]
-
-[[package]]
 name = "is_terminal_polyfill"
 version = "1.70.2"
 source = "registry+https://github.com/rust-lang/crates.io-index"
@@ -4001,16 +3912,6 @@ dependencies = [
  "ipc_helpers",
  "iso9660",
  "spin",
- "stem",
-]
-
-[[package]]
-name = "iso_reader"
-version = "0.1.0"
-dependencies = [
- "abi",
- "iso9660",
- "sha2",
  "stem",
 ]
 
@@ -5736,16 +5637,6 @@ dependencies = [
 ]
 
 [[package]]
-name = "petals_demo"
-version = "0.1.0"
-dependencies = [
- "petals",
- "stem",
- "stile",
- "taffy",
-]
-
-[[package]]
 name = "phf"
 version = "0.11.3"
 source = "registry+https://github.com/rust-lang/crates.io-index"
@@ -5872,14 +5763,6 @@ source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "19f132c84eca552bf34cab8ec81f1c1dcc229b811638f9d283dceabe58c5569e"
 
 [[package]]
-name = "placed"
-version = "0.1.0"
-dependencies = [
- "abi",
- "stem",
-]
-
-[[package]]
 name = "plain"
 version = "0.2.3"
 source = "registry+https://github.com/rust-lang/crates.io-index"
@@ -5896,14 +5779,6 @@ dependencies = [
  "fdeflate",
  "flate2",
  "miniz_oxide",
-]
-
-[[package]]
-name = "poll_mux"
-version = "0.1.0"
-dependencies = [
- "abi",
- "stem",
 ]
 
 [[package]]
@@ -6087,14 +5962,6 @@ source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "8fd00f0bb2e90d81d1044c2b32617f68fcb9fa3bb7640c23e9c748e53fb30934"
 dependencies = [
  "unicode-ident",
-]
-
-[[package]]
-name = "proc_smoke"
-version = "0.1.0"
-dependencies = [
- "abi",
- "stem",
 ]
 
 [[package]]
@@ -8719,13 +8586,6 @@ dependencies = [
 ]
 
 [[package]]
-name = "smallsh"
-version = "0.1.0"
-dependencies = [
- "stem",
-]
-
-[[package]]
 name = "smallvec"
 version = "1.15.1"
 source = "registry+https://github.com/rust-lang/crates.io-index"
@@ -8945,13 +8805,6 @@ name = "static_assertions"
 version = "1.1.0"
 source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "a2eb9349b6444b326872e140eb1cf5e7c522154d69e7a0ffb0fb81c06b37543f"
-
-[[package]]
-name = "stdio_demo"
-version = "0.1.0"
-dependencies = [
- "stem",
-]
 
 [[package]]
 name = "stem"
@@ -9258,19 +9111,6 @@ dependencies = [
 ]
 
 [[package]]
-name = "terminal"
-version = "0.1.0"
-dependencies = [
- "abi",
- "bitflags 2.11.1",
- "fb_common",
- "log",
- "spin",
- "stem",
- "vte",
-]
-
-[[package]]
 name = "terminal_core"
 version = "0.1.0"
 
@@ -9309,87 +9149,6 @@ dependencies = [
  "rand 0.9.4",
  "rand_chacha 0.9.0",
  "rayon",
-]
-
-[[package]]
-name = "test_dlopen"
-version = "0.1.0"
-dependencies = [
- "abi",
- "libdl",
- "stem",
-]
-
-[[package]]
-name = "test_dyn_loader"
-version = "0.1.0"
-dependencies = [
- "abi",
- "stem",
-]
-
-[[package]]
-name = "test_exec"
-version = "0.1.0"
-dependencies = [
- "abi",
- "stem",
-]
-
-[[package]]
-name = "test_exec_env"
-version = "0.1.0"
-dependencies = [
- "abi",
- "stem",
-]
-
-[[package]]
-name = "test_fs"
-version = "0.1.0"
-dependencies = [
- "abi",
- "stem",
-]
-
-[[package]]
-name = "test_futex"
-version = "0.1.0"
-dependencies = [
- "abi",
- "stem",
-]
-
-[[package]]
-name = "test_thread_std"
-version = "0.1.0"
-dependencies = [
- "abi",
- "stem",
-]
-
-[[package]]
-name = "test_threads"
-version = "0.1.0"
-dependencies = [
- "abi",
- "stem",
-]
-
-[[package]]
-name = "test_vm_protect"
-version = "0.1.0"
-dependencies = [
- "abi",
- "stem",
-]
-
-[[package]]
-name = "test_vm_shared"
-version = "0.1.0"
-dependencies = [
- "abi",
- "stem",
 ]
 
 [[package]]
@@ -9540,13 +9299,6 @@ checksum = "cd8aa5b2ab86a2cefa406d889139c162cbb230092f7d1d7cbc1716405d852a3b"
 dependencies = [
  "cc",
  "libc",
-]
-
-[[package]]
-name = "time_test"
-version = "0.1.0"
-dependencies = [
- "stem",
 ]
 
 [[package]]
@@ -10331,23 +10083,6 @@ source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "0b928f33d975fc6ad9f86c8f283853ad26bdd5b10b7f1542aa2fa15e2289105a"
 
 [[package]]
-name = "vfs_hello"
-version = "0.1.0"
-dependencies = [
- "abi",
- "stem",
-]
-
-[[package]]
-name = "vfs_test_provider"
-version = "0.1.0"
-dependencies = [
- "abi",
- "ipc_helpers",
- "stem",
-]
-
-[[package]]
 name = "virtio"
 version = "0.1.0"
 dependencies = [
@@ -10383,27 +10118,6 @@ dependencies = [
  "ipc_helpers",
  "stem",
  "virtio",
-]
-
-[[package]]
-name = "vte"
-version = "0.11.1"
-source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "f5022b5fbf9407086c180e9557be968742d839e68346af7792b8592489732197"
-dependencies = [
- "arrayvec",
- "utf8parse",
- "vte_generate_state_changes",
-]
-
-[[package]]
-name = "vte_generate_state_changes"
-version = "0.1.2"
-source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "2e369bee1b05d510a7b4ed645f5faa90619e05437111783ea5848f28d97d3c2e"
-dependencies = [
- "proc-macro2",
- "quote",
 ]
 
 [[package]]
@@ -10824,13 +10538,6 @@ dependencies = [
  "log",
  "once_cell",
  "pkg-config",
-]
-
-[[package]]
-name = "wayland_dnd_test"
-version = "0.1.0"
-dependencies = [
- "stem",
 ]
 
 [[package]]

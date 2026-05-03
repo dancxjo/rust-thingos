@@ -51,7 +51,7 @@ At service startup, `flytrap` scans existing BOOT_MODULE nodes and publishes the
 
 #### 2. Continuous Watching
 The service watches for:
-- **New BOOT_MODULE nodes**: Created by iso_reader or other services
+- **New BOOT_MODULE nodes**: Created by the boot module indexer or other services
 - **ASSET_REQUEST nodes**: Explicit requests for assets
 - **PROC_TASK nodes**: Application startup events
 

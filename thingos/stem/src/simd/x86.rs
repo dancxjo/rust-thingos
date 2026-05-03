@@ -17,10 +17,27 @@ pub(crate) fn is_avx2_available() -> bool {
         return cached == 2;
     }
 
+    #[cfg(target_os = "thingos")]
+    {
+        // The Thing-OS kernel currently preserves FXSAVE-sized SSE state only.
+        // Do not execute AVX/AVX2 in userspace until XSAVE/XRSTOR state is owned.
+        AVX2_AVAILABLE.store(1, Ordering::Relaxed);
+        return false;
+    }
+
     use core::arch::x86::__cpuid_count;
     let available = unsafe {
-        let cpuid = __cpuid_count(7, 0);
-        (cpuid.ebx & (1 << 5)) != 0
+        let features = __cpuid_count(1, 0);
+        let osxsave = (features.ecx & (1 << 27)) != 0;
+        let avx = (features.ecx & (1 << 28)) != 0;
+        if !osxsave || !avx {
+            false
+        } else {
+            let xcr0 = _xgetbv(0);
+            let avx_state_enabled = (xcr0 & 0b111) == 0b111;
+            let cpuid = __cpuid_count(7, 0);
+            avx_state_enabled && (cpuid.ebx & (1 << 5)) != 0
+        }
     };
 
     AVX2_AVAILABLE.store(if available { 2 } else { 1 }, Ordering::Relaxed);
@@ -34,10 +51,27 @@ pub(crate) fn is_avx2_available() -> bool {
         return cached == 2;
     }
 
+    #[cfg(target_os = "thingos")]
+    {
+        // The Thing-OS kernel currently preserves FXSAVE-sized SSE state only.
+        // Do not execute AVX/AVX2 in userspace until XSAVE/XRSTOR state is owned.
+        AVX2_AVAILABLE.store(1, Ordering::Relaxed);
+        return false;
+    }
+
     use core::arch::x86_64::__cpuid_count;
-    let available = {
-        let cpuid = __cpuid_count(7, 0);
-        (cpuid.ebx & (1 << 5)) != 0
+    let available = unsafe {
+        let features = __cpuid_count(1, 0);
+        let osxsave = (features.ecx & (1 << 27)) != 0;
+        let avx = (features.ecx & (1 << 28)) != 0;
+        if !osxsave || !avx {
+            false
+        } else {
+            let xcr0 = _xgetbv(0);
+            let avx_state_enabled = (xcr0 & 0b111) == 0b111;
+            let cpuid = __cpuid_count(7, 0);
+            avx_state_enabled && (cpuid.ebx & (1 << 5)) != 0
+        }
     };
 
     AVX2_AVAILABLE.store(if available { 2 } else { 1 }, Ordering::Relaxed);

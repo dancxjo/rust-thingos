@@ -147,7 +147,7 @@ fn device_call(driver: &mut BootFbDriver, req: &ProviderRequest) -> ProviderResp
 
     let response = match call.op {
         DISPLAY_OP_GET_INFO => {
-            stem::debug!("display.phase=device_call_enter op=GET_INFO");
+            stem::trace!("display.phase=device_call_enter op=GET_INFO");
             let info = driver.get_info();
             let out_bytes = unsafe {
                 core::slice::from_raw_parts(
@@ -155,7 +155,7 @@ fn device_call(driver: &mut BootFbDriver, req: &ProviderRequest) -> ProviderResp
                     core::mem::size_of::<abi::display::DisplayInfo>(),
                 )
             };
-            stem::debug!("display.phase=device_call_exit op=GET_INFO result=ok");
+            stem::trace!("display.phase=device_call_exit op=GET_INFO result=ok");
             ProviderResponse::ok_device_call(0, out_bytes)
         }
         DISPLAY_OP_IMPORT_BUFFER => {

@@ -10,7 +10,7 @@ patterns.  Each recipe is self-contained.  Prerequisites: read
 
 **Problem**: create a pipe and stream data through it.
 
-See `userspace/ipc_pipe_demo/` for the complete compilable example.
+The snippet below shows a single-process pipe round-trip.
 
 ### Single-process pipe round-trip
 
@@ -261,9 +261,8 @@ use the received fd with any `SYS_FS_*` syscall immediately.
 
 **Problem**: expose a virtual directory tree under a mount point.
 
-See `userspace/ipc_provider_demo/` for the complete compilable example,
-`libs/ipc_helpers/src/provider.rs` for the `ProviderLoop` helper, and
-`userspace/iso9660d/` for a full-featured reference implementation.
+See `libs/ipc_helpers/src/provider.rs` for the `ProviderLoop` helper and
+`thingos/drivers/iso9660d/` for a full-featured reference implementation.
 
 For **event-loop drivers** that must interleave hardware polling with VFS RPC
 handling, use `ProviderLoop::try_next_request` (non-blocking) — see
@@ -321,7 +320,7 @@ fn run_provider(vfs_read: u32) {
 **Problem**: transfer a large pixel buffer from a display driver to a compositor
 without copying.
 
-See `userspace/ipc_memfd_demo/` for the complete compilable example.
+The snippet below shows the core memfd-backed exchange.
 
 ```rust
 use stem::syscall::{memfd_create, vm_map, vm_unmap, vfs_close};
@@ -396,7 +395,7 @@ fn recv_frame(channel: u32) {
 
 **Problem**: wait on a channel, a pipe read end, and a device file all at once.
 
-See `userspace/poll_mux/` for the complete compilable example.
+The snippet below shows the core polling pattern.
 
 ```rust
 use stem::syscall::vfs::{vfs_poll, vfs_fd_from_handle};
@@ -499,13 +498,5 @@ fn register_driver(drv_req_read: u32, drv_resp_write: u32, bind_instance_id: u64
 
 ## Compilable Example Programs
 
-Each recipe has a dedicated, runnable example that ships with the OS image:
-
-| Recipe | Example binary | Source path |
-|--------|---------------|-------------|
-| 1 — pipe stdio | `ipc_pipe_demo` | `userspace/ipc_pipe_demo/` |
-| 2 — RPC service | `ipc_service_demo` | `userspace/ipc_service_demo/` |
-| 4 — VFS provider | `ipc_provider_demo` | `userspace/ipc_provider_demo/` |
-| 5 — memfd buffer | `ipc_memfd_demo` | `userspace/ipc_memfd_demo/` |
-| 6 — poll event loop | `poll_mux` | `userspace/poll_mux/` |
-| 7 — supervisor handshake | `drivers/display_bootfb` | `drivers/display_bootfb/` |
+The driver implementations under `thingos/drivers/` are the maintained runnable
+examples for these patterns.

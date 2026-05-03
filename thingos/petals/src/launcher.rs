@@ -222,10 +222,9 @@ impl ApplicationLauncher {
 pub fn glyph_for_application(name: &str) -> &'static str {
     match name {
         "calc" | "calculator" => "calculator",
-        "clock" | "date" | "time_test" => "list-todo",
-        "terminal" | "leaf" | "sh" | "smallsh" => "monitor",
-        "fetchd" | "httpsd" | "netd" | "ping" | "nslookup" => "blocks",
-        "petals_demo" => "blocks",
+        "clock" | "date" => "list-todo",
+        "leaf" | "sh" => "monitor",
+        "httpsd" | "netd" | "ping" | "nslookup" => "blocks",
         _ => "box",
     }
 }
@@ -303,7 +302,7 @@ mod tests {
 
     #[test]
     fn formats_names_and_chooses_stable_glyphs() {
-        assert_eq!(display_name_from_path("/applications/petals_demo"), "Petals Demo");
+        assert_eq!(display_name_from_path("/applications/wayland_hello"), "Wayland Hello");
         assert_eq!(glyph_for_application("calc"), "calculator");
         assert_eq!(glyph_for_application("unknown"), "box");
     }

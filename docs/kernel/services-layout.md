@@ -153,7 +153,7 @@ them back verbatim on `Read`, `Write`, `Readdir`, `Stat`, and `Close`.
 
 ## iso9660d: boot live disk provider
 
-`userspace/iso9660d` is the reference VFS provider implementation.  It:
+`thingos/drivers/iso9660d` is the reference VFS provider implementation.  It:
 
 1. Finds the first block device with a valid ISO9660 PVD.
 2. Calls `vfs_mount(write_handle, "/media/livedisk")`.

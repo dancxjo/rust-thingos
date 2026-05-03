@@ -1349,8 +1349,8 @@ fn emit_debug_summary<R: BootRuntime>(caller_cpu: usize) {
         }
     } // drop lock
 
-    crate::kdebug!(
-        "Scheduler heartbeat: mono_ns={} last_timer_ns={} cpus_online={}.",
+    crate::ktrace!(
+        "Scheduler heartbeat: mono_ns={} last_timer_ns={} cpus_online={}",
         now_ns,
         last_timer_ns,
         cpus_online,

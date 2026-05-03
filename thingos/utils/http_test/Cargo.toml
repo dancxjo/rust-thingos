@@ -1,9 +1,0 @@
-[package]
-name = "http_test"
-version = "0.1.0"
-edition = "2021"
-
-[dependencies]
-stem = { path = "../../../stem" }
-http = { path = "../../../libs/http" }
-abi = { path = "../../../abi" }

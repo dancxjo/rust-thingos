@@ -78,7 +78,7 @@ Represents a directory in the content graph (future enhancement).
 
 ### ISO9660 Source
 
-**Service**: `iso_reader`
+**Service**: boot module indexer
 
 1. Probes for boot live-disk devices
 2. Scans ISO9660 filesystem
@@ -164,7 +164,7 @@ let slice = unsafe { core::slice::from_raw_parts(ptr as *const u8, size) };
 The system maintains full backward compatibility:
 
 1. **Asset System**: `ingestd` still creates `Asset` nodes for all content
-2. **Boot Modules**: `iso_reader` still creates `boot.Module` nodes
+2. **Boot Modules**: the boot module indexer still creates `boot.Module` nodes
 3. **Existing Consumers**: Services like `fontd`, `blossom`, etc. continue to work unchanged
 
 The new `content.File` nodes augment (not replace) the existing system, providing a unified view while preserving all existing functionality.
@@ -191,4 +191,4 @@ Build integration test:
 cargo xtask iso --env x86_64
 ```
 
-The ISO will include both Limine modules and the iso_reader service, demonstrating dual-source content access.
+The ISO will include Limine modules and boot-indexed content, demonstrating dual-source content access.

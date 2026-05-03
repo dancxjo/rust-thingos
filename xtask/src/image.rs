@@ -322,7 +322,6 @@ pub fn default_programs() -> Vec<ProgramConfig> {
         ProgramConfig { name: "uname", is_init: false, boot_module: true, features: vec![] },
         ProgramConfig { name: "true", is_init: false, boot_module: true, features: vec![] },
         ProgramConfig { name: "false", is_init: false, boot_module: true, features: vec![] },
-        ProgramConfig { name: "input_echo", is_init: false, boot_module: true, features: vec![] },
         ProgramConfig { name: "ps2_mouse", is_init: false, boot_module: true, features: vec![] },
         ProgramConfig {
             name: "display_bootfb",
@@ -347,11 +346,9 @@ pub fn default_programs() -> Vec<ProgramConfig> {
         ProgramConfig { name: "rtl8168d", is_init: false, boot_module: true, features: vec![] },
         ProgramConfig { name: "netd", is_init: false, boot_module: true, features: vec![] },
         ProgramConfig { name: "mesocarp", is_init: false, boot_module: true, features: vec![] },
-        ProgramConfig { name: "fetchd", is_init: false, boot_module: true, features: vec![] },
         ProgramConfig { name: "httpsd", is_init: false, boot_module: true, features: vec![] },
         ProgramConfig { name: "find", is_init: false, boot_module: true, features: vec![] },
         ProgramConfig { name: "ip", is_init: false, boot_module: true, features: vec![] },
-        ProgramConfig { name: "iso_reader", is_init: false, boot_module: true, features: vec![] },
         ProgramConfig { name: "ping", is_init: false, boot_module: true, features: vec![] },
         ProgramConfig { name: "nslookup", is_init: false, boot_module: true, features: vec![] },
         ProgramConfig { name: "ahci_disk", is_init: false, boot_module: true, features: vec![] },
@@ -363,18 +360,10 @@ pub fn default_programs() -> Vec<ProgramConfig> {
         ProgramConfig { name: "pci_stubd", is_init: false, boot_module: true, features: vec![] },
         ProgramConfig { name: "xhci", is_init: false, boot_module: true, features: vec![] },
         ProgramConfig { name: "chime", is_init: false, boot_module: true, features: vec![] },
-        ProgramConfig { name: "vfs_hello", is_init: false, boot_module: true, features: vec![] },
         ProgramConfig { name: "show_args", is_init: false, boot_module: true, features: vec![] },
         ProgramConfig { name: "clock", is_init: false, boot_module: true, features: vec![] },
         ProgramConfig { name: "calc", is_init: false, boot_module: true, features: vec![] },
         ProgramConfig { name: "leaf", is_init: false, boot_module: true, features: vec![] },
-        ProgramConfig {
-            name: "env_roundtrip",
-            is_init: false,
-            boot_module: true,
-            features: vec![],
-        },
-        ProgramConfig { name: "cwd_test", is_init: false, boot_module: true, features: vec![] },
         ProgramConfig { name: "date", is_init: false, boot_module: true, features: vec![] },
         ProgramConfig { name: "tree", is_init: false, boot_module: true, features: vec![] },
         ProgramConfig {
@@ -383,69 +372,13 @@ pub fn default_programs() -> Vec<ProgramConfig> {
             boot_module: true,
             features: vec![],
         },
-        ProgramConfig { name: "terminal", is_init: false, boot_module: true, features: vec![] },
         ProgramConfig { name: "tee", is_init: false, boot_module: true, features: vec![] },
         ProgramConfig { name: "xargs", is_init: false, boot_module: true, features: vec![] },
-        ProgramConfig { name: "placed", is_init: false, boot_module: true, features: vec![] },
-        ProgramConfig { name: "petals_demo", is_init: false, boot_module: true, features: vec![] },
         ProgramConfig { name: "bloom", is_init: false, boot_module: true, features: vec![] },
         ProgramConfig { name: "blossom", is_init: false, boot_module: true, features: vec![] },
         ProgramConfig { name: "clear", is_init: false, boot_module: true, features: vec![] },
         ProgramConfig { name: "loglevel", is_init: false, boot_module: true, features: vec![] },
-        ProgramConfig { name: "poll_mux", is_init: false, boot_module: true, features: vec![] },
-        ProgramConfig {
-            name: "ipc_service_demo",
-            is_init: false,
-            boot_module: true,
-            features: vec![],
-        },
-        ProgramConfig {
-            name: "ipc_pipe_demo",
-            is_init: false,
-            boot_module: true,
-            features: vec![],
-        },
-        ProgramConfig {
-            name: "ipc_provider_demo",
-            is_init: false,
-            boot_module: true,
-            features: vec![],
-        },
-        ProgramConfig {
-            name: "vfs_test_provider",
-            is_init: false,
-            boot_module: true,
-            features: vec![],
-        },
-        ProgramConfig {
-            name: "ipc_memfd_demo",
-            is_init: false,
-            boot_module: true,
-            features: vec![],
-        },
-        ProgramConfig { name: "test_exec", is_init: false, boot_module: true, features: vec![] },
-        ProgramConfig {
-            name: "test_vm_protect",
-            is_init: false,
-            boot_module: true,
-            features: vec![],
-        },
-        ProgramConfig {
-            name: "test_exec_env",
-            is_init: false,
-            boot_module: true,
-            features: vec![],
-        },
-        ProgramConfig { name: "test_threads", is_init: false, boot_module: true, features: vec![] },
-        ProgramConfig { name: "test_futex", is_init: false, boot_module: true, features: vec![] },
         ProgramConfig { name: "ld_so", is_init: false, boot_module: true, features: vec![] },
-        ProgramConfig {
-            name: "test_dyn_loader",
-            is_init: false,
-            boot_module: true,
-            features: vec![],
-        },
-        ProgramConfig { name: "test_dlopen", is_init: false, boot_module: true, features: vec![] },
         ProgramConfig { name: "reboot", is_init: false, boot_module: true, features: vec![] },
         ProgramConfig { name: "shutdown", is_init: false, boot_module: true, features: vec![] },
         ProgramConfig { name: "attr_list", is_init: false, boot_module: true, features: vec![] },
@@ -520,7 +453,7 @@ fn generate_limine_config(
         LimineEntry {
             title: "ThingOS (Safe Shell)".to_string(),
             kernel_cmdline: format!(
-                "loglevel={} display=bootfb kernel.terminal=1 sprout.safe=sh sprout.active_ui=terminal",
+                "loglevel={} display=bootfb kernel.terminal=1 sprout.safe=sh",
                 default_loglevel
             ),
             bootfb_only: true,
@@ -1241,12 +1174,14 @@ fn is_driver(name: &str) -> bool {
         "driver_wasm_host",
         "hdaudio",
         "hwrng",
+        "fatd",
         "pci_stubd",
         "proto_driver_wasm",
         "ps2_kbd",
         "ps2_mouse",
         "rtc_cmos",
         "rtl8168d",
+        "iso9660d",
         "virtio_gpu",
         "virtio_netd",
         "virtio_sound",
@@ -1322,9 +1257,7 @@ fn is_service_program(name: &str) -> bool {
             | "blossom"
             | "bristle"
             | "cambium"
-            | "fatd"
             | "httpsd"
-            | "iso9660d"
             | "mesocarp"
             | "netd"
     )
@@ -1348,7 +1281,7 @@ fn is_bootstrap_boot_module(name: &str) -> bool {
         || is_service_program(name)
         || matches!(
             name,
-            "sprout" | "terminal" | "wayland_hello" | "clock" | "calc" | "leaf" | "fetchd"
+            "sprout" | "wayland_hello" | "clock" | "calc" | "leaf"
         )
 }
 
@@ -1358,7 +1291,7 @@ fn is_non_bootfb_graphics_driver(name: &str) -> bool {
 
 fn is_safe_shell_program(name: &str) -> bool {
     is_bin_program(name)
-        || matches!(name, "sprout" | "terminal" | "bristle" | "cambium" | "ps2_kbd" | "ps2_mouse")
+        || matches!(name, "sprout" | "bristle" | "cambium" | "ps2_kbd" | "ps2_mouse")
 }
 
 fn userspace_aliases(name: &str) -> &'static [&'static str] {
@@ -1424,7 +1357,7 @@ mod tests {
     }
 
     #[test]
-    fn safe_shell_entry_loads_only_sprout_sh_bristle_cambium_ps2_and_terminal() {
+    fn safe_shell_entry_loads_only_sprout_sh_bristle_cambium_and_ps2() {
         let sh = Shell::new().expect("shell");
         let mut sprout = test_program("sprout");
         sprout.is_init = true;
@@ -1439,7 +1372,6 @@ mod tests {
             test_program("ls"),
             test_program("mkdir"),
             test_program("stat"),
-            test_program("terminal"),
             test_program("bloom"),
             test_program("bristle"),
             test_program("cambium"),
@@ -1454,7 +1386,7 @@ mod tests {
         let safe_entry = limine_entry(&conf, "ThingOS (Safe Shell)");
 
         assert!(safe_entry.contains(
-            "kernel_cmdline: loglevel=3 display=bootfb kernel.terminal=1 sprout.safe=sh sprout.active_ui=terminal"
+            "kernel_cmdline: loglevel=3 display=bootfb kernel.terminal=1 sprout.safe=sh"
         ));
         assert!(safe_entry.contains("module_path: boot():/applications/sprout"));
         assert!(safe_entry.contains("module_path: boot():/bin/sh"));
@@ -1464,7 +1396,6 @@ mod tests {
         assert!(safe_entry.contains("module_path: boot():/bin/ls"));
         assert!(safe_entry.contains("module_path: boot():/bin/mkdir"));
         assert!(safe_entry.contains("module_path: boot():/bin/stat"));
-        assert!(safe_entry.contains("module_path: boot():/applications/terminal"));
         assert!(safe_entry.contains("module_path: boot():/services/bristle"));
         assert!(safe_entry.contains("module_path: boot():/services/cambium"));
         assert!(safe_entry.contains("module_path: boot():/drivers/ps2_kbd"));
@@ -1613,10 +1544,10 @@ mod tests {
                 "{name} should move to /applications"
             );
         }
-        for name in ["bristle", "bloom", "cambium", "fatd", "iso9660d", "mesocarp", "netd"] {
+        for name in ["bristle", "bloom", "cambium", "mesocarp", "netd"] {
             assert_eq!(executable_subdir(name), "services", "{name} should move to /services");
         }
-        for name in ["ahci_disk", "display_bootfb", "virtio_netd", "xhci"] {
+        for name in ["ahci_disk", "display_bootfb", "fatd", "iso9660d", "virtio_netd", "xhci"] {
             assert_eq!(executable_subdir(name), "drivers", "{name} should move to /drivers");
         }
     }
@@ -1632,8 +1563,8 @@ mod tests {
         assert!(normal_entry.contains("module_path: boot():/applications/sprout"));
         assert!(normal_entry.contains("module_path: boot():/bin/sh"));
         assert!(normal_entry.contains("module_path: boot():/services/cambium"));
-        assert!(normal_entry.contains("module_path: boot():/services/fatd"));
-        assert!(normal_entry.contains("module_path: boot():/services/iso9660d"));
+        assert!(normal_entry.contains("module_path: boot():/drivers/fatd"));
+        assert!(normal_entry.contains("module_path: boot():/drivers/iso9660d"));
         assert!(normal_entry.contains("module_path: boot():/services/mesocarp"));
         assert!(normal_entry.contains("module_path: boot():/services/mdns"));
         assert!(normal_entry.contains("module_path: boot():/services/mdnsd"));
