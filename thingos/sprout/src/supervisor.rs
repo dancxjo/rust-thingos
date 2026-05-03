@@ -47,8 +47,6 @@ impl Supervisor {
         };
 
         self.activate_boot_roots();
-        info!("SPROUT: Continuing supervisor startup");
-
         if !kernel_terminal {
             // Now that the root filesystem is populated (display drivers, fonts, etc),
             // we can launch the bloom compositor.
@@ -57,7 +55,7 @@ impl Supervisor {
 
         match shell_pid {
             Some(pid) => {
-                info!("SPROUT: waiting for shell PID {} to exit", pid);
+                stem::debug!("SPROUT: waiting for shell PID {} to exit", pid);
                 match stem::syscall::waitpid(pid as i64, 0) {
                     Ok((reaped_pid, status)) => {
                         info!("SPROUT: shell PID {} exited with status {:#x}", reaped_pid, status);

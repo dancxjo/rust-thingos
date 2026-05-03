@@ -103,31 +103,25 @@ static ALLOCATOR: TracingAllocator = TracingAllocator;
 
 #[cfg(not(test))]
 pub fn init<R: BootRuntime>(_rt: &R) {
-    crate::kdebug!("[kernel:global_alloc] enter");
     unsafe {
-        crate::kdebug!("[kernel:global_alloc] set expand hook");
         HEAP_EXPAND_HOOK = Some(expand_heap_impl::<R>);
     }
-    crate::kdebug!("[kernel:global_alloc] expand hook ok");
-
-    crate::kdebug!("[kernel:global_alloc] kernel_heap lock begin");
     let mut heap = kernel_heap().lock();
-    crate::kdebug!("[kernel:global_alloc] kernel_heap lock ok");
     // Keep early boot fast: bootstrap with a smaller heap and grow on demand.
-    crate::ktrace!("[kernel:global_alloc] reserve_region begin");
     let (base, size) = heap
         .reserve_region::<R>(BOOTSTRAP_HEAP_PAGES)
         .expect("Failed to reserve kernel heap region");
-    crate::ktrace!("[kernel:global_alloc] reserve_region ok");
 
     unsafe {
-        crate::ktrace!("[kernel:global_alloc] inner allocator init begin");
         INNER_ALLOCATOR.lock().init(base as *mut u8, size);
     }
-    crate::ktrace!("[kernel:global_alloc] inner allocator init ok");
     HEAP_TOP.store(base + size as u64, Ordering::Relaxed);
-    crate::ktrace!("[kernel:global_alloc] heap top store ok");
-    crate::ktrace!("[kernel:global_alloc] init done");
+    crate::kdebug!(
+        "[kernel:global_alloc] initialized bootstrap heap base=0x{:x} size={} pages={}",
+        base,
+        size,
+        BOOTSTRAP_HEAP_PAGES
+    );
 }
 
 #[cfg(not(test))]

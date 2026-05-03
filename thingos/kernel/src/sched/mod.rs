@@ -1348,10 +1348,8 @@ fn emit_debug_summary<R: BootRuntime>(caller_cpu: usize) {
         }
     } // drop lock
 
-    // Emit the 1 Hz heartbeat at INFO level so it is visible in default log
-    // output and can be used to diagnose freezes from serial logs.
-    crate::kinfo!(
-        "HEARTBEAT: mono_ns={} last_timer_ns={} cpus_online={}",
+    crate::kdebug!(
+        "Scheduler heartbeat: mono_ns={} last_timer_ns={} cpus_online={}.",
         now_ns,
         last_timer_ns,
         cpus_online,
@@ -1392,8 +1390,8 @@ fn emit_debug_summary<R: BootRuntime>(caller_cpu: usize) {
             now_ns,
         );
 
-        crate::kinfo!(
-            "HEARTBEAT: cpu={} curr={:?} last_switch_ns={} runq={} ctxsw/s={} tick/s={} wake/s={} ipi={} lock_miss={} lock_blocked={}",
+        crate::ktrace!(
+            "scheduler heartbeat cpu={} curr={:?} last_switch_ns={} runq={} ctxsw_per_sec={} tick_per_sec={} wake_per_sec={} ipi={} lock_miss={} lock_blocked={}",
             s.i,
             s.curr,
             s.last_switch,
@@ -2128,18 +2126,12 @@ fn set_any_wake_policy_for_tests_with_streak(
 }
 
 pub fn init<R: BootRuntime>() {
-    crate::ktrace!("  Acquiring scheduler lock...");
     let mut lock = SCHEDULER.lock();
     set_sched_lock_tracking::<R>(0); // Init runs on boot CPU (0)
-    crate::ktrace!("  Lock acquired, checking if initialized...");
     if lock.is_none() {
-        crate::ktrace!("  Allocating scheduler...");
         let sched = alloc::boxed::Box::new(types::Scheduler::<R>::new());
-        crate::ktrace!("  Leaking scheduler...");
         let s = alloc::boxed::Box::leak(sched);
-        crate::ktrace!("  Initializing boot task...");
         init_boot_task::<R>(s);
-        crate::ktrace!("  Storing scheduler pointer...");
         *lock = Some(s as *mut types::Scheduler<R> as usize);
         unsafe {
             hooks::YIELD_HOOK = Some(sleep::yield_now::<R>);

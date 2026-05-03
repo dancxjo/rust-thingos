@@ -119,26 +119,27 @@ pub fn buffer_scancode(byte: u8, is_aux: bool) -> bool {
 
 pub fn take_scancode() -> Option<u8> {
     let before_depth = PS2_QUEUE.depth();
-    if should_log_counter(&TAKE_LOGS, PS2_QUEUE.popped.load(Ordering::Relaxed) + 1, 16, 256) {
-        crate::kinfo!(
-            "PS/2 take_scancode entry: depth={} pushed={} popped={} overwritten={}",
-            before_depth,
-            PS2_QUEUE.pushed.load(Ordering::Relaxed),
-            PS2_QUEUE.popped.load(Ordering::Relaxed),
-            PS2_QUEUE.overwritten.load(Ordering::Relaxed)
-        );
-    }
+    let should_trace =
+        should_log_counter(&TAKE_LOGS, PS2_QUEUE.popped.load(Ordering::Relaxed) + 1, 16, 256);
+    let pushed_before = if should_trace { PS2_QUEUE.pushed.load(Ordering::Relaxed) } else { 0 };
+    let popped_before = if should_trace { PS2_QUEUE.popped.load(Ordering::Relaxed) } else { 0 };
+    let overwritten_before =
+        if should_trace { PS2_QUEUE.overwritten.load(Ordering::Relaxed) } else { 0 };
     let res = PS2_QUEUE.pop();
     if let Some(val) = res {
         let byte = val as u8;
         let popped = PS2_QUEUE.popped.load(Ordering::Relaxed);
-        if should_log_counter(&TAKE_LOGS, popped, 16, 256) {
-            crate::kinfo!(
-                "PS/2 take_scancode exit: byte=0x{:02x} is_aux={} depth={} popped={}",
+        if should_trace {
+            crate::ktrace!(
+                "PS/2 scancode read byte=0x{:02x} is_aux={} depth_before={} depth_after={} pushed={} popped_before={} popped_after={} overwritten={}",
                 byte,
                 (val >> 8) != 0,
+                before_depth,
                 PS2_QUEUE.depth(),
-                popped
+                pushed_before,
+                popped_before,
+                popped,
+                overwritten_before
             );
         } else {
             crate::ktrace!(
@@ -150,7 +151,7 @@ pub fn take_scancode() -> Option<u8> {
         Some(byte)
     } else {
         if before_depth != 0 {
-            crate::kinfo!("PS/2 take_scancode exit: empty after observed depth={}", before_depth);
+            crate::ktrace!("PS/2 scancode read found empty queue after depth={}", before_depth);
         }
         None
     }

@@ -42,22 +42,17 @@ impl VfsNode for PortNode {
         let trace_no = PORT_NODE_READ_TRACE_COUNT.fetch_add(1, Ordering::Relaxed) + 1;
         let should_trace = trace_no <= 32 || trace_no % 128 == 0;
         let start_ns = if should_trace { crate::time::monotonic_now_ns() } else { 0 };
+        let queued_before = if should_trace { self.port.len() } else { 0 };
+        let writers_before = should_trace && self.port.has_writers();
+        let n = self.port.try_recv(buf);
         if should_trace {
-            crate::kinfo!(
-                "PORT_NODE read entry: trace={} port={:p} len={} queued={} writers={}",
+            crate::ktrace!(
+                "port node read trace={} port={:p} requested={} queued_before={} writers={} bytes={} queued_after={} elapsed_ns={}",
                 trace_no,
                 Arc::as_ptr(&self.port),
                 buf.len(),
-                self.port.len(),
-                self.port.has_writers()
-            );
-        }
-        let n = self.port.try_recv(buf);
-        if should_trace {
-            crate::kinfo!(
-                "PORT_NODE read exit: trace={} port={:p} bytes={} queued={} elapsed_ns={}",
-                trace_no,
-                Arc::as_ptr(&self.port),
+                queued_before,
+                writers_before,
                 n,
                 self.port.len(),
                 crate::time::monotonic_now_ns().saturating_sub(start_ns)

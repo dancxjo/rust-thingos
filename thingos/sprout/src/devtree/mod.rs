@@ -10,7 +10,7 @@ pub mod x86_64;
 use alloc::vec;
 
 use abi::schema::{confidence, keys, source};
-use stem::{debug, info};
+use stem::debug;
 
 pub fn set_str_prop(_id: abi::types::ThingId, _key: &str, _val: &str) -> Result<(), ()> {
     Ok(())
@@ -26,10 +26,7 @@ pub struct DevTreeCtx {
 }
 
 pub fn init() -> Result<DevTreeCtx, ()> {
-    debug!("SPROUT: devtree::init entry (VFS-native)");
-
     // 1. Get HHDM Offset
-    debug!("SPROUT: Reading HHDM offset from /sys/firmware/hhdm");
     let hhdm = read_sys_u64("/sys/firmware/hhdm").unwrap_or(0) as usize;
     if hhdm == 0 {
         stem::warn!("SPROUT: Failed to read HHDM offset!");
@@ -41,15 +38,18 @@ pub fn init() -> Result<DevTreeCtx, ()> {
 
     if let Ok(val) = read_sys_u64("/sys/firmware/acpi") {
         acpi_rsdp = Some(val as usize);
-        debug!("SPROUT: ACPI RSDP = 0x{:x}", val);
     }
 
     if let Ok(val) = read_sys_u64("/sys/firmware/dtb") {
         dtb_ptr = Some(val as usize);
-        debug!("SPROUT: DTB PHYS = 0x{:x}", val);
     }
 
-    debug!("SPROUT: Init OK, returning context (graph discovery eradicated)");
+    debug!(
+        "SPROUT: devtree initialized from VFS hhdm=0x{:x} acpi_rsdp={} dtb={}",
+        hhdm,
+        acpi_rsdp.unwrap_or(0),
+        dtb_ptr.unwrap_or(0)
+    );
     Ok(DevTreeCtx {
         host: abi::types::ThingId::default(),
         platform_bus: abi::types::ThingId::default(),

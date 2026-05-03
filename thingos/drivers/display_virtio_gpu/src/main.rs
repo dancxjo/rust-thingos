@@ -678,8 +678,8 @@ fn maybe_log_display_watchdog(
     // Classify the current RPC state for freeze diagnosis:
     //   open_rpc_ms > 0  → provider has entered but not exited (stuck inside provider)
     //   open_rpc_ms == 0 → all RPCs have completed (no stall in provider path)
-    info!(
-        "display_virtio_gpu: watchdog rpc_enter={}({}) rpc_exit={}({}) status={} corr={} req_id={} resp_port={} provider_tid={} open_rpc_ms={} last_rpc_ms={} frame={} present_seq={} pool free={} acquired={} in_flight={} imports={} commits={} failed_imports={} failed_commits={} damage_rects={} damage_area={} vfs_pending_bytes={}",
+    debug!(
+        "display watchdog: rpc_enter={}({}) rpc_exit={}({}) status={} corr={} req_id={} resp_port={} provider_tid={} open_rpc_ms={} last_rpc_ms={} frame={} present_seq={} pool_free={} pool_acquired={} pool_in_flight={} imports={} commits={} failed_imports={} failed_commits={} damage_rects={} damage_area={} vfs_pending_bytes={}.",
         driver.rpc_diag.last_entered_seq,
         display_op_name(driver.rpc_diag.last_entered_op),
         driver.rpc_diag.last_exited_seq,
@@ -1209,8 +1209,8 @@ fn vfs_device_call(
             req.resp_port,
         );
     } else if duration_ms >= 50 {
-        info!(
-            "display_virtio_gpu: rpc.latency corr={} op={} duration_ms={} status={} provider_tid={} req_id={} resp_port={}",
+        debug!(
+            "display RPC latency: corr={} op={} duration_ms={} status={} provider_tid={} req_id={} resp_port={}.",
             seq,
             display_op_name(call.op),
             duration_ms,
@@ -3352,11 +3352,7 @@ fn main(boot_arg: usize) -> ! {
         }
     }
 
-    info!("display_virtio_gpu: GPU initialized successfully");
-    // Log which GPU composition features are enabled.
-    // The opaque-copy (GPU fast-copy) path and CPU alpha-blend fallback
-    // are always available; virgl 3D extends the GPU acceleration surface.
-    info!("display_virtio_gpu: composition paths: gpu_opaque_copy=enabled cpu_alpha_blend=enabled");
+    info!("display_virtio_gpu: GPU ready with copy and CPU blend paths");
     if gpu.has_3d_feature() {
         debug!("display_virtio_gpu: Virgl 3D supported — GPU alpha blend path will be initialized");
     } else {

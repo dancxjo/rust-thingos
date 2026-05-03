@@ -77,10 +77,10 @@ fn publish_pid() {
         let mut buf = [0u8; 32];
         let mut idx = buf.len();
         let mut n = pid as u32;
-        
+
         buf[idx - 1] = b'\n';
         idx -= 1;
-        
+
         if n == 0 {
             buf[idx - 1] = b'0';
             idx -= 1;
@@ -91,7 +91,7 @@ fn publish_pid() {
                 n /= 10;
             }
         }
-        
+
         let _ = vfs_write(fd, &buf[idx..]);
         let _ = vfs_close(fd);
         stem::info!("bristle: published pid {} to /run/bristle/pid", pid);
@@ -105,10 +105,10 @@ fn publish_device_handle(path: &str, handle: u32) {
         let mut buf = [0u8; 32];
         let mut idx = buf.len();
         let mut n = handle;
-        
+
         buf[idx - 1] = b'\n';
         idx -= 1;
-        
+
         if n == 0 {
             buf[idx - 1] = b'0';
             idx -= 1;
@@ -119,7 +119,7 @@ fn publish_device_handle(path: &str, handle: u32) {
                 n /= 10;
             }
         }
-        
+
         let _ = vfs_write(fd, &buf[idx..]);
         let _ = vfs_close(fd);
     }
@@ -317,7 +317,7 @@ fn main(_arg: usize) -> ! {
                                 let mut w_bytes = [0u8; 4];
                                 w_bytes.copy_from_slice(&recv_buf[0..4]);
                                 let w = u32::from_le_bytes(w_bytes) as i32;
-                                
+
                                 let mut h_bytes = [0u8; 4];
                                 h_bytes.copy_from_slice(&recv_buf[4..8]);
                                 let h = u32::from_le_bytes(h_bytes) as i32;
@@ -347,7 +347,12 @@ fn main(_arg: usize) -> ! {
                         }
                     } else {
                         // EOF
-                        stem::warn!("bristle: fd EOF (is_kbd={}, is_mouse={}, is_control={})", is_kbd, is_mouse, is_control);
+                        stem::warn!(
+                            "bristle: fd EOF (is_kbd={}, is_mouse={}, is_control={})",
+                            is_kbd,
+                            is_mouse,
+                            is_control
+                        );
                         stem::time::sleep_ms(100);
                     }
                 } else {
@@ -407,14 +412,14 @@ fn handle_register_sink(
     };
     let sink = Sink { handle, event_mask };
 
-    match tag {
+    let sink_name = match tag {
         BRISTLE_SINK_TAG_BLOOM => {
             if let Some(old) = bloom_sink.replace(sink) {
                 if old.handle != handle {
                     let _ = port_close(old.handle);
                 }
             }
-            info!("bristle: bloom sink registered (handle={} mask=0x{:02x})", handle, event_mask);
+            "bloom"
         }
         BRISTLE_SINK_TAG_ECHO => {
             if let Some(old) = echo_sink.replace(sink) {
@@ -422,13 +427,15 @@ fn handle_register_sink(
                     let _ = port_close(old.handle);
                 }
             }
-            info!("bristle: echo sink registered (handle={} mask=0x{:02x})", handle, event_mask);
+            "echo"
         }
         _ => {
             warn!("bristle: RegisterSink unknown tag {}", tag);
             let _ = port_close(handle);
+            return;
         }
-    }
+    };
+    debug!("bristle: {} sink registered (handle={} mask=0x{:02x})", sink_name, handle, event_mask);
 }
 
 /// Accumulate raw bytes into `event_accum`, parse complete bristle events,
@@ -628,7 +635,7 @@ fn accumulate_and_dispatch(
                     }
                     if should_log_input(event_no) {
                         stem::trace!(
-                            "bristle: dispatch exit source={} event={} class={} accum_depth={} drops={}",
+                            "Input dispatch finished: source={} event={} class={} accum_depth={} drops={}.",
                             source,
                             event_no,
                             event_class,
@@ -658,7 +665,7 @@ fn accumulate_and_dispatch(
         let total = BRISTLE_DISPATCH_COUNT.load(Ordering::Relaxed);
         if should_log_input(total) {
             stem::trace!(
-                "bristle: input_rate source={} bytes={} events={} total_events={} entry_depth={} exit_depth={} elapsed_ns={} drops={}",
+                "Input batch: source={} bytes={} events={} total_events={} entry_depth={} exit_depth={} elapsed_ns={} drops={}.",
                 source,
                 input.len(),
                 dispatched,
@@ -729,8 +736,8 @@ fn maybe_log_input_summary(source: &str, bytes: u64, events: u64, accum_depth: u
     let window_events = BRISTLE_RATE_WINDOW_EVENTS.swap(0, Ordering::Relaxed);
     let drops = BRISTLE_FORWARD_DROP_COUNT.load(Ordering::Relaxed);
     trace_mark_input(input_source::BRISTLE, window_bytes, window_events, drops);
-    stem::info!(
-        "bristle: input_summary source={} bytes={} events={} accum_depth={} drops={}",
+    stem::debug!(
+        "Input summary: source={} bytes={} events={} accum_depth={} drops={}.",
         source,
         window_bytes,
         window_events,

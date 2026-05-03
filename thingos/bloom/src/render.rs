@@ -95,6 +95,7 @@ pub struct CompositorVisuals {
     /// `prepare_background` calls when the requested path has not changed.
     wallpaper_path: Option<alloc::string::String>,
     cursor: Option<CursorBuffer>,
+    pending_cursor: Option<CursorBuffer>,
     cursor_variants: Vec<(CursorKind, CursorBuffer)>,
     pointer_overlay: Option<PointerOverlayBuffer>,
     body_overlays: Vec<ChromeOverlayBuffer>,
@@ -193,6 +194,7 @@ impl CompositorVisuals {
             background: None,
             wallpaper_path: None,
             cursor: None,
+            pending_cursor: None,
             cursor_variants: Vec::new(),
             pointer_overlay: None,
             body_overlays: Vec::new(),
@@ -442,7 +444,7 @@ impl CompositorVisuals {
             };
         let stride_pixels = texture.stride / 4;
         let height = texture.height;
-        draw_builtin_busy_spinner(texture.as_slice_mut(), stride_pixels, height, 0);
+        draw_builtin_busy_spinner(texture.as_slice_mut(), stride_pixels, height, 0, 255);
 
         let Some(buffer_id) = display.import_buffer(
             texture.fd,
@@ -476,14 +478,24 @@ impl CompositorVisuals {
         );
     }
 
-    pub fn draw_busy_spinner_frame(&mut self, frame: u32) -> Option<(u32, u32, u32, u32)> {
+    pub fn draw_busy_spinner_frame(
+        &mut self,
+        frame: u32,
+        opacity: u8,
+    ) -> Option<(u32, u32, u32, u32)> {
         let cursor = self.cursor.as_mut()?;
         if !cursor.fallback {
             return None;
         }
         let stride_pixels = cursor._texture.stride / 4;
         let height = cursor._texture.height;
-        draw_builtin_busy_spinner(cursor._texture.as_slice_mut(), stride_pixels, height, frame);
+        draw_builtin_busy_spinner(
+            cursor._texture.as_slice_mut(),
+            stride_pixels,
+            height,
+            frame,
+            opacity,
+        );
         Some((cursor.width, cursor.height, cursor.hotspot_x, cursor.hotspot_y))
     }
 
@@ -533,11 +545,7 @@ impl CompositorVisuals {
             return;
         };
 
-        if let Some(old) = self.cursor.take() {
-            display.release_buffer(old.buffer_id);
-        }
-
-        self.cursor = Some(CursorBuffer {
+        let cursor = CursorBuffer {
             _texture: texture,
             buffer_id,
             width: CURSOR_SIZE,
@@ -545,7 +553,18 @@ impl CompositorVisuals {
             hotspot_x: hotspot[0],
             hotspot_y: hotspot[1],
             fallback: false,
-        });
+        };
+        if self.cursor.as_ref().map(|cursor| cursor.fallback).unwrap_or(false) {
+            if let Some(old) = self.pending_cursor.take() {
+                display.release_buffer(old.buffer_id);
+            }
+            self.pending_cursor = Some(cursor);
+        } else {
+            if let Some(old) = self.cursor.take() {
+                display.release_buffer(old.buffer_id);
+            }
+            self.cursor = Some(cursor);
+        }
         stem::info!(
             "bloom: cursor ready buffer={} size={}x{} hotspot={},{}",
             buffer_id,
@@ -557,11 +576,35 @@ impl CompositorVisuals {
     }
 
     fn needs_asset_cursor(&self) -> bool {
-        self.cursor.as_ref().map(|cursor| cursor.fallback).unwrap_or(true)
+        self.pending_cursor.is_none()
+            && self.cursor.as_ref().map(|cursor| cursor.fallback).unwrap_or(true)
     }
 
     pub fn cursor_is_fallback(&self) -> bool {
         self.cursor.as_ref().map(|cursor| cursor.fallback).unwrap_or(false)
+    }
+
+    pub fn pending_cursor_ready(&self) -> bool {
+        self.pending_cursor.is_some()
+    }
+
+    pub fn activate_pending_cursor(&mut self, display: &DisplayBackend) -> bool {
+        let Some(cursor) = self.pending_cursor.take() else {
+            return false;
+        };
+        let buffer_id = cursor.buffer_id;
+        if let Some(old) = self.cursor.take() {
+            display.release_buffer(old.buffer_id);
+        }
+        for (_, old) in self.cursor_variants.drain(..) {
+            display.release_buffer(old.buffer_id);
+        }
+        self.cursor = Some(cursor);
+        stem::info!(
+            "bloom: busy spinner handoff complete; real cursor active buffer={}",
+            buffer_id
+        );
+        true
     }
 
     pub fn cursor_plane(
@@ -987,9 +1030,9 @@ fn call_draw_svg_icon(
     )
 }
 
-fn draw_builtin_busy_spinner(dst: &mut [u32], stride: u32, height: u32, frame: u32) {
+fn draw_builtin_busy_spinner(dst: &mut [u32], stride: u32, height: u32, frame: u32, opacity: u8) {
     dst.fill(0);
-    if stride < CURSOR_SIZE || height < CURSOR_SIZE {
+    if stride < CURSOR_SIZE || height < CURSOR_SIZE || opacity == 0 {
         return;
     }
 
@@ -997,12 +1040,19 @@ fn draw_builtin_busy_spinner(dst: &mut [u32], stride: u32, height: u32, frame: u
     let center = (CURSOR_SIZE / 2) as i32;
 
     for &(dx, dy) in &BUSY_SPINNER_DOT_OFFSETS {
-        draw_spinner_dot(dst, stride, center + dx + 1, center + dy + 2, 3, 0x24000000);
+        draw_spinner_dot(
+            dst,
+            stride,
+            center + dx + 1,
+            center + dy + 2,
+            3,
+            argb(scale_alpha(0x24, opacity), 0x000000),
+        );
     }
 
     for (idx, &(dx, dy)) in BUSY_SPINNER_DOT_OFFSETS.iter().enumerate() {
         let age = (BUSY_SPINNER_DOT_OFFSETS.len() + idx - phase) % BUSY_SPINNER_DOT_OFFSETS.len();
-        let alpha = BUSY_SPINNER_ALPHA[age];
+        let alpha = scale_alpha(BUSY_SPINNER_ALPHA[age], opacity);
         let radius = if age <= 2 { 3 } else { 2 };
         draw_spinner_dot(
             dst,
@@ -1013,6 +1063,10 @@ fn draw_builtin_busy_spinner(dst: &mut [u32], stride: u32, height: u32, frame: u
             argb(alpha, BUSY_SPINNER_RGB),
         );
     }
+}
+
+fn scale_alpha(alpha: u8, opacity: u8) -> u8 {
+    ((alpha as u16 * opacity as u16 + 127) / 255) as u8
 }
 
 fn draw_spinner_dot(dst: &mut [u32], stride: u32, cx: i32, cy: i32, radius: i32, color: u32) {

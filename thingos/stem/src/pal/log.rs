@@ -44,42 +44,57 @@ pub fn write_with_provenance(level: Level, provenance: &str, args: fmt::Argument
 
 /// Buffered console writer that accumulates output before syscall.
 struct BufConsole {
-    buf: [u8; 256],
+    buf: [u8; 2048],
     len: usize,
     level: usize,
+    truncated: bool,
 }
 
 impl BufConsole {
     fn new(level: usize) -> Self {
-        BufConsole { buf: [0u8; 256], len: 0, level }
+        BufConsole { buf: [0u8; 2048], len: 0, level, truncated: false }
     }
 
     fn flush(&mut self) {
+        if self.truncated && self.len < self.buf.len() {
+            let suffix = b" [truncated]";
+            let available = self.buf.len() - self.len;
+            let n = core::cmp::min(available, suffix.len());
+            self.buf[self.len..self.len + n].copy_from_slice(&suffix[..n]);
+            self.len += n;
+        }
+
         if self.len > 0 {
             if let Ok(s) = core::str::from_utf8(&self.buf[..self.len]) {
                 let _ = log_write(s, self.level);
             }
             self.len = 0;
+            self.truncated = false;
         }
     }
 }
 
 impl fmt::Write for BufConsole {
     fn write_str(&mut self, s: &str) -> fmt::Result {
+        if self.truncated {
+            return Ok(());
+        }
+
+        let space = self.buf.len().saturating_sub(self.len);
         let bytes = s.as_bytes();
-        let mut remaining = bytes;
-
-        while !remaining.is_empty() {
-            let space = self.buf.len() - self.len;
-            if space == 0 {
-                self.flush();
-                continue;
+        if bytes.len() <= space {
+            self.buf[self.len..self.len + bytes.len()].copy_from_slice(bytes);
+            self.len += bytes.len();
+        } else {
+            let suffix_len = b" [truncated]".len();
+            let target_len = self.buf.len().saturating_sub(suffix_len);
+            if self.len > target_len {
+                self.len = target_len;
             }
-
-            let chunk_len = core::cmp::min(space, remaining.len());
-            self.buf[self.len..self.len + chunk_len].copy_from_slice(&remaining[..chunk_len]);
-            self.len += chunk_len;
-            remaining = &remaining[chunk_len..];
+            let copy_len = core::cmp::min(bytes.len(), target_len.saturating_sub(self.len));
+            self.buf[self.len..self.len + copy_len].copy_from_slice(&bytes[..copy_len]);
+            self.len += copy_len;
+            self.truncated = true;
         }
         Ok(())
     }

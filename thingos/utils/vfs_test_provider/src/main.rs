@@ -114,11 +114,13 @@ fn main(_arg: usize) -> ! {
             stem::syscall::exit(1);
         }
     };
-    info!("vfs_test_provider: port pair write_h={} read_h={}", write_h, read_h);
 
     // 2. Mount at /dev/test/provider.
     match vfs_mount(write_h, MOUNT_POINT) {
-        Ok(()) => info!("vfs_test_provider: mounted at {}", MOUNT_POINT),
+        Ok(()) => info!(
+            "vfs_test_provider: mounted at {} (write_h={} read_h={})",
+            MOUNT_POINT, write_h, read_h
+        ),
         Err(e) => {
             warn!("vfs_test_provider: vfs_mount failed: {:?} (continuing anyway for testing)", e);
         }

@@ -27,32 +27,23 @@ pub fn alloc_user_va(size: usize) -> u64 {
 }
 
 pub fn init<R: crate::BootRuntime>(rt: &R) {
-    crate::ktrace!("[kernel:mem:init] enter");
     let map = rt.phys_memory_map();
-    crate::ktrace!("[kernel:mem:init] phys_memory_map ok");
     let _modules = rt.modules();
-    crate::ktrace!("[kernel:mem:init] modules ok");
     let offset = rt.phys_to_virt_offset();
-    crate::ktrace!("[kernel:mem:init] phys_to_virt_offset ok");
-
-    let _ = map;
-    let _ = offset;
-    crate::ktrace!("[kernel:mem:init] memory map logging done");
 
     // 1. Setup early frame allocator
     let bitmap = boot_frame_alloc::init(map, offset);
-    crate::ktrace!("[kernel:mem:init] boot_frame_alloc init ok");
     let alloc = frame_alloc::FrameAllocator::new_from_boot(map, _modules, bitmap, offset);
-    crate::ktrace!("[kernel:mem:init] frame allocator build ok");
-
-    let _ = alloc.free_count();
-    crate::ktrace!("[kernel:mem:init] frame allocator log ok");
+    let free_frames = alloc.free_count();
 
     unsafe { FRAME_ALLOCATOR.init(alloc) };
-    crate::ktrace!("[kernel:mem:init] FRAME_ALLOCATOR init ok");
 
     rt.tasking().init(offset);
-    crate::ktrace!("[kernel:mem:init] tasking init ok");
+    crate::kdebug!(
+        "[kernel:mem:init] initialized frame allocator free_frames={} hhdm=0x{:x}",
+        free_frames,
+        offset
+    );
 }
 
 pub fn is_frame_allocator_ready() -> bool {

@@ -479,10 +479,14 @@ struct XhciController {
 impl XhciController {
     fn new(claim: usize, mmio: u64) -> Result<Self, &'static str> {
         let regs = XhciRegs::map(mmio);
-        info!("xhci: hci version {}.{}", (regs.version >> 8) & 0xff, (regs.version >> 4) & 0x0f);
-        info!("xhci: max slots {}", regs.max_slots());
-        info!("xhci: max ports {}", regs.max_ports());
-        info!("xhci: scratchpad buffers {}", regs.scratchpad_count());
+        info!(
+            "xhci: controller version {}.{} with {} slots, {} ports, {} scratchpad buffers",
+            (regs.version >> 8) & 0xff,
+            (regs.version >> 4) & 0x0f,
+            regs.max_slots(),
+            regs.max_ports(),
+            regs.scratchpad_count()
+        );
         debug!(
             "xhci: cap_len={} op=0x{:x} runtime=0x{:x} doorbells=0x{:x} ac64={} csz={}",
             regs.cap_len,

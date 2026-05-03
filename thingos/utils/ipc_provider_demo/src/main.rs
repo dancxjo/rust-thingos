@@ -119,11 +119,13 @@ fn main(_arg: usize) -> ! {
             stem::syscall::exit(1);
         }
     };
-    info!("ipc_provider_demo: port pair write_h={} read_h={}", write_h, read_h);
 
     // ── 2. Mount the provider at MOUNT_POINT ─────────────────────────────
     match vfs_mount(write_h, MOUNT_POINT) {
-        Ok(()) => info!("ipc_provider_demo: mounted at {}", MOUNT_POINT),
+        Ok(()) => info!(
+            "ipc_provider_demo: mounted at {} (write_h={} read_h={})",
+            MOUNT_POINT, write_h, read_h
+        ),
         Err(e) => {
             warn!("ipc_provider_demo: vfs_mount failed: {:?} (continuing anyway for demo)", e);
         }

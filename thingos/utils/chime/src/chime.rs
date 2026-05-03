@@ -1,20 +1,17 @@
 #![no_std]
-use alloc::string::ToString;
-use core::default::Default;
 extern crate alloc;
 use alloc::vec::Vec;
 use core::f32::consts::PI;
 
 pub fn generate_chime(sample_rate: u32) -> Vec<u8> {
-    let duration_secs = 10.0; // Sped up ambient swell (300%)
+    let duration_secs = 4.5;
     let total_samples = (sample_rate as f32 * duration_secs) as usize;
     let mut buffer = Vec::with_capacity(total_samples * 4);
 
-    // Base Frequencies (A3 Major - warmer, less whistle-y)
-    let f_root = 220.0; // A3
-    let f_third = 277.18; // C#4
-    let f_fifth = 329.63; // E4
-    let f_octave = 440.0; // A4 (shimmer)
+    // F major: F-A-C.
+    let f_root = 174.61; // F3
+    let f_third = 220.0; // A3
+    let f_fifth = 261.63; // C4
 
     // Detuning for "Air/Chorus" effect
     // We mix multiple sines per note to break the perfect interference patterns
@@ -25,15 +22,12 @@ pub fn generate_chime(sample_rate: u32) -> Vec<u8> {
         (f_third * 0.997, 0.2), // Third + slight detune
         (f_fifth, 0.3),
         (f_fifth * 1.004, 0.2), // Fifth
-        (f_octave, 0.1),        // Quiet octave
     ];
 
-    let attack = 0.5; // Quick fade-in so chime is heard immediately
-    let release = 2.66; // Sped up tail
+    let attack = 0.18;
+    let release = 1.2;
 
     // Pre-calc envelope points
-    let release_start_sample = (total_samples as f32 * 0.6) as usize; // Check later
-    let release_len_samples = (sample_rate as f32 * release) as usize;
     let attack_samples = (sample_rate as f32 * attack) as usize;
 
     for i in 0..total_samples {
@@ -66,14 +60,14 @@ pub fn generate_chime(sample_rate: u32) -> Vec<u8> {
             signal += libm::sinf(2.0 * PI * freq * t) * amp;
         }
 
-        signal *= env * breath * 0.15; // Master gain
+        signal *= env * breath * 0.18; // Master gain
 
         // Soft Clipping / Saturation to warm it up
         let signal = if signal > 0.8 { 0.8 + (signal - 0.8) * 0.5 } else { signal };
 
         let sample_l = signal;
         // Stereo widener: Phase shift the right port slightly
-        let sample_r = signal * 0.9 + 0.1 * libm::sinf(2.0 * PI * (f_root * 1.01) * t) * env * 0.15;
+        let sample_r = signal * 0.9 + 0.1 * libm::sinf(2.0 * PI * (f_root * 1.01) * t) * env * 0.18;
 
         let pcm_l = (sample_l * 30000.0) as i16;
         let pcm_r = (sample_r * 30000.0) as i16;

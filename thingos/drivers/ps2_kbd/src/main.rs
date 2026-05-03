@@ -157,7 +157,7 @@ fn main(_raw_arg: usize) -> ! {
         }
     };
 
-    stem::info!("ps2_kbd: bristle pid={}", bristle_pid);
+    stem::debug!("Connected PS/2 keyboard events to bristle pid={}.", bristle_pid);
 
     // Subscribe to keyboard interrupt
     match irq_subscribe(KBD_VECTOR) {
@@ -202,13 +202,11 @@ fn drain_keyboard_data(
             // Keyboard data - read and send
             let scancode = ioport_read(PS2_DATA, 1) as u8;
             bytes_read += 1;
-            // Emit "PS/2 take_scancode entry:" on the first byte of each drain
-            // burst, rate-limited to avoid log flooding.
             if bytes_read == 1 {
                 let drain_no = PS2_KBD_DRAIN_COUNT.fetch_add(1, Ordering::Relaxed) + 1;
                 if should_log_input(drain_no) {
                     stem::trace!(
-                        "PS/2 take_scancode entry: drain={} scancode=0x{:02x} status=0x{:02x}",
+                        "PS/2 keyboard drain={} first_scancode=0x{:02x} status=0x{:02x}",
                         drain_no,
                         scancode,
                         status
@@ -318,8 +316,8 @@ fn interrupt_loop(bristle_pid: u32) -> ! {
     let mut rate_window_input = 0u64;
     loop {
         if should_log_input(irq_wake_count + timeout_count + 1) {
-            stem::info!(
-                "ps2_kbd: irq_wait entry vector=0x{:02x} wakes={} timeouts={} input_total={} dropped={}",
+            stem::trace!(
+                "ps2_kbd IRQ wait: vector=0x{:02x} wakes={} timeouts={} input_total={} dropped={}.",
                 KBD_VECTOR,
                 irq_wake_count,
                 timeout_count,
@@ -364,8 +362,8 @@ fn interrupt_loop(bristle_pid: u32) -> ! {
                 let now_ns = stem::monotonic_ns();
                 let window_ns = now_ns.saturating_sub(rate_window_start_ns);
                 if window_ns >= 1_000_000_000 {
-                    stem::info!(
-                        "ps2_kbd: input_rate bytes_per_sec={} total={} irq_wakes={} dropped={}",
+                    stem::debug!(
+                        "ps2_kbd input rate: bytes_per_sec={} total={} irq_wakes={} dropped={}.",
                         rate_window_input,
                         input_count,
                         irq_wake_count,

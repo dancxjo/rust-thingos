@@ -129,12 +129,10 @@ struct NetdConfig {
 }
 
 fn get_args() -> Vec<String> {
-    stem::debug!("NETD: get_args starting...");
     let mut len = 0;
     if let Ok(l) = argv_get(&mut []) {
         len = l;
     }
-    stem::debug!("NETD: argv_get len={}", len);
     if len == 0 {
         return Vec::new();
     }
@@ -150,7 +148,7 @@ fn get_args() -> Vec<String> {
         .skip(1)
         .filter_map(|arg| core::str::from_utf8(arg).ok().map(String::from))
         .collect();
-    stem::debug!("NETD: get_args returning {} args", args.len());
+    stem::debug!("NETD: parsed {} argv bytes into {} args", len, args.len());
     args
 }
 
@@ -586,8 +584,6 @@ fn run_rpc_thread(
 #[stem::main]
 fn main(arg: usize) -> ! {
     info!("NETD: Starting network service...");
-    debug!("NETD: binary v2 (with heap storage) starting...");
-    debug!("NETD: main entry point, arg={}", arg);
     clear_ready_flag();
     let cfg = parse_config();
     if cfg.help {
@@ -595,7 +591,10 @@ fn main(arg: usize) -> ! {
         exit(0);
     }
 
-    debug!("NETD: Starting network service (Phase 3 — /net/ VFS provider)");
+    debug!(
+        "NETD: startup arg={} mount_point={} oneshot={} provider_prefix={}",
+        arg, cfg.mount_point, cfg.oneshot, VIRTIO_PATH_PREFIX
+    );
 
     info!("NETD: Waiting for virtio_netd VFS provider at {}*...", VIRTIO_PATH_PREFIX);
     let (provider_path, rx_fd, tx_fd, events_fd, mac, iface_mtu, initial_link_up) =
@@ -611,7 +610,6 @@ fn main(arg: usize) -> ! {
     let config = Config::new(EthernetAddress(mac).into());
     let mut iface = Interface::new(config, &mut device, VfsNicDevice::now());
 
-    debug!("NETD: creating SocketApi...");
     let socket_api = SocketApi::new();
 
     let mount_point = cfg.mount_point.clone();
@@ -625,7 +623,6 @@ fn main(arg: usize) -> ! {
         }
     };
 
-    debug!("NETD: bridging request port to fd...");
     let req_fd = loop {
         match stem::syscall::vfs::vfs_handle_from_port(net_provider.req_read_port()) {
             Ok(fd) => break fd,
@@ -636,7 +633,6 @@ fn main(arg: usize) -> ! {
         }
     };
 
-    debug!("NETD: setting up /dev/net watch...");
     let nic_watch_fd =
         match vfs_watch_path("/dev/net", watch_mask::ALL_EVENTS, watch_flags::NONBLOCK) {
             Ok(fd) => Some(fd),
@@ -649,7 +645,7 @@ fn main(arg: usize) -> ! {
     // Now mount the provider just before entering the service loop
     loop {
         if net_provider.mount(&mount_point) {
-            debug!("NETD: Successfully mounted at {}", mount_point);
+            debug!("NETD: mounted VFS provider at {} with req_fd={}", mount_point, req_fd);
             break;
         } else {
             warn!("NETD: Failed to mount {}, retrying...", mount_point);
@@ -683,7 +679,6 @@ fn main(arg: usize) -> ! {
     let (cmd_queue, event_queue) = new_queues();
 
     // ── Spawn the RPC/dispatch thread early ──────────────────────────────────
-    debug!("NETD: spawning RPC dispatch thread (pre-DHCP)...");
     {
         let net_state_rpc = net_state.clone();
         let cmd_q = cmd_queue.clone();
@@ -694,12 +689,14 @@ fn main(arg: usize) -> ! {
     }
 
     if cfg.oneshot {
-        debug!("NETD: oneshot mode enabled — DHCP probe will exit after completion");
         let mut state_guard = net_state.lock();
         let state = &mut *state_guard;
         match dhcp::run_dhcp(&mut state.iface, &mut state.device) {
             Ok(cfg) => {
-                debug!("NETD: DHCP — IP: {}, GW: {}, DNS: {}", cfg.ip, cfg.gateway, cfg.dns);
+                debug!(
+                    "NETD: oneshot DHCP result ip={} gateway={} dns={}",
+                    cfg.ip, cfg.gateway, cfg.dns
+                );
                 exit(0);
             }
             Err(e) => {
@@ -709,7 +706,7 @@ fn main(arg: usize) -> ! {
         }
     }
 
-    debug!("NETD: Running DHCP...");
+    info!("NETD: Configuring network with DHCP...");
     let dhcp_config = loop {
         let mut state_guard = net_state.lock();
         let state = &mut *state_guard;
@@ -724,7 +721,7 @@ fn main(arg: usize) -> ! {
     };
 
     debug!(
-        "NETD: DHCP — IP: {}, GW: {}, DNS: {}",
+        "NETD: DHCP configured ip={} gateway={} dns={}",
         dhcp_config.ip, dhcp_config.gateway, dhcp_config.dns
     );
     {
@@ -733,7 +730,7 @@ fn main(arg: usize) -> ! {
     }
 
     // ── Main thread becomes the network poll thread ──────────────────────────
-    debug!("NETD: starting network poll thread");
+    debug!("NETD: entering network poll loop mount_point={} req_fd={}", mount_point, req_fd);
     run_poll_thread(net_state, cmd_queue, event_queue)
 }
 
@@ -759,7 +756,6 @@ pub extern "C" fn thingos_vfs_unmount_v1(_arg: usize) -> i32 {
 }
 
 fn scan_registered_nic_units() -> [bool; MAX_VIRTIO_UNITS as usize] {
-    debug!("NETD: scanning for registered NIC units...");
     let mut seen = [false; MAX_VIRTIO_UNITS as usize];
     for unit in 0..MAX_VIRTIO_UNITS {
         if nic_unit_ready(unit) {
@@ -822,7 +818,6 @@ fn open_nic_device() -> (alloc::string::String, u32, u32, u32, [u8; 6], u32, boo
     let mut probe_round = 0u32;
 
     loop {
-        stem::debug!("NETD: NIC probe loop starting (round={})", probe_round);
         for unit in 0..MAX_VIRTIO_UNITS {
             let provider_path = alloc::format!("{}{}", VIRTIO_PATH_PREFIX, unit);
             let rx_path = alloc::format!("{}/rx", provider_path);
@@ -832,13 +827,13 @@ fn open_nic_device() -> (alloc::string::String, u32, u32, u32, [u8; 6], u32, boo
             let mtu_path = alloc::format!("{}/mtu", provider_path);
             let status_path = alloc::format!("{}/status", provider_path);
 
-            stem::debug!("NETD: Probing {}...", provider_path);
+            stem::trace!("NETD: probing {}", provider_path);
             let rx_fd = match vfs_open(&rx_path, O_RDONLY | O_NONBLOCK) {
                 Ok(fd) => fd,
                 Err(_) => continue,
             };
 
-            stem::debug!("NETD: Found {}/rx, opening others...", provider_path);
+            stem::trace!("NETD: found {}/rx, opening companion files", provider_path);
             let tx_fd = match vfs_open(&tx_path, O_WRONLY) {
                 Ok(fd) => fd,
                 Err(e) => {

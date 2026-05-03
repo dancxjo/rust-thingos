@@ -48,7 +48,6 @@ fn main(_arg: usize) -> ! {
         }
     }
     let (pr, pw) = (pipefds[0], pipefds[1]);
-    info!("ipc_pipe_demo: created pipe read_fd={} write_fd={}", pr, pw);
 
     // ── 2. Write data to the write-end ────────────────────────────────────
     //
@@ -56,7 +55,10 @@ fn main(_arg: usize) -> ! {
     // Here we do it in-process to keep the demo self-contained.
     let msg = b"Hello from the write-end!\n";
     match vfs_write(pw, msg) {
-        Ok(n) => info!("ipc_pipe_demo: wrote {} bytes", n),
+        Ok(n) => info!(
+            "ipc_pipe_demo: created pipe read_fd={} write_fd={} and wrote {} bytes",
+            pr, pw, n
+        ),
         Err(e) => {
             warn!("ipc_pipe_demo: write failed: {:?}", e);
             stem::syscall::exit(1);

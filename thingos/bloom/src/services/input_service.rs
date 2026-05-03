@@ -92,7 +92,7 @@ impl BloomService for InputService {
                 }
                 if self.try_register_with_bristle() {
                     self.registered = true;
-                    stem::info!("bloom: registered bristle pointer sink");
+                    stem::debug!("Registered bristle pointer sink.");
                     LoopAction::None
                 } else {
                     LoopAction::ArmTimer {
@@ -290,8 +290,8 @@ impl InputService {
             return;
         }
         trace_mark_input(input_source::BLOOM, self.rate_window_bytes, self.rate_window_events, 0);
-        stem::info!(
-            "bloom: input_summary wakes={} reads={} events={} bytes={} accum_depth={}",
+        stem::debug!(
+            "Input summary: wakes={} reads={} events={} bytes={} accum_depth={}.",
             self.rate_window_wakes,
             self.rate_window_reads,
             self.rate_window_events,

@@ -2,12 +2,12 @@
 use alloc::string::ToString;
 use core::default::Default;
 extern crate alloc;
-use stem::info;
+use stem::debug;
 
 use super::DevTreeCtx;
 
 #[allow(dead_code)]
 pub fn enumerate(_ctx: &DevTreeCtx) -> Result<(), ()> {
-    info!("SPROUT: Enumerating LoongArch64 platform (stub)...");
+    debug!("SPROUT: LoongArch64 platform enumeration is stubbed");
     Ok(())
 }

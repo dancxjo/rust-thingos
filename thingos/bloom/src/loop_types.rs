@@ -338,7 +338,7 @@ impl BloomLoop {
                 false
             }
             LoopAction::Shutdown => {
-                stem::info!("bloom: shutdown requested by service");
+                stem::info!("Shutdown requested by service.");
                 loop {
                     stem::sleep_ms(1000);
                 }
@@ -357,9 +357,8 @@ impl BloomLoop {
     ///   4. Polls background reload state.
     ///   5. Presents a frame when the frame clock is due and damage is dirty.
     pub fn run(mut self, world: &mut BloomWorld) -> ! {
-        stem::info!("bloom: service loop started");
         stem::info!(
-            "bloom: output0 {}x{} @ {}mHz ready",
+            "Service loop started for output 0 at {}x{} @ {}mHz.",
             world.primary.width,
             world.primary.height,
             world.primary.refresh_mhz
@@ -436,18 +435,18 @@ impl BloomLoop {
             let repaint_needed = world.damage.is_dirty() || world.input.has_pending_cursor_motion();
             if self.frame_clock.repaint_due() && repaint_needed {
                 if !first_frame_rendered {
-                    stem::info!("bloom.phase=first_commit_begin");
+                    stem::debug!("bloom.phase=first_commit_begin");
                 }
                 if let Some(composition) = world.try_present() {
+                    world.note_presented_frame();
                     world.send_frame_callbacks(&composition);
                     self.frame_clock.after_commit();
                     if world.input.has_pending_cursor_motion() {
                         self.frame_clock.request_repaint();
                     }
                     if !first_frame_rendered {
-                        stem::info!("First frame rendered");
-                        stem::info!("bloom.phase=first_commit_done");
-                        stem::info!("bloom.phase=desktop_ready");
+                        stem::info!("First frame rendered.");
+                        stem::debug!("bloom.phase=first_commit_done desktop_ready=1");
                         first_frame_rendered = true;
                     }
                 } else {

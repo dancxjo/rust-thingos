@@ -424,7 +424,7 @@ fn run_driver(claimed_path: Option<String>, bootstrap: Option<SupervisorBootstra
             if let Some(ref path) = effective_mount_path {
                 stem::info!("VIRTIO_NETD: unmounting {}", path);
                 match vfs_umount(path) {
-                    Ok(()) => stem::info!("VIRTIO_NETD: unmounted {}", path),
+                    Ok(()) => stem::debug!("VIRTIO_NETD: unmounted {}", path),
                     Err(e) => warn!("VIRTIO_NETD: vfs_umount({}) failed: {:?}", path, e),
                 }
             }

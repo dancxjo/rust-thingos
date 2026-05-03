@@ -492,7 +492,7 @@ fn generate_limine_config(
         safe_shell_only: bool,
     }
 
-    let default_loglevel = loglevel.unwrap_or("info");
+    let default_loglevel = loglevel.unwrap_or("3");
     let mut entries = vec![
         LimineEntry {
             title: "ThingOS".to_string(),
@@ -533,7 +533,7 @@ fn generate_limine_config(
     ];
 
     if let Some(l) = loglevel {
-        if l != "info" && l != "4" && l != "5" {
+        if l != "info" && l != "3" && l != "4" && l != "5" {
             entries.insert(
                 0,
                 LimineEntry {
@@ -854,7 +854,6 @@ pub fn build_iso_with_config(
         include_busybox,
         include_default_shell,
     );
-    println!("--- DEBUG: Generated limine.conf ---\n{}\n--- END DEBUG ---", limine_conf_content);
     sh.write_file(iso_root.join("boot/limine/limine.conf"), limine_conf_content)?;
 
     match arch {
@@ -1391,7 +1390,7 @@ mod tests {
         assert!(normal_entry.contains("module_path: boot():/drivers/virtio_gpu"));
 
         assert!(
-            bootfb_entry.contains("kernel_cmdline: loglevel=info display=bootfb kernel.terminal=1")
+            bootfb_entry.contains("kernel_cmdline: loglevel=3 display=bootfb kernel.terminal=1")
         );
         assert!(bootfb_entry.contains("module_path: boot():/drivers/display_bootfb"));
         assert!(!bootfb_entry.contains("module_path: boot():/drivers/display_virtio_gpu"));
@@ -1427,7 +1426,7 @@ mod tests {
         let safe_entry = limine_entry(&conf, "ThingOS (Safe Shell)");
 
         assert!(safe_entry.contains(
-            "kernel_cmdline: loglevel=info display=bootfb kernel.terminal=1 sprout.safe=sh sprout.active_ui=terminal"
+            "kernel_cmdline: loglevel=3 display=bootfb kernel.terminal=1 sprout.safe=sh sprout.active_ui=terminal"
         ));
         assert!(safe_entry.contains("module_path: boot():/applications/sprout"));
         assert!(safe_entry.contains("module_path: boot():/bin/sh"));

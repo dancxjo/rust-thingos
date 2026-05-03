@@ -103,8 +103,8 @@ pub fn maybe_log_system_clock_tick(mono_ns: u64) {
     let secs = realtime_ns / NANOS_PER_SEC;
     let nanos = realtime_ns % NANOS_PER_SEC;
     let utc = unix_to_utc_datetime(secs);
-    crate::kinfo!(
-        "System clock tick: utc={:04}-{:02}-{:02} {:02}:{:02}:{:02}.{:09} unix_secs={}.{:09}",
+    crate::kdebug!(
+        "System clock sample: utc={:04}-{:02}-{:02} {:02}:{:02}:{:02}.{:09} unix_secs={}.{:09}.",
         utc.year,
         utc.month,
         utc.day,

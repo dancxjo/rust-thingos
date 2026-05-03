@@ -6,7 +6,7 @@ use alloc::string::{String, ToString};
 use abi::errors::Errno;
 use abi::syscall::vfs_flags::{O_RDONLY, O_RDWR};
 use stem::syscall::vfs::{vfs_close, vfs_open, vfs_read};
-use stem::{info, warn};
+use stem::{debug, info, warn};
 
 const BLOOM_SPAWN_ATTEMPTS: usize = 3;
 const BLOOM_SPAWN_RETRY_MS: u64 = 250;
@@ -170,7 +170,12 @@ pub fn spawn_chime() -> Option<u64> {
         Ok(resp) => {
             let pid = resp.child_tid;
             info!("SPROUT: spawned startup chime (PID={})", pid);
-            let _ = stem::thread::set_priority(pid, 3);
+            match stem::thread::set_priority(pid, 3) {
+                Ok(()) => debug!("SPROUT: startup chime priority set to 3"),
+                Err(err) => {
+                    warn!("SPROUT: failed to set startup chime realtime priority: {:?}", err)
+                }
+            }
             Some(pid)
         }
         Err(err) => {

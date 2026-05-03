@@ -26,6 +26,7 @@ use crate::session_fs;
 
 const ENABLE_HARDWARE_CURSOR: bool = false;
 const SESSION_FS_SYNC_INTERVAL_NS: u64 = 1_000_000_000;
+const BUSY_SPINNER_STABLE_SCENE_FRAMES: u8 = 2;
 
 /// All mutable compositor state owned by the main loop.
 pub struct BloomWorld {
@@ -50,6 +51,9 @@ pub struct BloomWorld {
     last_active_id: Option<u32>,
     /// Frame counter used to schedule periodic cache-stats logging.
     frame_count: u64,
+    busy_spinner_handoff_armed: bool,
+    busy_spinner_stable_frames: u8,
+    busy_spinner_stable_logged: bool,
     pending_session_event: Option<String>,
     next_session_sync_ns: u64,
 }
@@ -86,6 +90,9 @@ impl BloomWorld {
             wayland_evt_write: None,
             last_active_id: None,
             frame_count: 0,
+            busy_spinner_handoff_armed: false,
+            busy_spinner_stable_frames: 0,
+            busy_spinner_stable_logged: false,
             pending_session_event: None,
             next_session_sync_ns: 0,
         }
@@ -351,7 +358,7 @@ impl BloomWorld {
             let _ = port_send_all(port, &msg);
         }
         stem::info!(
-            "bloom: output0 resized {}x{} -> {}x{} @ {}mHz",
+            "Display resized from {}x{} to {}x{} @ {}mHz.",
             old.width,
             old.height,
             next.width,
@@ -671,8 +678,12 @@ impl BloomWorld {
     }
 
     pub fn tick_busy_spinner(&mut self, frame: u32) -> bool {
+        self.tick_busy_spinner_with_opacity(frame, 255)
+    }
+
+    pub fn tick_busy_spinner_with_opacity(&mut self, frame: u32, opacity: u8) -> bool {
         let Some((width, height, hotspot_x, hotspot_y)) =
-            self.visuals.draw_busy_spinner_frame(frame)
+            self.visuals.draw_busy_spinner_frame(frame, opacity)
         else {
             return false;
         };
@@ -684,6 +695,64 @@ impl BloomWorld {
             h: height,
         });
         self.hw_cursor_buffer = None;
+        true
+    }
+
+    pub fn arm_busy_spinner_handoff(&mut self) {
+        if self.busy_spinner_handoff_armed {
+            return;
+        }
+        self.busy_spinner_handoff_armed = true;
+        self.busy_spinner_stable_frames = 0;
+        self.busy_spinner_stable_logged = false;
+        stem::info!("bloom: busy spinner waiting for stable scene");
+    }
+
+    pub fn note_presented_frame(&mut self) {
+        if !self.busy_spinner_handoff_armed
+            || !self.visuals.cursor_is_fallback()
+            || !self.visuals.pending_cursor_ready()
+        {
+            return;
+        }
+        if self.busy_spinner_stable_frames < BUSY_SPINNER_STABLE_SCENE_FRAMES {
+            self.busy_spinner_stable_frames = self.busy_spinner_stable_frames.saturating_add(1);
+        }
+        if self.busy_spinner_stable_frames >= BUSY_SPINNER_STABLE_SCENE_FRAMES
+            && !self.busy_spinner_stable_logged
+        {
+            self.busy_spinner_stable_logged = true;
+            stem::info!(
+                "bloom: busy spinner scene stable after {} frame(s)",
+                self.busy_spinner_stable_frames
+            );
+        }
+    }
+
+    pub fn busy_spinner_can_fade(&self) -> bool {
+        self.busy_spinner_handoff_armed
+            && self.busy_spinner_stable_frames >= BUSY_SPINNER_STABLE_SCENE_FRAMES
+            && self.visuals.cursor_is_fallback()
+            && self.visuals.pending_cursor_ready()
+    }
+
+    pub fn finish_busy_spinner_handoff(&mut self) -> bool {
+        if !self.visuals.activate_pending_cursor(&self.display) {
+            return false;
+        }
+        self.busy_spinner_handoff_armed = false;
+        self.busy_spinner_stable_frames = 0;
+        self.busy_spinner_stable_logged = false;
+        self.cursor_present_logged = false;
+        self.hw_cursor_buffer = None;
+        let (pointer_x, pointer_y) = self.input.visible_pointer_position();
+        self.damage.mark_cursor_rect(abi::display_protocol::Rect {
+            x: pointer_x.saturating_sub(48).max(0) as u32,
+            y: pointer_y.saturating_sub(48).max(0) as u32,
+            w: 96,
+            h: 96,
+        });
+        let _ = self.replay_deferred_cursor_motion();
         true
     }
 

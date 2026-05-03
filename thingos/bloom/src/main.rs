@@ -51,24 +51,21 @@ const THEME_PATH: &str = DEFAULT_THEME_CONFIG_PATH;
 
 #[stem::main]
 fn main(_arg: usize) -> ! {
-    info!("bloom: ENTERING MAIN");
-    info!("bloom: compositor service starting");
-    info!("bloom.phase=start");
+    info!("Starting desktop compositor.");
 
     // ── Check for minimal boot mode ───────────────────────────────────────────
     let minimal_mode = read_minimal_boot_mode();
-    if minimal_mode {
-        info!("bloom.phase=minimal_mode_active no_wallpaper=1 no_cursor=1 no_theme_watch=1");
-    }
+    stem::debug!("bloom: startup minimal_mode={}", minimal_mode);
 
     // ── Connect to the display ────────────────────────────────────────────────
-    info!("bloom.phase=open_display");
+    info!("Connecting to display service.");
+    stem::debug!("bloom.phase=open_display");
     let mut display_opt = None;
     for i in 0..50 {
         stem::debug!("bloom: connect try {}...", i);
         display_opt = connect_display_card();
         if let Some((_, path)) = display_opt.as_ref() {
-            stem::info!("bloom: connected to {} on try {}", path, i);
+            stem::debug!("bloom: connected to {} on try {}", path, i);
             break;
         }
         stem::sleep_ms(100);
@@ -82,8 +79,7 @@ fn main(_arg: usize) -> ! {
             stem::sleep_ms(1000);
         }
     };
-    info!("bloom: using display {}", display_path);
-    info!("bloom.phase=get_info");
+    stem::debug!("bloom.phase=get_info");
     let outputs = display.enumerate_outputs();
     if outputs.is_empty() {
         error!("bloom: no outputs enumerated");
@@ -92,47 +88,26 @@ fn main(_arg: usize) -> ! {
         }
     }
     let primary = outputs[0];
-    info!("bloom: output0 {}x{} @ {}mHz", primary.width, primary.height, primary.refresh_mhz);
-    if display.supports_vblank() {
-        info!("bloom: display driver supports VBLANK (vsync)");
-    } else {
-        info!("bloom: display driver does not support VBLANK");
-    }
-    if primary.supports_dmabuf {
-        info!("bloom: display driver supports linear dmabuf import");
-    }
-    if display.supports_gpu_blit() {
-        info!("bloom: display driver supports GPU blit (hardware transfer/flush)");
-    }
-    if display.supports_direct_scanout() {
-        info!("bloom: display driver supports direct scanout (zero-copy path to display)");
-    }
-    if display.supports_partial_flush() {
-        info!("bloom: display driver supports partial flush (damage regions)");
-    }
-    if display.supports_resource_cache() {
-        info!("bloom: display driver supports resource cache (pre-allocated buffer pool)");
-    }
-    if display.supports_gpu_alpha_blend() {
-        info!("bloom: display driver supports GPU alpha blending (hardware plane blending)");
-    }
-    if display.supports_gpu_scale() {
-        info!("bloom: display driver supports GPU scaling (hardware src-to-dst scaling)");
-    }
-    if display.supports_gpu_rounded_clip() {
-        info!("bloom: display driver supports GPU rounded clip (hardware corner clipping)");
-    }
-    if display.supports_fences() {
-        info!("bloom: display driver supports GPU sync fences (producer/consumer sync)");
-    }
-    if display.supports_accel2d_gpu() {
-        info!(
-            "bloom: display driver accelerates ACCEL2D on GPU (COPY_RECT and ALPHA_BLIT dispatched to virgl)"
-        );
-    }
+    info!("Display ready at {}x{}.", primary.width, primary.height);
+    stem::debug!(
+        "bloom: display details path={} refresh_mhz={} vblank={} dmabuf={} gpu_blit={} direct_scanout={} partial_flush={} resource_cache={} gpu_alpha={} gpu_scale={} rounded_clip={} fences={} accel2d_gpu={}",
+        display_path,
+        primary.refresh_mhz,
+        display.supports_vblank(),
+        primary.supports_dmabuf,
+        display.supports_gpu_blit(),
+        display.supports_direct_scanout(),
+        display.supports_partial_flush(),
+        display.supports_resource_cache(),
+        display.supports_gpu_alpha_blend(),
+        display.supports_gpu_scale(),
+        display.supports_gpu_rounded_clip(),
+        display.supports_fences(),
+        display.supports_accel2d_gpu()
+    );
 
     // ── Create and publish the service port ───────────────────────────────────
-    info!("bloom: creating service port...");
+    stem::debug!("bloom: creating service port");
     let (service_write, service_read) = match port_create(65536) {
         Ok(pair) => pair,
         Err(e) => {
@@ -151,33 +126,33 @@ fn main(_arg: usize) -> ! {
 
     let mut visuals = CompositorVisuals::new();
 
-    info!("bloom.phase=import_primary_buffer");
+    stem::debug!("bloom.phase=import_primary_buffer");
     let initial_theme = ensure_theme_config(THEME_PATH);
     let applied_theme = visuals.set_theme_by_name(&initial_theme);
-    stem::info!("bloom: initial theme configured {}", applied_theme);
+    stem::debug!("bloom: initial theme configured {}", applied_theme);
     visuals.prepare_solid_background(&display, 0xFF0B0A10);
 
-    info!("bloom.phase=load_wallpaper");
+    stem::debug!("bloom.phase=load_wallpaper");
     if !minimal_mode {
         let initial_wallpaper = ensure_wallpaper_config(WP_PATH);
-        stem::info!("bloom: initial wallpaper configured {}", initial_wallpaper);
+        stem::debug!("bloom: initial wallpaper configured {}", initial_wallpaper);
     } else {
-        stem::info!("bloom: skipping wallpaper load (minimal mode)");
+        stem::debug!("bloom: skipping wallpaper load (minimal mode)");
     }
 
-    info!("bloom.phase=init_cursor");
+    stem::debug!("bloom.phase=init_cursor");
     if !minimal_mode {
         visuals.prepare_busy_spinner(&display);
-        stem::info!("bloom: cursor init deferred until visual resources are ready");
+        stem::debug!("bloom: cursor init deferred until visual resources are ready");
     } else {
-        stem::info!("bloom: skipping cursor init (minimal mode)");
+        stem::debug!("bloom: skipping cursor init (minimal mode)");
     }
 
     // ── Initial scene / damage / input state ─────────────────────────────────
     let scene = Scene::new();
     let mut damage = DamageTracker::new();
     damage.mark_full(primary.width, primary.height);
-    info!("bloom.phase=first_damage width={} height={}", primary.width, primary.height);
+    stem::debug!("bloom.phase=first_damage width={} height={}", primary.width, primary.height);
     let input = InputState::new(primary.width, primary.height);
 
     // ── Bristle event port ────────────────────────────────────────────────────
@@ -190,7 +165,7 @@ fn main(_arg: usize) -> ! {
     let wp_watch_fd = if !minimal_mode {
         match vfs_watch_path(WP_PATH, abi::vfs_watch::mask::ALL_EVENTS, 0) {
             Ok(fd) => {
-                info!("bloom: watching wallpaper config {}", WP_PATH);
+                stem::debug!("bloom: watching wallpaper config {}", WP_PATH);
                 Some(fd)
             }
             Err(e) => {
@@ -199,7 +174,7 @@ fn main(_arg: usize) -> ! {
             }
         }
     } else {
-        stem::info!("bloom: skipping wallpaper watch (minimal mode)");
+        stem::debug!("bloom: skipping wallpaper watch (minimal mode)");
         None
     };
 
@@ -207,7 +182,7 @@ fn main(_arg: usize) -> ! {
     let theme_watch_fd = if !minimal_mode {
         match vfs_watch_path(THEME_PATH, abi::vfs_watch::mask::ALL_EVENTS, 0) {
             Ok(fd) => {
-                info!("bloom: watching theme config {}", THEME_PATH);
+                stem::debug!("bloom: watching theme config {}", THEME_PATH);
                 Some(fd)
             }
             Err(e) => {
@@ -216,7 +191,7 @@ fn main(_arg: usize) -> ! {
             }
         }
     } else {
-        stem::info!("bloom: skipping theme watch (minimal mode)");
+        stem::debug!("bloom: skipping theme watch (minimal mode)");
         None
     };
 
@@ -287,7 +262,7 @@ fn main(_arg: usize) -> ! {
                     let arg_ptr = alloc::boxed::Box::into_raw(args) as usize;
                     match stem::thread::spawn_with_arg(wayland::wayland_thread_entry, arg_ptr) {
                         Ok(_) => {
-                            info!("bloom: Wayland server thread spawned");
+                            info!("Wayland server thread spawned.");
                             bloom_loop.add_service(alloc::boxed::Box::new(
                                 WaylandCommandService::new(
                                     cmd_read_fd,

@@ -639,9 +639,6 @@ pub fn init(modules: &'static [crate::BootModuleDesc]) {
     for dir in ROOTFS_VISIBLE_DIRS {
         let _ = root_fs.mkdir(dir);
     }
-    crate::kdebug!("VFS: Created /dev/display directory");
-    crate::kdebug!("VFS: Created /dev/storage directory");
-
     // Create the root union filesystem.
     let mut root_union = union::UnionFs::new_fallthrough();
     root_union.push(Arc::new(bootfs::BootFs::new(modules))); // Layer 0: Read-only boot modules
@@ -675,7 +672,10 @@ pub fn init(modules: &'static [crate::BootModuleDesc]) {
 
     // Session namespace — filesystem-native GUI objects live here.
     mount::mount("/session", Arc::new(ramfs::RamFs::new()), abi::syscall::mount_flags::MREPL);
-    crate::kdebug!("vfs: mounted tmpfs at /session");
+    crate::kdebug!(
+        "vfs: initialized mounts root=/ dev=/dev proc=/proc sys=/sys tmp=/tmp run=/run session=/session visible_dirs={}",
+        ROOTFS_VISIBLE_DIRS.len()
+    );
 }
 
 /// Helper for filesystem drivers to implement `readdir`.

@@ -155,7 +155,7 @@ fn flush_output_buffer() {
         if status & STATUS_OUTPUT_FULL != 0 {
             if status & STATUS_AUX_DATA != 0 {
                 let b = ioport_read(PS2_DATA, 1);
-                debug!("ps2_mouse: flushed garbage byte: 0x{:02x}", b);
+                trace!("ps2_mouse: flushed garbage byte: 0x{:02x}", b);
             } else {
                 // Not ours, leave it for ps2_kbd
                 break;
@@ -249,17 +249,8 @@ fn set_sample_rate(rate: u8) -> bool {
 }
 
 fn init_mouse() {
-    // Phase marker sequence (all emitted via info! so they appear in the serial log):
-    //   ps2.phase=aux_enable_begin  – about to enable the AUX port and read config
-    //   ps2.phase=aux_enable_done   – AUX port enabled, controller config updated
-    //   ps2.phase=mouse_reset_begin – sending 0xFF RESET command to mouse
-    //   ps2.phase=mouse_reset_done  – reset complete (ACK/BAT/ID received or timed out)
-    //   ps2.phase=mouse_sample_rate_begin – negotiating sample rate
-    //   ps2.phase=mouse_sample_rate_done  – sample rate negotiation complete
-    //   ps2.phase=irq_enable_begin  – about to enable mouse data reporting (0xF4)
-    //   ps2.phase=irq_enable_done   – data reporting enabled (or already active)
-    //   ps2.phase=ready             – terminal marker: init complete, event loop starting
-    info!("ps2.phase=aux_enable_begin");
+    info!("Initializing PS/2 mouse controller.");
+    trace!("ps2.phase=aux_enable_begin");
 
     // Clear any initial garbage
     flush_output_buffer();
@@ -278,51 +269,41 @@ fn init_mouse() {
     // Force: Set Bit 1 (IRQ12), Clear Bit 5 (Mouse Disable)
     let new_cfg = (cfg | 0x02) & !0x20;
 
-    if new_cfg != cfg {
+    let cfg_changed = new_cfg != cfg;
+    if cfg_changed {
         write_controller_config(new_cfg);
-        debug!("ps2_mouse: updated controller cfg 0x{:02x} -> 0x{:02x}", cfg, new_cfg);
-    } else {
-        debug!("ps2_mouse: controller cfg already correct (0x{:02x})", cfg);
     }
 
-    info!("ps2.phase=aux_enable_done");
+    trace!("ps2.phase=aux_enable_done");
 
     // Reset mouse (0xFF)
-    info!("ps2.phase=mouse_reset_begin");
-    debug!("ps2_mouse: sending RESET (0xFF)");
+    trace!("ps2.phase=mouse_reset_begin");
     send_aux_byte(0xFF);
     let ack = read_data_filtered(true, "reset ACK (0xfa)").unwrap_or(0);
+    let mut bat = 0;
+    let mut id = 1;
     if ack == 0xFA {
-        debug!("ps2_mouse: reset ACK received (0xfa)");
-        let bat = read_data_filtered(true, "BAT byte (0xAA)").unwrap_or(0);
-        let id = read_data_filtered(true, "Device ID (0x00)").unwrap_or(1);
-        debug!("ps2_mouse: BAT passed (0x{:02x}), ID 0x{:02x} confirmed", bat, id);
+        bat = read_data_filtered(true, "BAT byte (0xAA)").unwrap_or(0);
+        id = read_data_filtered(true, "Device ID (0x00)").unwrap_or(1);
     }
-    info!("ps2.phase=mouse_reset_done");
+    trace!("ps2.phase=mouse_reset_done");
 
-    info!("ps2.phase=mouse_sample_rate_begin");
-    debug!("ps2_mouse: requesting sample rate {} Hz", PREFERRED_SAMPLE_RATE);
-    let _ = if set_sample_rate(PREFERRED_SAMPLE_RATE) {
-        info!("ps2_mouse: sample rate set to {} Hz", PREFERRED_SAMPLE_RATE);
+    trace!("ps2.phase=mouse_sample_rate_begin");
+    let sample_rate = if set_sample_rate(PREFERRED_SAMPLE_RATE) {
         PREFERRED_SAMPLE_RATE
     } else {
-        debug!(
-            "ps2_mouse: {} Hz rejected, falling back to {} Hz",
-            PREFERRED_SAMPLE_RATE, FALLBACK_SAMPLE_RATE
-        );
         if set_sample_rate(FALLBACK_SAMPLE_RATE) {
-            info!("ps2_mouse: sample rate set to {} Hz (fallback)", FALLBACK_SAMPLE_RATE);
+            FALLBACK_SAMPLE_RATE
         } else {
             warn!(
-                "ps2_mouse: fallback sample rate {} Hz also failed; continuing with device default",
+                "PS/2 mouse fallback sample rate {} Hz failed; continuing with the device default.",
                 FALLBACK_SAMPLE_RATE
             );
+            0
         }
-        FALLBACK_SAMPLE_RATE
     };
-    info!("ps2.phase=mouse_sample_rate_done");
+    trace!("ps2.phase=mouse_sample_rate_done");
 
-    debug!("ps2_mouse: setting resolution (3)");
     send_aux_byte(0xE8);
     read_data_filtered(true, "resolution ACK");
     send_aux_byte(3);
@@ -333,35 +314,51 @@ fn init_mouse() {
     let b1 = read_data_filtered(true, "status byte 1").unwrap_or(0);
     let b2 = read_data_filtered(true, "status byte 2").unwrap_or(0);
     let b3 = read_data_filtered(true, "status byte 3").unwrap_or(0);
-    debug!("ps2_mouse: status result = Some({}) Some({}) Some({})", b1, b2, b3);
 
-    info!("ps2.phase=irq_enable_begin");
+    trace!("ps2.phase=irq_enable_begin");
     // Bit 5 indicates Enable/Disable status (1 = Enabled, 0 = Disabled).
     // If it is 0, data reporting is disabled, so we must enable it.
-    if b1 & 0x20 == 0 {
+    let enable_ack = if b1 & 0x20 == 0 {
         // Enable mouse data reporting (0xF4)
-        debug!("ps2_mouse: sending enable command (0xF4)");
         send_aux_byte(MOUSE_ENABLE);
-        let e_ack = read_data_filtered(true, "enable ACK (0xFA)").unwrap_or(0);
-        debug!("ps2_mouse: enable ACK received (0x{:02x})", e_ack);
+        Some(read_data_filtered(true, "enable ACK (0xFA)").unwrap_or(0))
     } else {
-        debug!("ps2_mouse: already enabled, skipping 0xF4 command");
-    }
-    info!("ps2.phase=irq_enable_done");
+        None
+    };
+    trace!("ps2.phase=irq_enable_done");
 
     stem::sleep_ms(100);
 
     // Drain any lingering response bytes.
+    let mut drained = 0u32;
+    let mut last_drained = 0u8;
     for _ in 0..10 {
         if ioport_read(PS2_STATUS, 1) & STATUS_OUTPUT_FULL != 0 {
             let byte = ioport_read(PS2_DATA, 1) as u8;
-            debug!("ps2_mouse: drained 0x{:02x}", byte);
+            drained += 1;
+            last_drained = byte;
+            trace!("ps2_mouse: drained lingering byte 0x{:02x}", byte);
         }
         stem::sleep_ms(10);
     }
 
-    debug!("ps2_mouse: init done");
-    info!("ps2.phase=ready");
+    debug!(
+        "ps2_mouse: init summary cfg=0x{:02x}->0x{:02x} changed={} reset_ack=0x{:02x} bat=0x{:02x} id=0x{:02x} sample_rate={} status=[0x{:02x},0x{:02x},0x{:02x}] enable_ack={} drained={} last_drained=0x{:02x}",
+        cfg,
+        new_cfg,
+        cfg_changed,
+        ack,
+        bat,
+        id,
+        sample_rate,
+        b1,
+        b2,
+        b3,
+        enable_ack.unwrap_or(0),
+        drained,
+        last_drained
+    );
+    info!("PS/2 mouse controller ready.");
 }
 
 /// Path where bristle publishes its inbox-owning PID.
@@ -400,7 +397,7 @@ fn main(_raw_arg: usize) -> ! {
         }
     };
 
-    stem::info!("ps2_mouse: bristle pid={}", bristle_pid);
+    stem::debug!("Connected PS/2 mouse events to bristle pid={}.", bristle_pid);
 
     init_mouse();
 
@@ -683,7 +680,7 @@ fn interrupt_loop(bristle_pid: u32) -> ! {
     loop {
         if should_log_input(irq_wake_count + timeout_count + 1) {
             trace!(
-                "ps2_mouse: irq_wait entry vector=0x{:02x} wakes={} timeouts={} input_total={} dropped={}",
+                "ps2_mouse IRQ wait: vector=0x{:02x} wakes={} timeouts={} input_total={} dropped={}.",
                 MOUSE_VECTOR, irq_wake_count, timeout_count, input_count, drop_counter
             );
         }
@@ -735,8 +732,8 @@ fn interrupt_loop(bristle_pid: u32) -> ! {
                 rate_window_input / 3,
                 drop_counter as u64,
             );
-            stem::info!(
-                "ps2_mouse: input_rate bytes_per_sec={} total={} irq_wakes={} poll_timeouts={} dropped={}",
+            stem::debug!(
+                "ps2_mouse input rate: bytes_per_sec={} total={} irq_wakes={} poll_timeouts={} dropped={}.",
                 rate_window_input,
                 input_count,
                 irq_wake_count,

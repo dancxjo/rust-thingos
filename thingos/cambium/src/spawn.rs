@@ -1,19 +1,20 @@
 extern crate alloc;
 use alloc::string::{String, ToString};
 
-use abi::driver_interface::DriverEntryCtx;
+use abi::driver_interface::{DriverClass, DriverEntryCtx};
 use abi::signal::{SIGKILL, SIGTERM};
 use stem::kinds::{DriverReadyV1, KIND_ID_THINGOS_DRIVER_READY};
 use stem::syscall::message::{KindId, msg_send};
 use stem::syscall::{kill, vfs_umount};
 use stem::time::monotonic_ns;
-use stem::{debug, warn};
+use stem::{debug, info, warn};
 
 use crate::binding::Binding;
 use crate::sysfs::{SysDevice, device_present};
 
 const INITIAL_BACKOFF_MS: u64 = 100;
 const MAX_BACKOFF_MS: u64 = 5_000;
+const AUDIO_REALTIME_PRIORITY: usize = 4;
 
 /// Whether a `ManagedDriver` was created from the symbol-based catalog or from
 /// the legacy static binding table.
@@ -29,6 +30,7 @@ pub struct ManagedDriver {
     mode: SpawnMode,
     pub mount_path: Option<String>,
     pub pid: Option<u64>,
+    driver_class: DriverClass,
     /// PCI identifiers, carried for building the DriverEntryCtx.
     vendor_id: u16,
     device_id: u16,
@@ -49,6 +51,7 @@ impl ManagedDriver {
             mode: SpawnMode::Legacy { driver: binding.driver },
             mount_path,
             pid: None,
+            driver_class: DriverClass::Unknown,
             vendor_id: device.vendor_id,
             device_id: device.device_id,
             class_code: device.class_code,
@@ -65,6 +68,7 @@ impl ManagedDriver {
         device: &SysDevice,
         driver_path: String,
         start_symbol: String,
+        driver_class: DriverClass,
         mount_path: Option<String>,
     ) -> Self {
         Self {
@@ -72,6 +76,7 @@ impl ManagedDriver {
             mode: SpawnMode::Catalog { driver_path, start_symbol },
             mount_path,
             pid: None,
+            driver_class,
             vendor_id: device.vendor_id,
             device_id: device.device_id,
             class_code: device.class_code,
@@ -141,6 +146,7 @@ impl ManagedDriver {
                     driver, self.slot, boot_fd, resp.child_tid
                 );
                 self.pid = Some(resp.child_tid);
+                self.apply_spawn_priority(resp.child_tid);
                 send_driver_ready(resp.child_tid);
             }
             Err(err) => {
@@ -193,6 +199,7 @@ impl ManagedDriver {
                     driver_path, self.slot, entry_symbol, resp.child_tid
                 );
                 self.pid = Some(resp.child_tid);
+                self.apply_spawn_priority(resp.child_tid);
                 send_driver_ready(resp.child_tid);
             }
             Err(err) => {
@@ -222,6 +229,20 @@ impl ManagedDriver {
         let len = bytes.len().min(127);
         ctx.device_path[..len].copy_from_slice(&bytes[..len]);
         ctx
+    }
+
+    fn apply_spawn_priority(&self, pid: u64) {
+        if self.driver_class != DriverClass::Audio {
+            return;
+        }
+
+        match stem::thread::set_priority(pid, AUDIO_REALTIME_PRIORITY) {
+            Ok(()) => info!("CAMBIUM: audio driver PID {} priority set to realtime", pid),
+            Err(err) => warn!(
+                "CAMBIUM: failed to set audio driver PID {} realtime priority: {:?}",
+                pid, err
+            ),
+        }
     }
 
     pub fn monitor(&mut self) {

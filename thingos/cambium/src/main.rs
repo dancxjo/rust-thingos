@@ -133,7 +133,13 @@ fn run_manual_mode(driver_path: &str, slot_filter: Option<&str>) -> ! {
                 && entry.matches_pci(d.vendor_id, d.device_id, d.class_code)
         })
         .map(|d| {
-            ManagedDriver::new_from_catalog(&d, abs_path.clone(), entry.start_symbol.clone(), None)
+            ManagedDriver::new_from_catalog(
+                &d,
+                abs_path.clone(),
+                entry.start_symbol.clone(),
+                entry.driver_class,
+                None,
+            )
         })
         .collect();
 
@@ -158,6 +164,7 @@ fn run_manual_mode(driver_path: &str, slot_filter: Option<&str>) -> ! {
                 &fake_device,
                 abs_path.clone(),
                 entry.start_symbol.clone(),
+                entry.driver_class,
                 None,
             ));
         } else {
@@ -558,8 +565,8 @@ fn reconcile_devices(
             );
             let is_xhci_pci = device.slot.starts_with("pci-") && device.class_code == 0x0c0330;
             if is_xhci_pci {
-                stem::info!(
-                    "CAMBIUM: discovered xHCI PCI device slot={} vendor=0x{:04x} device=0x{:04x} class=0x{:06x} present={}",
+                stem::debug!(
+                    "Discovered xHCI PCI device: slot={} vendor=0x{:04x} device=0x{:04x} class=0x{:06x} present={}.",
                     device.slot,
                     device.vendor_id,
                     device.device_id,
@@ -592,10 +599,9 @@ fn reconcile_devices(
             }) {
                 if is_xhci_pci {
                     stem::info!(
-                        "CAMBIUM: matched driver '{}' for xHCI PCI device {} class=0x{:06x}",
+                        "Starting xHCI driver '{}' for PCI device {}.",
                         entry.path,
-                        device.slot,
-                        device.class_code
+                        device.slot
                     );
                 }
                 if should_skip_for_display_input_isolation(entry.driver_class, &entry.path) {
@@ -634,6 +640,7 @@ fn reconcile_devices(
                         device,
                         entry.path.clone(),
                         entry.start_symbol.clone(),
+                        entry.driver_class,
                         mount_path,
                     )
                 });
