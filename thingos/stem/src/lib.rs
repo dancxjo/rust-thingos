@@ -8,6 +8,7 @@ pub use abi;
 #[cfg(all(feature = "rt", not(feature = "std")))]
 pub use stem_macros::main;
 
+pub mod application;
 pub mod arch;
 pub mod bitset;
 pub mod block;

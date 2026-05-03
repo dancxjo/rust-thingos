@@ -1911,7 +1911,7 @@ fn draw_theme_svg_icon(
     if rect.w <= 0 || rect.h <= 0 {
         return false;
     }
-    let icon_size = (rect.w.min(rect.h) as u32).saturating_sub(10).clamp(12, 14);
+    let icon_size = (rect.w.min(rect.h) as u32).saturating_sub(16).clamp(18, 26);
     let dst_x = rect.x + (rect.w - icon_size as i32) / 2;
     let dst_y = rect.y + (rect.h - icon_size as i32) / 2;
     call_draw_svg_icon(
@@ -2165,8 +2165,8 @@ fn draw_facet_control_glyph(
     let h = rect.h as i32;
     let cx = x + w / 2 + CHROME_ICON_X_BIAS;
     let cy = y + h / 2 + CHROME_ICON_Y_BIAS;
-    let grid = 12i32;
-    let stroke = 2i32;
+    let grid = 18i32;
+    let stroke = 3i32;
 
     match button {
         ChromeButton::Minimize | ChromeButton::Shade => {

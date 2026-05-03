@@ -13,13 +13,17 @@ use petals::{
     ShowcaseComponent, ShowcaseServices, State, UiTree,
 };
 use pistil_types::Texture;
+use stem::application::{
+    AppAction, Application, ApplicationContext, ServiceLooper, WindowToken, run_application,
+};
 use stem::info;
-use stem::service_loop::{ServiceEvent, ServiceLoop};
+use stem::service_loop::ServiceEvent;
 use stem::syscall::socket::{connect, sendmsg, socket};
 use stem::syscall::socket_domain::AF_UNIX;
 use stem::syscall::socket_type::SOCK_STREAM;
-use stem::syscall::{exit, sleep_ms, vfs_close, vfs_read, vfs_write};
+use stem::syscall::{sleep_ms, vfs_close, vfs_read, vfs_write};
 use stem::time::Duration;
+use stem::wait_set::WaitToken;
 
 const REGISTRY_ID: u32 = 2;
 const COMPOSITOR_ID: u32 = 3;
@@ -82,112 +86,155 @@ struct PendingSurface {
 
 #[stem::main]
 fn main(_arg: usize) -> ! {
-    let fd = connect_wayland();
-    let text_renderer = load_text_renderer();
-    let mut app_loop = match ServiceLoop::new(4096) {
-        Ok(loop_) => loop_,
-        Err(e) => {
-            stem::error!("wayland_hello: ServiceLoop::new failed: {:?}", e);
-            idle_forever();
-        }
-    };
-    app_loop.set_name("wayland_hello");
-    let wayland_token = match app_loop.add_fd_readable(fd) {
-        Ok(token) => token,
-        Err(e) => {
-            stem::error!("wayland_hello: failed to register Wayland fd: {:?}", e);
-            idle_forever();
-        }
-    };
-    info!("wayland_hello: service loop started");
-    let showcase = PetalsShowcase::default();
-    let mut showcase_services = ShowcaseServices::default();
+    run_application::<WaylandHelloApp>()
+}
 
-    send_get_registry(fd, REGISTRY_ID);
-    let globals = read_initial_globals(fd);
+struct WaylandHelloApp {
+    fd: u32,
+    wayland_token: WaitToken,
+    text_renderer: Option<TextRenderer>,
+    showcase: PetalsShowcase,
+    showcase_services: ShowcaseServices,
+    dmabuf_id: Option<u32>,
+    presentation_id: Option<u32>,
+    top_pending: PendingSurface,
+    popup_pending: PendingSurface,
+    top_buffer: Option<BufferState>,
+    popup_buffer: Option<BufferState>,
+    popup_created: bool,
+    popup_window: Option<WindowToken>,
+    next_callback_id: u32,
+    pending_frame_callbacks: Vec<u32>,
+    pending_presentation_feedbacks: Vec<u32>,
+}
 
-    bind_global(fd, 1, "wl_compositor", 4, COMPOSITOR_ID);
-    bind_global(fd, 2, "wl_shm", 1, SHM_ID);
-    bind_global(fd, 3, "xdg_wm_base", 1, WM_BASE_ID);
-    bind_global(fd, 4, "wl_seat", 5, SEAT_ID);
-    let dmabuf_id = if let Some(name) = globals.dmabuf_name {
-        bind_global(fd, name, "zwp_linux_dmabuf_v1", 3, DMABUF_ID);
-        info!("wayland_hello: using zwp_linux_dmabuf_v1 buffers");
-        Some(DMABUF_ID)
-    } else {
-        info!("wayland_hello: zwp_linux_dmabuf_v1 unavailable; using wl_shm buffers");
-        None
-    };
-    let presentation_id = if let Some(name) = globals.presentation_name {
-        bind_global(fd, name, "wp_presentation", 1, PRESENTATION_ID);
-        info!("wayland_hello: bound wp_presentation");
-        Some(PRESENTATION_ID)
-    } else {
-        info!("wayland_hello: wp_presentation unavailable");
-        None
-    };
-    seat_get_pointer(fd, SEAT_ID, POINTER_ID);
-    seat_get_keyboard(fd, SEAT_ID, KEYBOARD_ID);
+impl Application for WaylandHelloApp {
+    const NAME: &'static str = "wayland_hello";
 
-    create_surface(fd, COMPOSITOR_ID, TOP_SURFACE_ID);
+    fn init(
+        ctx: &mut ApplicationContext,
+        looper: &mut ServiceLooper,
+    ) -> Result<Self, stem::errors::Errno> {
+        let fd = connect_wayland();
+        let text_renderer = load_text_renderer();
+        let wayland_token = looper.add_fd_readable(fd)?;
 
-    // wl_region smoke test: exercise the full region lifecycle before commit.
-    // This verifies that wl_compositor.create_region produces a live object
-    // (not a tombstone) and that wl_region.add / set_opaque_region / destroy
-    // are accepted by the compositor without triggering a protocol error.
-    create_region(fd, COMPOSITOR_ID, REGION_ID);
-    region_add(fd, REGION_ID, 0, 0, 480, 320);
-    set_opaque_region(fd, TOP_SURFACE_ID, REGION_ID);
-    region_destroy(fd, REGION_ID);
-    info!("wayland_hello: wl_region smoke test: create+add+set_opaque+destroy");
+        let showcase = PetalsShowcase::default();
+        let showcase_services = ShowcaseServices::default();
 
-    // input_region smoke test: verify set_input_region lifecycle.
-    // Creates a region, adds a sub-rect, sets it as the input region, then
-    // destroys the region object.  The compositor resolves the region at
-    // commit time and applies it to pointer hit-testing.
-    create_region(fd, COMPOSITOR_ID, REGION_ID);
-    region_add(fd, REGION_ID, 0, 0, 480, 320);
-    set_input_region(fd, TOP_SURFACE_ID, REGION_ID);
-    region_destroy(fd, REGION_ID);
-    info!("wayland_hello: wl_region smoke test: create+add+set_input+destroy");
+        send_get_registry(fd, REGISTRY_ID);
+        let globals = read_initial_globals(fd);
 
-    get_xdg_surface(fd, WM_BASE_ID, TOP_XDG_SURFACE_ID, TOP_SURFACE_ID);
-    get_toplevel(fd, TOP_XDG_SURFACE_ID, TOPLEVEL_ID);
-    set_toplevel_title(fd, TOPLEVEL_ID, "Thing-OS Wayland Lab");
-    set_toplevel_app_id(fd, TOPLEVEL_ID, "thingos.wayland_hello");
-    commit_surface(fd, TOP_SURFACE_ID);
-
-    let mut top_pending = PendingSurface { serial: None, width: 760, height: 560, dirty: false };
-    let mut popup_pending = PendingSurface { serial: None, width: 260, height: 150, dirty: false };
-    let mut top_buffer: Option<BufferState> = None;
-    let mut popup_buffer: Option<BufferState> = None;
-    let mut popup_created = false;
-    let mut next_callback_id = 1000u32;
-    let mut pending_frame_callbacks: Vec<u32> = Vec::new();
-    let mut pending_presentation_feedbacks: Vec<u32> = Vec::new();
-
-    loop {
-        let wayland_ready = match app_loop.next_event(Some(Duration::from_millis(16))) {
-            Ok(ServiceEvent::Ready { token, .. }) if token == wayland_token => true,
-            Ok(ServiceEvent::InboxClosed) => {
-                info!("wayland_hello: inbox closed; exiting");
-                exit(0);
-            }
-            Ok(ServiceEvent::Message { .. }) | Ok(ServiceEvent::Timeout) => false,
-            Ok(ServiceEvent::Ready { .. }) => false,
-            Err(e) => {
-                stem::warn!("wayland_hello: service loop wait failed: {:?}", e);
-                false
-            }
+        bind_global(fd, 1, "wl_compositor", 4, COMPOSITOR_ID);
+        bind_global(fd, 2, "wl_shm", 1, SHM_ID);
+        bind_global(fd, 3, "xdg_wm_base", 1, WM_BASE_ID);
+        bind_global(fd, 4, "wl_seat", 5, SEAT_ID);
+        let dmabuf_id = if let Some(name) = globals.dmabuf_name {
+            bind_global(fd, name, "zwp_linux_dmabuf_v1", 3, DMABUF_ID);
+            info!("wayland_hello: using zwp_linux_dmabuf_v1 buffers");
+            Some(DMABUF_ID)
+        } else {
+            info!("wayland_hello: zwp_linux_dmabuf_v1 unavailable; using wl_shm buffers");
+            None
         };
-        if !wayland_ready {
-            continue;
-        }
+        let presentation_id = if let Some(name) = globals.presentation_name {
+            bind_global(fd, name, "wp_presentation", 1, PRESENTATION_ID);
+            info!("wayland_hello: bound wp_presentation");
+            Some(PRESENTATION_ID)
+        } else {
+            info!("wayland_hello: wp_presentation unavailable");
+            None
+        };
+        seat_get_pointer(fd, SEAT_ID, POINTER_ID);
+        seat_get_keyboard(fd, SEAT_ID, KEYBOARD_ID);
 
+        create_surface(fd, COMPOSITOR_ID, TOP_SURFACE_ID);
+
+        // wl_region smoke test: exercise the full region lifecycle before commit.
+        // This verifies that wl_compositor.create_region produces a live object
+        // (not a tombstone) and that wl_region.add / set_opaque_region / destroy
+        // are accepted by the compositor without triggering a protocol error.
+        create_region(fd, COMPOSITOR_ID, REGION_ID);
+        region_add(fd, REGION_ID, 0, 0, 480, 320);
+        set_opaque_region(fd, TOP_SURFACE_ID, REGION_ID);
+        region_destroy(fd, REGION_ID);
+        info!("wayland_hello: wl_region smoke test: create+add+set_opaque+destroy");
+
+        // input_region smoke test: verify set_input_region lifecycle.
+        // Creates a region, adds a sub-rect, sets it as the input region, then
+        // destroys the region object.  The compositor resolves the region at
+        // commit time and applies it to pointer hit-testing.
+        create_region(fd, COMPOSITOR_ID, REGION_ID);
+        region_add(fd, REGION_ID, 0, 0, 480, 320);
+        set_input_region(fd, TOP_SURFACE_ID, REGION_ID);
+        region_destroy(fd, REGION_ID);
+        info!("wayland_hello: wl_region smoke test: create+add+set_input+destroy");
+
+        get_xdg_surface(fd, WM_BASE_ID, TOP_XDG_SURFACE_ID, TOP_SURFACE_ID);
+        get_toplevel(fd, TOP_XDG_SURFACE_ID, TOPLEVEL_ID);
+        set_toplevel_title(fd, TOPLEVEL_ID, "Thing-OS Wayland Lab");
+        set_toplevel_app_id(fd, TOPLEVEL_ID, "thingos.wayland_hello");
+        commit_surface(fd, TOP_SURFACE_ID);
+
+        ctx.register_window("wayland toplevel", move || close_toplevel_objects(fd));
+        ctx.register_cleanup("wayland fd", move || {
+            let _ = vfs_close(fd);
+        });
+
+        Ok(Self {
+            fd,
+            wayland_token,
+            text_renderer,
+            showcase,
+            showcase_services,
+            dmabuf_id,
+            presentation_id,
+            top_pending: PendingSurface { serial: None, width: 760, height: 560, dirty: false },
+            popup_pending: PendingSurface { serial: None, width: 260, height: 150, dirty: false },
+            top_buffer: None,
+            popup_buffer: None,
+            popup_created: false,
+            popup_window: None,
+            next_callback_id: 1000,
+            pending_frame_callbacks: Vec::new(),
+            pending_presentation_feedbacks: Vec::new(),
+        })
+    }
+
+    fn ready(&mut self, _ctx: &mut ApplicationContext) {
+        info!("wayland_hello: service loop started");
+    }
+
+    fn timeout(&self) -> Option<Duration> {
+        Some(Duration::from_millis(16))
+    }
+
+    fn handle_event(&mut self, ctx: &mut ApplicationContext, event: ServiceEvent<'_>) -> AppAction {
+        match event {
+            ServiceEvent::Ready { token, event }
+                if token == self.wayland_token && event.is_readable() =>
+            {
+                self.read_wayland(ctx)
+            }
+            ServiceEvent::Ready { token, event }
+                if token == self.wayland_token && (event.is_hangup() || event.is_error()) =>
+            {
+                AppAction::Quit
+            }
+            ServiceEvent::Message { .. } | ServiceEvent::Timeout | ServiceEvent::Ready { .. } => {
+                AppAction::Continue
+            }
+            ServiceEvent::InboxClosed => AppAction::Quit,
+        }
+    }
+}
+
+impl WaylandHelloApp {
+    fn read_wayland(&mut self, ctx: &mut ApplicationContext) -> AppAction {
         let mut in_buf = [0u8; 4096];
-        let len = match vfs_read(fd, &mut in_buf) {
+        let len = match vfs_read(self.fd, &mut in_buf) {
             Ok(n) if n > 0 => n,
-            _ => continue,
+            _ => return AppAction::Continue,
         };
 
         let mut offset = 0usize;
@@ -199,26 +246,26 @@ fn main(_arg: usize) -> ! {
             let payload = &in_buf[offset + 8..offset + size as usize];
             match (object_id, opcode) {
                 (WM_BASE_ID, 0) if payload.len() >= 4 => {
-                    send_pong(fd, WM_BASE_ID, read_u32(payload, 0));
+                    send_pong(self.fd, WM_BASE_ID, read_u32(payload, 0));
                 }
                 (TOP_XDG_SURFACE_ID, 0) if payload.len() >= 4 => {
-                    top_pending.serial = Some(read_u32(payload, 0));
-                    top_pending.dirty = true;
+                    self.top_pending.serial = Some(read_u32(payload, 0));
+                    self.top_pending.dirty = true;
                 }
                 (TOPLEVEL_ID, 0) if payload.len() >= 12 => {
                     let width = read_i32(payload, 0);
                     let height = read_i32(payload, 4);
                     if width > 0 {
-                        top_pending.width = width as u32;
+                        self.top_pending.width = width as u32;
                     }
                     if height > 0 {
-                        top_pending.height = height as u32;
+                        self.top_pending.height = height as u32;
                     }
                 }
                 (TOPLEVEL_ID, 1) => {
                     info!("wayland_hello: compositor requested close; exiting");
                     vfs_write(1, b"wayland_hello: explicit exit(0) call\n").ok();
-                    exit(0);
+                    return AppAction::Quit;
                 }
                 (POINTER_ID, 0) if payload.len() >= 16 => {
                     info!(
@@ -264,33 +311,32 @@ fn main(_arg: usize) -> ! {
                     info!("wayland_hello: keyboard modifiers depressed={}", read_u32(payload, 4));
                 }
                 (POPUP_XDG_SURFACE_ID, 0) if payload.len() >= 4 => {
-                    popup_pending.serial = Some(read_u32(payload, 0));
-                    popup_pending.dirty = true;
+                    self.popup_pending.serial = Some(read_u32(payload, 0));
+                    self.popup_pending.dirty = true;
                 }
                 (POPUP_ID, 0) if payload.len() >= 16 => {
                     let width = read_i32(payload, 8);
                     let height = read_i32(payload, 12);
                     if width > 0 {
-                        popup_pending.width = width as u32;
+                        self.popup_pending.width = width as u32;
                     }
                     if height > 0 {
-                        popup_pending.height = height as u32;
+                        self.popup_pending.height = height as u32;
                     }
                 }
                 (POPUP_ID, 1) => {
                     info!("wayland_hello: compositor dismissed popup (popup_done)");
-                    popup_created = false;
-                    popup_pending.serial = None;
+                    self.close_popup(ctx);
                 }
-                (_, 0) if pending_frame_callbacks.iter().any(|&id| id == object_id) => {
+                (_, 0) if self.pending_frame_callbacks.iter().any(|&id| id == object_id) => {
                     let callback_data = if payload.len() >= 4 { read_u32(payload, 0) } else { 0 };
                     info!(
                         "wayland_hello: frame callback done object={} data={}",
                         object_id, callback_data
                     );
-                    pending_frame_callbacks.retain(|&id| id != object_id);
+                    self.pending_frame_callbacks.retain(|&id| id != object_id);
                 }
-                (_, 1) if pending_presentation_feedbacks.iter().any(|&id| id == object_id) => {
+                (_, 1) if self.pending_presentation_feedbacks.iter().any(|&id| id == object_id) => {
                     // wp_presentation_feedback.presented(tv_sec_hi, tv_sec_lo,
                     //   tv_nsec, refresh, seq_hi, seq_lo, flags)
                     let tv_sec_hi = if payload.len() >= 4 { read_u32(payload, 0) } else { 0 };
@@ -306,87 +352,137 @@ fn main(_arg: usize) -> ! {
                         refresh,
                         seq_lo
                     );
-                    pending_presentation_feedbacks.retain(|&id| id != object_id);
+                    self.pending_presentation_feedbacks.retain(|&id| id != object_id);
                 }
-                (_, 2) if pending_presentation_feedbacks.iter().any(|&id| id == object_id) => {
+                (_, 2) if self.pending_presentation_feedbacks.iter().any(|&id| id == object_id) => {
                     info!("wayland_hello: wp_presentation_feedback.discarded object={}", object_id);
-                    pending_presentation_feedbacks.retain(|&id| id != object_id);
+                    self.pending_presentation_feedbacks.retain(|&id| id != object_id);
                 }
                 _ => {}
             }
             offset += size as usize;
         }
 
-        if top_pending.dirty {
-            let title = "Thing-OS Wayland";
-            let buffer = ensure_buffer(
-                fd,
-                SHM_ID,
-                dmabuf_id,
-                &mut top_buffer,
-                TOP_SURFACE_ID + 100,
-                top_pending.width,
-                top_pending.height,
-            );
-            render_window(buffer, title, &showcase, &mut showcase_services, text_renderer.as_ref());
-            ack_configure(fd, TOP_XDG_SURFACE_ID, top_pending.serial.unwrap_or(0));
-            attach_buffer(fd, TOP_SURFACE_ID, buffer.buffer_id);
-            damage_surface(fd, TOP_SURFACE_ID, 0, 0, top_pending.width, top_pending.height);
-            let cb_id = alloc_callback_id(&mut next_callback_id);
-            request_frame(fd, TOP_SURFACE_ID, cb_id);
-            pending_frame_callbacks.push(cb_id);
-            if let Some(pid) = presentation_id {
-                let fb_id = alloc_callback_id(&mut next_callback_id);
-                request_presentation_feedback(fd, pid, TOP_SURFACE_ID, fb_id);
-                pending_presentation_feedbacks.push(fb_id);
-            }
-            commit_surface(fd, TOP_SURFACE_ID);
-            top_pending.dirty = false;
+        self.flush_pending(ctx);
+        AppAction::Continue
+    }
 
-            if !popup_created {
-                popup_created = true;
-                create_surface(fd, COMPOSITOR_ID, POPUP_SURFACE_ID);
-                get_xdg_surface(fd, WM_BASE_ID, POPUP_XDG_SURFACE_ID, POPUP_SURFACE_ID);
-                create_positioner(fd, WM_BASE_ID, POSITIONER_ID);
-                positioner_set_size(fd, POSITIONER_ID, 260, 150);
-                positioner_set_anchor_rect(fd, POSITIONER_ID, 24, 24, 100, 24);
-                positioner_set_offset(fd, POSITIONER_ID, 0, 6);
-                get_popup(fd, TOP_XDG_SURFACE_ID, POPUP_XDG_SURFACE_ID, POPUP_ID, POSITIONER_ID);
-                commit_surface(fd, POPUP_SURFACE_ID);
-            }
+    fn flush_pending(&mut self, ctx: &mut ApplicationContext) {
+        if self.top_pending.dirty {
+            self.render_top(ctx);
         }
 
-        if popup_created && popup_pending.dirty {
-            let buffer = ensure_buffer(
-                fd,
-                SHM_ID,
-                dmabuf_id,
-                &mut popup_buffer,
-                POPUP_SURFACE_ID + 100,
-                popup_pending.width,
-                popup_pending.height,
-            );
-            render_popup(
-                buffer,
-                "Petals services",
-                &showcase,
-                &mut showcase_services,
-                text_renderer.as_ref(),
-            );
-            ack_configure(fd, POPUP_XDG_SURFACE_ID, popup_pending.serial.unwrap_or(0));
-            attach_buffer(fd, POPUP_SURFACE_ID, buffer.buffer_id);
-            damage_surface(fd, POPUP_SURFACE_ID, 0, 0, popup_pending.width, popup_pending.height);
-            let cb_id = alloc_callback_id(&mut next_callback_id);
-            request_frame(fd, POPUP_SURFACE_ID, cb_id);
-            pending_frame_callbacks.push(cb_id);
-            if let Some(pid) = presentation_id {
-                let fb_id = alloc_callback_id(&mut next_callback_id);
-                request_presentation_feedback(fd, pid, POPUP_SURFACE_ID, fb_id);
-                pending_presentation_feedbacks.push(fb_id);
-            }
-            commit_surface(fd, POPUP_SURFACE_ID);
-            popup_pending.dirty = false;
+        if self.popup_created && self.popup_pending.dirty {
+            self.render_popup();
         }
+    }
+
+    fn render_top(&mut self, ctx: &mut ApplicationContext) {
+        let title = "Thing-OS Wayland";
+        let buffer = ensure_buffer(
+            self.fd,
+            SHM_ID,
+            self.dmabuf_id,
+            &mut self.top_buffer,
+            TOP_SURFACE_ID + 100,
+            self.top_pending.width,
+            self.top_pending.height,
+        );
+        render_window(
+            buffer,
+            title,
+            &self.showcase,
+            &mut self.showcase_services,
+            self.text_renderer.as_ref(),
+        );
+        ack_configure(self.fd, TOP_XDG_SURFACE_ID, self.top_pending.serial.unwrap_or(0));
+        attach_buffer(self.fd, TOP_SURFACE_ID, buffer.buffer_id);
+        damage_surface(
+            self.fd,
+            TOP_SURFACE_ID,
+            0,
+            0,
+            self.top_pending.width,
+            self.top_pending.height,
+        );
+        let cb_id = alloc_callback_id(&mut self.next_callback_id);
+        request_frame(self.fd, TOP_SURFACE_ID, cb_id);
+        self.pending_frame_callbacks.push(cb_id);
+        if let Some(pid) = self.presentation_id {
+            let fb_id = alloc_callback_id(&mut self.next_callback_id);
+            request_presentation_feedback(self.fd, pid, TOP_SURFACE_ID, fb_id);
+            self.pending_presentation_feedbacks.push(fb_id);
+        }
+        commit_surface(self.fd, TOP_SURFACE_ID);
+        self.top_pending.dirty = false;
+
+        if !self.popup_created {
+            self.create_popup(ctx);
+        }
+    }
+
+    fn create_popup(&mut self, ctx: &mut ApplicationContext) {
+        self.popup_created = true;
+        create_surface(self.fd, COMPOSITOR_ID, POPUP_SURFACE_ID);
+        get_xdg_surface(self.fd, WM_BASE_ID, POPUP_XDG_SURFACE_ID, POPUP_SURFACE_ID);
+        create_positioner(self.fd, WM_BASE_ID, POSITIONER_ID);
+        positioner_set_size(self.fd, POSITIONER_ID, 260, 150);
+        positioner_set_anchor_rect(self.fd, POSITIONER_ID, 24, 24, 100, 24);
+        positioner_set_offset(self.fd, POSITIONER_ID, 0, 6);
+        get_popup(self.fd, TOP_XDG_SURFACE_ID, POPUP_XDG_SURFACE_ID, POPUP_ID, POSITIONER_ID);
+        commit_surface(self.fd, POPUP_SURFACE_ID);
+        let fd = self.fd;
+        self.popup_window =
+            Some(ctx.register_window("wayland popup", move || close_popup_objects(fd)));
+    }
+
+    fn render_popup(&mut self) {
+        let buffer = ensure_buffer(
+            self.fd,
+            SHM_ID,
+            self.dmabuf_id,
+            &mut self.popup_buffer,
+            POPUP_SURFACE_ID + 100,
+            self.popup_pending.width,
+            self.popup_pending.height,
+        );
+        render_popup(
+            buffer,
+            "Petals services",
+            &self.showcase,
+            &mut self.showcase_services,
+            self.text_renderer.as_ref(),
+        );
+        ack_configure(self.fd, POPUP_XDG_SURFACE_ID, self.popup_pending.serial.unwrap_or(0));
+        attach_buffer(self.fd, POPUP_SURFACE_ID, buffer.buffer_id);
+        damage_surface(
+            self.fd,
+            POPUP_SURFACE_ID,
+            0,
+            0,
+            self.popup_pending.width,
+            self.popup_pending.height,
+        );
+        let cb_id = alloc_callback_id(&mut self.next_callback_id);
+        request_frame(self.fd, POPUP_SURFACE_ID, cb_id);
+        self.pending_frame_callbacks.push(cb_id);
+        if let Some(pid) = self.presentation_id {
+            let fb_id = alloc_callback_id(&mut self.next_callback_id);
+            request_presentation_feedback(self.fd, pid, POPUP_SURFACE_ID, fb_id);
+            self.pending_presentation_feedbacks.push(fb_id);
+        }
+        commit_surface(self.fd, POPUP_SURFACE_ID);
+        self.popup_pending.dirty = false;
+    }
+
+    fn close_popup(&mut self, ctx: &mut ApplicationContext) {
+        if let Some(token) = self.popup_window.take() {
+            ctx.close_window(token);
+        }
+        self.popup_created = false;
+        self.popup_pending.serial = None;
+        self.popup_pending.dirty = false;
+        self.popup_buffer = None;
     }
 }
 
@@ -1055,12 +1151,6 @@ fn log_dlerror(prefix: &str) {
     }
 }
 
-fn idle_forever() -> ! {
-    loop {
-        sleep_ms(1000);
-    }
-}
-
 fn send_get_registry(fd: u32, new_id: u32) {
     let mut buf = Vec::new();
     encode_header(1, 1, 12, &mut buf);
@@ -1293,6 +1383,27 @@ fn request_presentation_feedback(fd: u32, presentation_id: u32, surface_id: u32,
 fn commit_surface(fd: u32, surface_id: u32) {
     let mut buf = Vec::new();
     encode_header(surface_id, 6, 8, &mut buf);
+    send_request(fd, &buf);
+}
+
+fn close_toplevel_objects(fd: u32) {
+    destroy_object(fd, TOPLEVEL_ID);
+    destroy_object(fd, TOP_XDG_SURFACE_ID);
+    destroy_object(fd, TOP_SURFACE_ID);
+    destroy_object(fd, POINTER_ID);
+    destroy_object(fd, KEYBOARD_ID);
+}
+
+fn close_popup_objects(fd: u32) {
+    destroy_object(fd, POPUP_ID);
+    destroy_object(fd, POPUP_XDG_SURFACE_ID);
+    destroy_object(fd, POPUP_SURFACE_ID);
+    destroy_object(fd, POSITIONER_ID);
+}
+
+fn destroy_object(fd: u32, object_id: u32) {
+    let mut buf = Vec::new();
+    encode_header(object_id, 0, 8, &mut buf);
     send_request(fd, &buf);
 }
 

@@ -260,11 +260,11 @@ pub fn chrome_button_rects(rect: Rect, chrome: SurfaceChrome) -> Option<[(Chrome
     let visual = surface_visual_rect(rect, chrome);
     let frame = chrome.frame_thickness.max(0).min(visual.w / 2).min(visual.h / 2);
     let titlebar_height = chrome.titlebar_height.max(0).min(visual.h);
-    let button_height = 24.min(titlebar_height);
-    let button_width = 28;
-    let spacing = 4;
-    let right_inset = frame + 6;
-    if button_height < 8 || button_width < 12 {
+    let button_height = 44.min(titlebar_height);
+    let button_width = 44;
+    let spacing = 6;
+    let right_inset = frame + 8;
+    if button_height < 24 || button_width < 24 {
         return None;
     }
 
@@ -378,12 +378,13 @@ mod tests {
     #[test]
     fn chrome_geometry_reserves_space_around_client_content() {
         let content = Rect { x: 44, y: 88, w: 320, h: 200 };
-        let chrome = SurfaceChrome { titlebar_height: 28, frame_thickness: 4 };
+        let chrome = SurfaceChrome { titlebar_height: 44, frame_thickness: 4 };
 
-        assert_eq!(surface_visual_rect(content, chrome), Rect { x: 40, y: 60, w: 328, h: 232 });
+        assert_eq!(surface_visual_rect(content, chrome), Rect { x: 40, y: 44, w: 328, h: 248 });
 
         let buttons = chrome_button_rects(content, chrome).expect("chrome buttons");
-        assert!(buttons.iter().all(|(_, rect)| rect.y >= 60 && rect.y < content.y));
+        assert!(buttons.iter().all(|(_, rect)| rect.y >= 44 && rect.y < content.y));
+        assert!(buttons.iter().all(|(_, rect)| rect.w >= 44 && rect.h >= 44));
         assert_eq!(
             chrome_button_at(content, chrome, buttons[2].1.x + 1, buttons[2].1.y + 1),
             Some(ChromeButton::Close)

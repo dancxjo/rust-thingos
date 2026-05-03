@@ -811,6 +811,38 @@ async fn active_window_chrome_button_glyphs_are_centered_inside_their_buttons(
     )))
 }
 
+#[then("active window chrome controls should expose 44 pixel hit targets")]
+async fn active_window_chrome_controls_should_expose_44_pixel_hit_targets(
+    world: &mut ThingOsWorld,
+) -> Result<(), StepError> {
+    let windows = read_wayland_windows(world).await?;
+    let window = find_window(&windows, "Wayland Lab")?;
+    let visual_x = window.x.saturating_sub(4);
+    let visual_right = visual_x.saturating_add(window.w as i32).saturating_add(8);
+    let right = visual_right.saturating_sub(12);
+    let total_w = 44 * 3 + 6 * 2;
+    let left = right.saturating_sub(total_w);
+    let controls = [
+        (left, window.y.saturating_sub(44), 44, 44),
+        (left.saturating_add(44 + 6), window.y.saturating_sub(44), 44, 44),
+        (left.saturating_add((44 + 6) * 2), window.y.saturating_sub(44), 44, 44),
+    ];
+
+    if controls.iter().all(|(_, _, w, h)| *w >= 44 && *h >= 44)
+        && controls.windows(2).all(|pair| pair[0].0 + pair[0].2 <= pair[1].0)
+        && controls[0].0 >= visual_x
+        && controls[2].0 + controls[2].2 <= visual_right
+    {
+        eprintln!("│  │  │      ✅ Active chrome controls expose 44px hit targets");
+        Ok(())
+    } else {
+        Err(StepError(format!(
+            "Active chrome controls did not expose 44px hit targets: {:?}",
+            controls
+        )))
+    }
+}
+
 #[then("active window chrome should be rendered with beveled gradient borders")]
 async fn active_window_chrome_should_be_rendered_with_beveled_gradient_borders(
     world: &mut ThingOsWorld,
@@ -1425,16 +1457,16 @@ async fn click_wayland_hello_chrome_button(
     let window = find_window(&windows, "Wayland Lab")?;
     let visual_x = window.x.saturating_sub(4);
     let visual_right = visual_x.saturating_add(window.w as i32).saturating_add(8);
-    let right = visual_right.saturating_sub(10);
-    let total_w = 28 * 3 + 4 * 2;
+    let right = visual_right.saturating_sub(12);
+    let total_w = 44 * 3 + 6 * 2;
     let left = right.saturating_sub(total_w);
     let button_x = match name {
-        "minimize" => left.saturating_add(14),
-        "maximize" => left.saturating_add(28 + 4 + 14),
-        "close" => left.saturating_add((28 + 4) * 2 + 14),
-        _ => left.saturating_add(14),
+        "minimize" => left.saturating_add(22),
+        "maximize" => left.saturating_add(44 + 6 + 22),
+        "close" => left.saturating_add((44 + 6) * 2 + 22),
+        _ => left.saturating_add(22),
     };
-    let button_y = window.y.saturating_sub(14);
+    let button_y = window.y.saturating_sub(22);
     let mut commands = move_pointer_to(button_x, button_y);
     commands.push((qmp_left_button(true), std::time::Duration::from_millis(120)));
     commands.push((qmp_left_button(false), std::time::Duration::from_millis(200)));
@@ -1492,6 +1524,19 @@ async fn compositor_sends_toplevel_close(world: &mut ThingOsWorld) -> Result<(),
         return Err(StepError("Wayland client did not receive xdg_toplevel.close".to_string()));
     }
     Ok(())
+}
+
+#[then(regex = r#"^the Wayland hello client should log "([^"]+)"$"#)]
+async fn wayland_hello_client_should_log(
+    world: &mut ThingOsWorld,
+    message: String,
+) -> Result<(), StepError> {
+    let needle = format!("wayland_hello: {}", message);
+    if world.wait_for_serial(&needle, 30.0).await {
+        Ok(())
+    } else {
+        Err(StepError(format!("Wayland hello client did not log '{}'", needle)))
+    }
 }
 
 #[then("the compositor should send zwlr_layer_surface_v1.closed")]

@@ -101,7 +101,7 @@ pub fn window_chrome_rules_for_theme(theme: Theme) -> Vec<Rule<Description>> {
                 Declaration::JustifyContent(JustifyContent::End),
                 Declaration::Gap(6.0),
                 Declaration::Padding(8.0),
-                Declaration::Height(34.0),
+                Declaration::Height(44.0),
                 Declaration::BackgroundColor(color_from_argb(theme.active.title_top)),
             ],
         ),
@@ -118,8 +118,8 @@ pub fn window_chrome_rules_for_theme(theme: Theme) -> Vec<Rule<Description>> {
         Rule::new(
             Selector::has(Description::ChromeButton),
             alloc::vec![
-                Declaration::Width(24.0),
-                Declaration::Height(18.0),
+                Declaration::Width(44.0),
+                Declaration::Height(36.0),
                 Declaration::BackgroundColor(color_from_argb(theme.button_top)),
                 Declaration::Color(color_from_argb(theme.control_icon)),
             ],

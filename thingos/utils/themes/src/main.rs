@@ -371,7 +371,7 @@ fn render_themes(
             24,
             35,
             24.0,
-            "Themes",
+            "Appearance",
             active_theme.chrome_text,
         );
         draw_text(
@@ -382,7 +382,7 @@ fn render_themes(
             24,
             62,
             12.0,
-            "Select a theme",
+            "Choose a desktop theme",
             active_theme.chrome_text_inactive,
         );
 

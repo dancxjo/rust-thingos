@@ -6,11 +6,16 @@ extern crate alloc;
 use alloc::vec::Vec;
 use core::convert::TryInto;
 
+use stem::application::{
+    AppAction, Application, ApplicationContext, ServiceLooper, run_application,
+};
 use stem::info;
+use stem::service_loop::ServiceEvent;
 use stem::syscall::socket::{connect, sendmsg, socket};
 use stem::syscall::socket_domain::AF_UNIX;
 use stem::syscall::socket_type::SOCK_STREAM;
 use stem::syscall::{memfd_create, sleep_ms, vfs_close, vfs_read, vfs_write, vm_map};
+use stem::wait_set::WaitToken;
 
 const REGISTRY_ID: u32 = 2;
 const COMPOSITOR_ID: u32 = 3;
@@ -35,28 +40,76 @@ const EVDEV_F2: u32 = 60;
 
 #[stem::main]
 fn main(_arg: usize) -> ! {
-    let fd = connect_wayland();
-    send_get_registry(fd, REGISTRY_ID);
-    read_initial_globals(fd);
-    bind_global(fd, GLOBAL_WL_COMPOSITOR, "wl_compositor", 4, COMPOSITOR_ID);
-    bind_global(fd, GLOBAL_WL_SHM, "wl_shm", 1, SHM_ID);
-    bind_global(fd, GLOBAL_WL_SEAT, "wl_seat", 5, SEAT_ID);
-    bind_global(fd, GLOBAL_ZWLR_LAYER_SHELL, "zwlr_layer_shell_v1", 4, LAYER_SHELL_ID);
-    get_keyboard(fd, SEAT_ID, KEYBOARD_ID);
-    register_shortcut_surface(fd);
-    info!("Blossom shell connected to Wayland");
+    run_application::<BlossomApp>()
+}
 
-    let mut state = ShellState { modifiers: 0, shortcut_configured: false, shortcut_mapped: false };
-    loop {
-        read_events(fd, &mut state);
-        sleep_ms(16);
-    }
+struct BlossomApp {
+    fd: u32,
+    wayland_token: WaitToken,
+    state: ShellState,
 }
 
 struct ShellState {
     modifiers: u32,
     shortcut_configured: bool,
     shortcut_mapped: bool,
+}
+
+impl Application for BlossomApp {
+    const NAME: &'static str = "blossom";
+
+    fn init(
+        ctx: &mut ApplicationContext,
+        looper: &mut ServiceLooper,
+    ) -> Result<Self, stem::errors::Errno> {
+        let fd = connect_wayland();
+        let wayland_token = looper.add_fd_readable(fd)?;
+        send_get_registry(fd, REGISTRY_ID);
+        read_initial_globals(fd);
+        bind_global(fd, GLOBAL_WL_COMPOSITOR, "wl_compositor", 4, COMPOSITOR_ID);
+        bind_global(fd, GLOBAL_WL_SHM, "wl_shm", 1, SHM_ID);
+        bind_global(fd, GLOBAL_WL_SEAT, "wl_seat", 5, SEAT_ID);
+        bind_global(fd, GLOBAL_ZWLR_LAYER_SHELL, "zwlr_layer_shell_v1", 4, LAYER_SHELL_ID);
+        get_keyboard(fd, SEAT_ID, KEYBOARD_ID);
+        register_shortcut_surface(fd);
+        ctx.register_window("shortcut layer surface", move || close_shortcut_surface(fd));
+        ctx.register_cleanup("wayland fd", move || {
+            let _ = vfs_close(fd);
+        });
+        Ok(Self {
+            fd,
+            wayland_token,
+            state: ShellState { modifiers: 0, shortcut_configured: false, shortcut_mapped: false },
+        })
+    }
+
+    fn ready(&mut self, _ctx: &mut ApplicationContext) {
+        info!("Blossom shell connected to Wayland");
+    }
+
+    fn handle_event(
+        &mut self,
+        _ctx: &mut ApplicationContext,
+        event: ServiceEvent<'_>,
+    ) -> AppAction {
+        match event {
+            ServiceEvent::Ready { token, event }
+                if token == self.wayland_token && event.is_readable() =>
+            {
+                read_events(self.fd, &mut self.state);
+                AppAction::Continue
+            }
+            ServiceEvent::Ready { token, event }
+                if token == self.wayland_token && (event.is_hangup() || event.is_error()) =>
+            {
+                AppAction::Quit
+            }
+            ServiceEvent::Timeout | ServiceEvent::Message { .. } | ServiceEvent::Ready { .. } => {
+                AppAction::Continue
+            }
+            ServiceEvent::InboxClosed => AppAction::Quit,
+        }
+    }
 }
 
 fn connect_wayland() -> u32 {
@@ -97,6 +150,11 @@ fn register_shortcut_surface(fd: u32) {
     );
     set_layer_keyboard_interactivity(fd, SHORTCUT_LAYER_ID, 2);
     commit_surface(fd, SHORTCUT_SURFACE_ID);
+}
+
+fn close_shortcut_surface(fd: u32) {
+    destroy_object(fd, SHORTCUT_LAYER_ID);
+    destroy_object(fd, SHORTCUT_SURFACE_ID);
 }
 
 fn read_events(fd: u32, state: &mut ShellState) {
@@ -301,6 +359,12 @@ fn damage_surface(fd: u32, surface_id: u32, x: i32, y: i32, width: u32, height: 
 fn commit_surface(fd: u32, surface_id: u32) {
     let mut buf = Vec::new();
     encode_header(surface_id, 6, 8, &mut buf);
+    send_request(fd, &buf);
+}
+
+fn destroy_object(fd: u32, object_id: u32) {
+    let mut buf = Vec::new();
+    encode_header(object_id, 0, 8, &mut buf);
     send_request(fd, &buf);
 }
 

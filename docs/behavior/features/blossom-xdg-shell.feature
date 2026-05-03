@@ -71,6 +71,7 @@ Feature: blossom xdg-shell lifecycle
     Then the Wayland hello client should be visible
     And the compositor should render themed window bodies
     And active window chrome button glyphs should be centered inside their buttons
+    And active window chrome controls should expose 44 pixel hit targets
     And active window chrome should be rendered with beveled gradient borders
     And active window chrome should include facet frame focus accents
 
@@ -155,6 +156,7 @@ Feature: blossom xdg-shell lifecycle
     Then the Wayland hello client should be visible
     When I click the Wayland hello close button
     Then the compositor should send xdg_toplevel.close
+    And the Wayland hello client should log "explicit exit(0) call"
 
   # ── State updates ────────────────────────────────────────────────────────────
 

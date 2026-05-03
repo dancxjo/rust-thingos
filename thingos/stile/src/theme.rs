@@ -100,7 +100,7 @@ pub const SOLARIS_WARM: Theme = Theme {
         title_top: color_argb(SOLARIS_WARM_PALETTE.surface),
         title_bottom: color_argb(SOLARIS_WARM_PALETTE.bg_secondary),
     },
-    titlebar_height: 32,
+    titlebar_height: 44,
     frame_thickness: 4,
     corner_radius: 0,
     chrome_text: color_argb(SOLARIS_WARM_PALETTE.text_primary),
@@ -146,7 +146,7 @@ pub const OBSIDIAN_BLOOM: Theme = Theme {
         title_top: 0xFF181D2A,
         title_bottom: 0xFF0C1018,
     },
-    titlebar_height: 28,
+    titlebar_height: 44,
     frame_thickness: 4,
     corner_radius: 0,
     chrome_text: 0xFFE9EEF7,
@@ -192,7 +192,7 @@ pub const AURORA_GLASS: Theme = Theme {
         title_top: 0x30203344,
         title_bottom: 0x16060C12,
     },
-    titlebar_height: 28,
+    titlebar_height: 44,
     frame_thickness: 4,
     corner_radius: 0,
     chrome_text: 0xFFF0FCFF,
@@ -383,6 +383,7 @@ fn push_solaris_warm_window<'a>(
 
     push_solaris_content_edges(out, rect, frame, titlebar_height, theme);
     if request.titlebar_height > 0 {
+        push_titlebar_grip(theme, request, out);
         push_solaris_control_pads(theme, request, out);
         if let Some(title) = request.title {
             let buttons_w = request
@@ -552,7 +553,7 @@ fn push_solaris_control_pads<'a>(
     for control in request.controls.iter().flatten() {
         let hovered = contains(control.rect, request.state.pointer_x, request.state.pointer_y);
         let pressed = hovered && request.state.primary_button_down;
-        let pad = centered_square(control.rect, if hovered { 15 } else { 13 });
+        let pad = centered_square(control.rect, if hovered { 30 } else { 26 });
         let base = match control.control {
             ThemeControl::Close => {
                 soften_argb(theme.close_icon, color_argb(palette.accent_soft), 42)
@@ -578,24 +579,33 @@ fn push_solaris_control_pads<'a>(
         if hovered {
             push_solaris_disc(
                 out,
-                centered_square(control.rect, 19),
-                color_with_alpha(palette.accent, 24),
+                centered_square(control.rect, 38),
+                color_with_alpha(palette.accent, if pressed { 72 } else { 36 }),
             );
         }
         push_solaris_disc_gradient(out, pad, top, bottom);
         if pressed {
             push_solaris_disc(
                 out,
-                centered_square(pad, 7),
-                color_with_alpha(palette.bg_primary, 84),
+                centered_square(pad, 12),
+                color_with_alpha(palette.bg_primary, 96),
             );
         } else {
             push_solaris_disc(
                 out,
-                centered_square(pad, 5),
-                color_with_alpha(palette.text_primary, 30),
+                centered_square(pad, 8),
+                color_with_alpha(palette.text_primary, 38),
             );
         }
+        let icon = control_icon(control.control, request.state.shaded, request.state.fullscreen);
+        let icon_color = if pressed {
+            color_argb(palette.bg_primary)
+        } else if matches!(control.control, ThemeControl::Close) {
+            color_argb(palette.bg_primary)
+        } else {
+            color_argb(palette.text_primary)
+        };
+        out.commands.push(PaintCommand::Icon { rect: control.rect, icon, color: icon_color });
     }
 }
 
@@ -750,24 +760,75 @@ fn push_top_glow_strip(out: &mut PaintList<'_>, x: i32, y: i32, w: i32, theme: T
 fn push_controls<'a>(theme: Theme, request: WindowChromeRequest<'a>, out: &mut PaintList<'a>) {
     let icon_color =
         if request.state.active { theme.control_icon } else { theme.control_icon_inactive };
+    push_titlebar_grip(theme, request, out);
     for control in request.controls.iter().flatten() {
         let hovered = contains(control.rect, request.state.pointer_x, request.state.pointer_y);
         let pressed = hovered && request.state.primary_button_down;
         let icon = control_icon(control.control, request.state.shaded, request.state.fullscreen);
         let color = if pressed {
             theme.body_top
+        } else if hovered {
+            if matches!(control.control, ThemeControl::Close) {
+                theme.close_icon
+            } else {
+                theme.chrome_text
+            }
         } else if matches!(control.control, ThemeControl::Close) {
             theme.close_icon
         } else {
             icon_color
         };
-        if hovered {
-            out.commands.push(PaintCommand::FillRect {
-                rect: centered_square(control.rect, 16),
-                color: if pressed { theme.edge_light } else { theme.button_top },
-            });
-        }
+        let pad = centered_square(control.rect, if hovered { 38 } else { 34 });
+        out.commands.push(PaintCommand::FillRect {
+            rect: pad,
+            color: if pressed {
+                theme.edge_light
+            } else if hovered {
+                soften_argb(theme.button_top, theme.edge_light, 72)
+            } else if request.state.active {
+                theme.button_top
+            } else {
+                theme.facet_inactive
+            },
+        });
+        out.commands.push(PaintCommand::StrokeRect {
+            rect: pad,
+            thickness: if hovered { 2 } else { 1 },
+            color: if pressed || hovered {
+                theme.edge_light
+            } else if request.state.active {
+                theme.inner_stroke
+            } else {
+                theme.inner_stroke_inactive
+            },
+        });
         out.commands.push(PaintCommand::Icon { rect: control.rect, icon, color });
+    }
+}
+
+fn push_titlebar_grip<'a>(theme: Theme, request: WindowChromeRequest<'a>, out: &mut PaintList<'a>) {
+    if request.titlebar_height < 28 {
+        return;
+    }
+    let Some(first_control) = request.controls.iter().flatten().next() else {
+        return;
+    };
+    let title_clear_x = request.visual_rect.x + request.frame + 120;
+    let grip_w = 34;
+    let grip_x = (first_control.rect.x - grip_w - 16).max(title_clear_x);
+    if grip_x + grip_w >= first_control.rect.x - 8 {
+        return;
+    }
+    let center_y = request.visual_rect.y + request.titlebar_height / 2;
+    let color = if request.state.active {
+        soften_argb(theme.edge_light, theme.active.title_top, 80)
+    } else {
+        soften_argb(theme.inner_stroke_inactive, theme.inactive.title_top, 96)
+    };
+    for i in 0..5 {
+        let x = grip_x + i * 7;
+        out.commands
+            .push(PaintCommand::FillRect { rect: ThemeRect::new(x, center_y - 5, 2, 10), color });
     }
 }
 
@@ -880,6 +941,7 @@ fn soften_argb(a: u32, b: u32, amount: u32) -> u32 {
 #[cfg(test)]
 mod tests {
     use super::*;
+    use crate::paint::{ThemeControlRect, ThemeState};
 
     #[test]
     fn bundled_theme_names_resolve_to_theme_system() {
@@ -891,5 +953,148 @@ mod tests {
         assert_eq!(find_theme_by_name("obsidian_bloom").unwrap().name, OBSIDIAN_BLOOM.name);
         assert!(find_theme_by_name("not-a-theme").is_none());
         assert_eq!(theme_by_name("leather.bmp").name, SOLARIS_WARM.name);
+    }
+
+    #[test]
+    fn bundled_themes_render_actionable_window_controls() {
+        let controls = [
+            Some(ThemeControlRect {
+                control: ThemeControl::Shade,
+                rect: ThemeRect::new(212, 0, 44, 44),
+            }),
+            Some(ThemeControlRect {
+                control: ThemeControl::Fullscreen,
+                rect: ThemeRect::new(262, 0, 44, 44),
+            }),
+            Some(ThemeControlRect {
+                control: ThemeControl::Close,
+                rect: ThemeRect::new(312, 0, 44, 44),
+            }),
+        ];
+
+        for theme in available_themes() {
+            assert!(theme.titlebar_height >= 44, "{} titlebar is too small", theme.name);
+
+            let mut idle = PaintList::default();
+            theme.render_window_chrome(
+                WindowChromeRequest {
+                    visual_rect: ThemeRect::new(0, 0, 368, 244),
+                    content_rect: ThemeRect::new(4, 44, 360, 196),
+                    frame: 4,
+                    titlebar_height: 44,
+                    controls,
+                    state: ThemeState {
+                        active: true,
+                        hovered: true,
+                        primary_button_down: false,
+                        pointer_x: -1,
+                        pointer_y: -1,
+                        shaded: false,
+                        fullscreen: false,
+                    },
+                    title: Some("Window"),
+                },
+                &mut idle,
+            );
+            assert_eq!(icon_count(&idle), 3, "{} did not render all control icons", theme.name);
+            assert!(
+                grip_count(&idle) >= 5,
+                "{} did not render a titlebar drag affordance",
+                theme.name
+            );
+
+            for control in controls.iter().flatten() {
+                let mut hover = PaintList::default();
+                theme.render_window_chrome(
+                    WindowChromeRequest {
+                        visual_rect: ThemeRect::new(0, 0, 368, 244),
+                        content_rect: ThemeRect::new(4, 44, 360, 196),
+                        frame: 4,
+                        titlebar_height: 44,
+                        controls,
+                        state: ThemeState {
+                            active: true,
+                            hovered: true,
+                            primary_button_down: false,
+                            pointer_x: control.rect.x + control.rect.w / 2,
+                            pointer_y: control.rect.y + control.rect.h / 2,
+                            shaded: false,
+                            fullscreen: false,
+                        },
+                        title: Some("Window"),
+                    },
+                    &mut hover,
+                );
+                assert!(
+                    feedback_paint_count(&hover, control.rect) >= 3,
+                    "{} did not render clear hover feedback for {:?}",
+                    theme.name,
+                    control.control
+                );
+
+                let mut pressed = PaintList::default();
+                theme.render_window_chrome(
+                    WindowChromeRequest {
+                        visual_rect: ThemeRect::new(0, 0, 368, 244),
+                        content_rect: ThemeRect::new(4, 44, 360, 196),
+                        frame: 4,
+                        titlebar_height: 44,
+                        controls,
+                        state: ThemeState {
+                            active: true,
+                            hovered: true,
+                            primary_button_down: true,
+                            pointer_x: control.rect.x + control.rect.w / 2,
+                            pointer_y: control.rect.y + control.rect.h / 2,
+                            shaded: false,
+                            fullscreen: false,
+                        },
+                        title: Some("Window"),
+                    },
+                    &mut pressed,
+                );
+                assert_ne!(
+                    hover.commands, pressed.commands,
+                    "{} press feedback matches hover feedback for {:?}",
+                    theme.name, control.control
+                );
+            }
+        }
+    }
+
+    fn icon_count(plan: &PaintList<'_>) -> usize {
+        plan.commands.iter().filter(|command| matches!(command, PaintCommand::Icon { .. })).count()
+    }
+
+    fn feedback_paint_count(plan: &PaintList<'_>, control_rect: ThemeRect) -> usize {
+        plan.commands
+            .iter()
+            .filter(|command| match command {
+                PaintCommand::FillRect { rect, .. } | PaintCommand::StrokeRect { rect, .. } => {
+                    rect_inside(*rect, control_rect)
+                }
+                _ => false,
+            })
+            .count()
+    }
+
+    fn grip_count(plan: &PaintList<'_>) -> usize {
+        plan.commands
+            .iter()
+            .filter(|command| {
+                matches!(
+                    command,
+                    PaintCommand::FillRect { rect, .. }
+                        if rect.w == 2 && rect.h == 10 && (120..212).contains(&rect.x)
+                )
+            })
+            .count()
+    }
+
+    fn rect_inside(inner: ThemeRect, outer: ThemeRect) -> bool {
+        inner.x >= outer.x
+            && inner.y >= outer.y
+            && inner.x + inner.w <= outer.x + outer.w
+            && inner.y + inner.h <= outer.y + outer.h
     }
 }
