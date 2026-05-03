@@ -10,15 +10,21 @@ use core::convert::TryInto;
 use abi::hid::Key;
 use libdl::{RTLD_NOW, dlerror, dlopen_str, dlsym_bytes};
 use petals::{Theme, available_themes, default_theme, find_theme_by_name, theme_by_name};
-use stem::abi::syscall::{PollHandle, poll_flags, vfs_flags};
+use stem::abi::syscall::vfs_flags;
+use stem::application::{
+    AppAction, Application, ApplicationContext, ServiceLooper, run_application,
+};
 use stem::info;
+use stem::service_loop::ServiceEvent;
 use stem::syscall::socket::{connect, sendmsg, socket};
 use stem::syscall::socket_domain::AF_UNIX;
 use stem::syscall::socket_type::SOCK_STREAM;
 use stem::syscall::{
-    argv_get, exit, memfd_create, sleep_ms, vfs_close, vfs_mkdir, vfs_open, vfs_poll, vfs_read,
-    vfs_write, vm_map,
+    argv_get, exit, memfd_create, sleep_ms, vfs_close, vfs_mkdir, vfs_open, vfs_read, vfs_write,
+    vm_map,
 };
+use stem::time::Duration;
+use stem::wait_set::WaitToken;
 
 const REGISTRY_ID: u32 = 2;
 const COMPOSITOR_ID: u32 = 3;
@@ -77,7 +83,7 @@ fn main(_arg: usize) -> ! {
         run_cli(&args);
     }
 
-    run_gui()
+    run_application::<ThemesApp>()
 }
 
 fn run_cli(args: &[String]) -> ! {
@@ -128,86 +134,162 @@ fn print_available_themes() {
     }
 }
 
-fn run_gui() -> ! {
-    let fd = connect_wayland();
-    let text_renderer = load_text_renderer();
-    let mut selected_index = theme_index(current_theme());
-    let mut active_theme = available_themes()[selected_index];
+struct ThemesApp {
+    fd: u32,
+    wayland_token: WaitToken,
+    text_renderer: Option<TextRenderer>,
+    selected_index: usize,
+    active_theme: Theme,
+    pending: PendingSurface,
+    buffer: Option<BufferState>,
+    next_callback_id: u32,
+    pending_frame_callbacks: Vec<u32>,
+    pointer: PointerState,
+    rx: Vec<u8>,
+    last_rendered_index: usize,
+}
 
-    send_get_registry(fd, REGISTRY_ID);
-    read_initial_globals(fd);
+impl Application for ThemesApp {
+    const NAME: &'static str = "themes";
 
-    bind_global(fd, 1, "wl_compositor", 4, COMPOSITOR_ID);
-    bind_global(fd, 2, "wl_shm", 1, SHM_ID);
-    bind_global(fd, 3, "xdg_wm_base", 1, WM_BASE_ID);
-    bind_global(fd, 4, "wl_seat", 5, SEAT_ID);
-    seat_get_pointer(fd, SEAT_ID, POINTER_ID);
-    seat_get_keyboard(fd, SEAT_ID, KEYBOARD_ID);
+    fn init(
+        ctx: &mut ApplicationContext,
+        looper: &mut ServiceLooper,
+    ) -> Result<Self, stem::errors::Errno> {
+        let fd = connect_wayland();
+        let text_renderer = load_text_renderer();
+        let selected_index = theme_index(current_theme());
+        let active_theme = available_themes()[selected_index];
+        let wayland_token = looper.add_fd_readable(fd)?;
 
-    create_surface(fd, COMPOSITOR_ID, SURFACE_ID);
-    get_xdg_surface(fd, WM_BASE_ID, XDG_SURFACE_ID, SURFACE_ID);
-    get_toplevel(fd, XDG_SURFACE_ID, TOPLEVEL_ID);
-    set_toplevel_title(fd, TOPLEVEL_ID, "Themes");
-    set_toplevel_app_id(fd, TOPLEVEL_ID, "thingos.themes");
-    commit_surface(fd, SURFACE_ID);
+        send_get_registry(fd, REGISTRY_ID);
+        read_initial_globals(fd);
 
-    let mut pending =
-        PendingSurface { serial: None, width: 460, height: 360, dirty: false, configured: false };
-    let mut buffer: Option<BufferState> = None;
-    let mut next_callback_id = 1000u32;
-    let mut pending_frame_callbacks: Vec<u32> = Vec::new();
-    let mut pointer = PointerState::default();
-    let mut rx = Vec::new();
-    let mut last_rendered_index = usize::MAX;
+        bind_global(fd, 1, "wl_compositor", 4, COMPOSITOR_ID);
+        bind_global(fd, 2, "wl_shm", 1, SHM_ID);
+        bind_global(fd, 3, "xdg_wm_base", 1, WM_BASE_ID);
+        bind_global(fd, 4, "wl_seat", 5, SEAT_ID);
+        seat_get_pointer(fd, SEAT_ID, POINTER_ID);
+        seat_get_keyboard(fd, SEAT_ID, KEYBOARD_ID);
 
-    info!("Ready");
+        create_surface(fd, COMPOSITOR_ID, SURFACE_ID);
+        get_xdg_surface(fd, WM_BASE_ID, XDG_SURFACE_ID, SURFACE_ID);
+        get_toplevel(fd, XDG_SURFACE_ID, TOPLEVEL_ID);
+        set_toplevel_title(fd, TOPLEVEL_ID, "Themes");
+        set_toplevel_app_id(fd, TOPLEVEL_ID, "thingos.themes");
+        commit_surface(fd, SURFACE_ID);
 
-    loop {
-        let changed = read_events(
+        ctx.register_window("themes toplevel", move || close_toplevel(fd));
+        ctx.register_cleanup("wayland fd", move || {
+            let _ = vfs_close(fd);
+        });
+
+        Ok(Self {
             fd,
-            &mut rx,
-            &mut pending,
-            &mut pending_frame_callbacks,
-            &mut pointer,
-            &mut selected_index,
-        );
+            wayland_token,
+            text_renderer,
+            selected_index,
+            active_theme,
+            pending: PendingSurface {
+                serial: None,
+                width: 460,
+                height: 360,
+                dirty: false,
+                configured: false,
+            },
+            buffer: None,
+            next_callback_id: 1000,
+            pending_frame_callbacks: Vec::new(),
+            pointer: PointerState::default(),
+            rx: Vec::new(),
+            last_rendered_index: usize::MAX,
+        })
+    }
+
+    fn ready(&mut self, _ctx: &mut ApplicationContext) {
+        info!("Ready");
+    }
+
+    fn timeout(&self) -> Option<Duration> {
+        Some(Duration::from_millis(IDLE_SLEEP_MS))
+    }
+
+    fn handle_event(
+        &mut self,
+        _ctx: &mut ApplicationContext,
+        event: ServiceEvent<'_>,
+    ) -> AppAction {
+        let mut changed = false;
+        match event {
+            ServiceEvent::Ready { token, event }
+                if token == self.wayland_token && event.is_readable() =>
+            {
+                let mut quit = false;
+                changed = read_events(
+                    self.fd,
+                    &mut self.rx,
+                    &mut self.pending,
+                    &mut self.pending_frame_callbacks,
+                    &mut self.pointer,
+                    &mut self.selected_index,
+                    &mut quit,
+                );
+                if quit {
+                    return AppAction::Quit;
+                }
+            }
+            ServiceEvent::Ready { token, event }
+                if token == self.wayland_token && (event.is_hangup() || event.is_error()) =>
+            {
+                return AppAction::Quit;
+            }
+            ServiceEvent::Timeout => {}
+            ServiceEvent::Message { .. } | ServiceEvent::Ready { .. } => {}
+            ServiceEvent::InboxClosed => return AppAction::Quit,
+        }
+        self.tick(changed);
+        AppAction::Continue
+    }
+}
+
+impl ThemesApp {
+    fn tick(&mut self, changed: bool) {
         let current = current_theme();
-        if current.name != active_theme.name {
-            active_theme = current;
-            selected_index = theme_index(active_theme);
+        if current.name != self.active_theme.name {
+            self.active_theme = current;
+            self.selected_index = theme_index(self.active_theme);
         }
 
-        if pending.configured && (pending.dirty || changed || selected_index != last_rendered_index)
+        if self.pending.configured
+            && (self.pending.dirty || changed || self.selected_index != self.last_rendered_index)
         {
-            last_rendered_index = selected_index;
+            self.last_rendered_index = self.selected_index;
             let buf = ensure_buffer(
-                fd,
+                self.fd,
                 SHM_ID,
-                &mut buffer,
+                &mut self.buffer,
                 SURFACE_ID + 100,
-                pending.width,
-                pending.height,
+                self.pending.width,
+                self.pending.height,
             );
             render_themes(
                 buf,
-                active_theme,
-                selected_index,
-                pointer.pressed_index,
-                text_renderer.as_ref(),
+                self.active_theme,
+                self.selected_index,
+                self.pointer.pressed_index,
+                self.text_renderer.as_ref(),
             );
-            if pending.dirty {
-                ack_configure(fd, XDG_SURFACE_ID, pending.serial.unwrap_or(0));
-                pending.dirty = false;
+            if self.pending.dirty {
+                ack_configure(self.fd, XDG_SURFACE_ID, self.pending.serial.unwrap_or(0));
+                self.pending.dirty = false;
             }
-            attach_buffer(fd, SURFACE_ID, buf.buffer_id);
-            damage_surface(fd, SURFACE_ID, 0, 0, pending.width, pending.height);
-            let cb_id = alloc_callback_id(&mut next_callback_id);
-            request_frame(fd, SURFACE_ID, cb_id);
-            pending_frame_callbacks.push(cb_id);
-            commit_surface(fd, SURFACE_ID);
+            attach_buffer(self.fd, SURFACE_ID, buf.buffer_id);
+            damage_surface(self.fd, SURFACE_ID, 0, 0, self.pending.width, self.pending.height);
+            let cb_id = alloc_callback_id(&mut self.next_callback_id);
+            request_frame(self.fd, SURFACE_ID, cb_id);
+            self.pending_frame_callbacks.push(cb_id);
+            commit_surface(self.fd, SURFACE_ID);
         }
-
-        sleep_ms(IDLE_SLEEP_MS);
     }
 }
 
@@ -218,14 +300,8 @@ fn read_events(
     pending_frame_callbacks: &mut Vec<u32>,
     pointer: &mut PointerState,
     selected_index: &mut usize,
+    quit: &mut bool,
 ) -> bool {
-    let mut pollfd = [PollHandle { handle: fd as i32, events: poll_flags::POLLIN, revents: 0 }];
-    if !matches!(vfs_poll(&mut pollfd, 0), Ok(n) if n > 0)
-        || (pollfd[0].revents & poll_flags::POLLIN) == 0
-    {
-        return false;
-    }
-
     let mut changed = false;
     let mut in_buf = [0u8; 4096];
     let len = match vfs_read(fd, &mut in_buf) {
@@ -272,7 +348,9 @@ fn read_events(
             }
             (TOPLEVEL_ID, 1) => {
                 info!("Closed");
-                exit(0);
+                vfs_write(1, b"themes: explicit exit(0) call\n").ok();
+                *quit = true;
+                changed = true;
             }
             (POINTER_ID, 2) if payload.len() >= 12 => {
                 pointer.x = wl_fixed_to_i32(read_i32(payload, 4));
@@ -855,6 +933,20 @@ fn request_frame(fd: u32, surface_id: u32, callback_id: u32) {
 fn commit_surface(fd: u32, surface_id: u32) {
     let mut buf = Vec::new();
     encode_header(surface_id, 6, 8, &mut buf);
+    send_request(fd, &buf);
+}
+
+fn close_toplevel(fd: u32) {
+    destroy_object(fd, TOPLEVEL_ID);
+    destroy_object(fd, XDG_SURFACE_ID);
+    destroy_object(fd, SURFACE_ID);
+    destroy_object(fd, POINTER_ID);
+    destroy_object(fd, KEYBOARD_ID);
+}
+
+fn destroy_object(fd: u32, object_id: u32) {
+    let mut buf = Vec::new();
+    encode_header(object_id, 0, 8, &mut buf);
     send_request(fd, &buf);
 }
 

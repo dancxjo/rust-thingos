@@ -262,15 +262,20 @@ mod thingos_app {
     use alloc::vec::Vec;
     use core::convert::TryInto;
 
-    use abi::syscall::{PollHandle, poll_flags};
     use abi::types::stdio_mode;
+    use stem::application::{
+        AppAction, Application, ApplicationContext, ServiceLooper, run_application,
+    };
+    use stem::service_loop::ServiceEvent;
     use stem::syscall::socket::{connect, sendmsg, socket};
     use stem::syscall::socket_domain::AF_UNIX;
     use stem::syscall::socket_type::SOCK_STREAM;
     use stem::syscall::{
-        exit, memfd_create, sleep_ms, spawn_process_ex, vfs_close, vfs_open, vfs_poll, vfs_read,
-        vfs_stat, vfs_write, vm_map,
+        exit, memfd_create, sleep_ms, spawn_process_ex, vfs_close, vfs_open, vfs_read, vfs_stat,
+        vfs_write, vm_map,
     };
+    use stem::time::Duration;
+    use stem::wait_set::WaitToken;
     use terminal_core::{CELL_HEIGHT, CELL_WIDTH, Cell, Font, TermModel};
 
     const REGISTRY_ID: u32 = 2;
@@ -322,112 +327,203 @@ mod thingos_app {
 
     #[stem::main]
     fn main(_arg: usize) -> ! {
-        stem::info!("leaf: starting");
+        run_application::<LeafApp>()
+    }
 
-        let font = load_font();
-        let mut shell = spawn_shell();
-        let fd = connect_wayland();
+    struct LeafApp {
+        fd: u32,
+        wayland_token: WaitToken,
+        stdout_token: WaitToken,
+        stderr_token: WaitToken,
+        font: Font,
+        shell: ShellPipes,
+        pending: PendingSurface,
+        model: TermModel,
+        buffer: Option<BufferState>,
+        next_callback_id: u32,
+        pending_frame_callbacks: Vec<u32>,
+        wayland_rx: Vec<u8>,
+        keyboard: KeyboardState,
+        cursor_blink_on: bool,
+        last_cursor_blink_ns: u64,
+    }
 
-        send_get_registry(fd, REGISTRY_ID);
-        read_initial_globals(fd);
-        bind_global(fd, 1, "wl_compositor", 4, COMPOSITOR_ID);
-        bind_global(fd, 2, "wl_shm", 1, SHM_ID);
-        bind_global(fd, 3, "xdg_wm_base", 1, WM_BASE_ID);
-        bind_global(fd, 4, "wl_seat", 5, SEAT_ID);
-        seat_get_keyboard(fd, SEAT_ID, KEYBOARD_ID);
+    impl Application for LeafApp {
+        const NAME: &'static str = "leaf";
 
-        create_surface(fd, COMPOSITOR_ID, SURFACE_ID);
-        get_xdg_surface(fd, WM_BASE_ID, XDG_SURFACE_ID, SURFACE_ID);
-        get_toplevel(fd, XDG_SURFACE_ID, TOPLEVEL_ID);
-        set_toplevel_title(fd, TOPLEVEL_ID, "Leaf");
-        set_toplevel_app_id(fd, TOPLEVEL_ID, "thingos.leaf");
-        commit_surface(fd, SURFACE_ID);
+        fn init(
+            ctx: &mut ApplicationContext,
+            looper: &mut ServiceLooper,
+        ) -> Result<Self, stem::errors::Errno> {
+            stem::info!("leaf: starting");
 
-        let mut pending = PendingSurface {
-            serial: None,
-            width: INITIAL_WIDTH,
-            height: INITIAL_HEIGHT,
-            dirty: false,
-            configured: false,
-        };
-        let mut model = TermModel::new(INITIAL_WIDTH / CELL_WIDTH, INITIAL_HEIGHT / CELL_HEIGHT);
-        model.write_str("\x1b[32mThing-OS Leaf\x1b[0m\n", &font);
-        model.mark_all_dirty();
+            let font = load_font();
+            let shell = spawn_shell();
+            let fd = connect_wayland();
+            let wayland_token = looper.add_fd_readable(fd)?;
+            let stdout_token = looper.add_fd_readable(shell.stdout_read)?;
+            let stderr_token = looper.add_fd_readable(shell.stderr_read)?;
 
-        let mut buffer: Option<BufferState> = None;
-        let mut next_callback_id = 1000u32;
-        let mut pending_frame_callbacks: Vec<u32> = Vec::new();
-        let mut wayland_rx: Vec<u8> = Vec::new();
-        let mut keyboard = KeyboardState::default();
-        let mut cursor_blink_on = true;
-        let mut last_cursor_blink_ns = stem::monotonic_ns();
+            send_get_registry(fd, REGISTRY_ID);
+            read_initial_globals(fd);
+            bind_global(fd, 1, "wl_compositor", 4, COMPOSITOR_ID);
+            bind_global(fd, 2, "wl_shm", 1, SHM_ID);
+            bind_global(fd, 3, "xdg_wm_base", 1, WM_BASE_ID);
+            bind_global(fd, 4, "wl_seat", 5, SEAT_ID);
+            seat_get_keyboard(fd, SEAT_ID, KEYBOARD_ID);
 
-        loop {
-            let mut needs_render = false;
-            if drain_shell(&mut shell, &mut model, &font) {
-                needs_render = true;
-                cursor_blink_on = true;
-                last_cursor_blink_ns = stem::monotonic_ns();
-            }
-            if read_wayland_events(
+            create_surface(fd, COMPOSITOR_ID, SURFACE_ID);
+            get_xdg_surface(fd, WM_BASE_ID, XDG_SURFACE_ID, SURFACE_ID);
+            get_toplevel(fd, XDG_SURFACE_ID, TOPLEVEL_ID);
+            set_toplevel_title(fd, TOPLEVEL_ID, "Leaf");
+            set_toplevel_app_id(fd, TOPLEVEL_ID, "thingos.leaf");
+            commit_surface(fd, SURFACE_ID);
+
+            let mut model =
+                TermModel::new(INITIAL_WIDTH / CELL_WIDTH, INITIAL_HEIGHT / CELL_HEIGHT);
+            model.write_str("\x1b[32mThing-OS Leaf\x1b[0m\n", &font);
+            model.mark_all_dirty();
+
+            let stdin_write = shell.stdin_write;
+            let stdout_read = shell.stdout_read;
+            let stderr_read = shell.stderr_read;
+            ctx.register_window("leaf toplevel", move || close_toplevel(fd));
+            ctx.register_cleanup("leaf fds", move || {
+                let _ = vfs_close(fd);
+                let _ = vfs_close(stdin_write);
+                let _ = vfs_close(stdout_read);
+                let _ = vfs_close(stderr_read);
+            });
+
+            Ok(Self {
                 fd,
-                &mut wayland_rx,
-                &mut pending,
-                &mut pending_frame_callbacks,
-                &mut keyboard,
-                &mut shell,
-                &mut model,
-                &font,
-            ) {
-                needs_render = true;
-                cursor_blink_on = true;
-                last_cursor_blink_ns = stem::monotonic_ns();
+                wayland_token,
+                stdout_token,
+                stderr_token,
+                font,
+                shell,
+                pending: PendingSurface {
+                    serial: None,
+                    width: INITIAL_WIDTH,
+                    height: INITIAL_HEIGHT,
+                    dirty: false,
+                    configured: false,
+                },
+                model,
+                buffer: None,
+                next_callback_id: 1000,
+                pending_frame_callbacks: Vec::new(),
+                wayland_rx: Vec::new(),
+                keyboard: KeyboardState::default(),
+                cursor_blink_on: true,
+                last_cursor_blink_ns: stem::monotonic_ns(),
+            })
+        }
+
+        fn timeout(&self) -> Option<Duration> {
+            Some(Duration::from_millis(16))
+        }
+
+        fn handle_event(
+            &mut self,
+            _ctx: &mut ApplicationContext,
+            event: ServiceEvent<'_>,
+        ) -> AppAction {
+            let mut needs_render = false;
+            match event {
+                ServiceEvent::Ready { token, event }
+                    if token == self.wayland_token && event.is_readable() =>
+                {
+                    let mut quit = false;
+                    if read_wayland_events(
+                        self.fd,
+                        &mut self.wayland_rx,
+                        &mut self.pending,
+                        &mut self.pending_frame_callbacks,
+                        &mut self.keyboard,
+                        &mut self.shell,
+                        &mut self.model,
+                        &self.font,
+                        &mut quit,
+                    ) {
+                        needs_render = true;
+                    }
+                    if quit {
+                        return AppAction::Quit;
+                    }
+                }
+                ServiceEvent::Ready { token, event }
+                    if (token == self.stdout_token || token == self.stderr_token)
+                        && event.is_readable() =>
+                {
+                    if drain_shell_fd(
+                        token,
+                        self.stdout_token,
+                        &mut self.shell,
+                        &mut self.model,
+                        &self.font,
+                    ) {
+                        needs_render = true;
+                    }
+                }
+                ServiceEvent::Ready { token, event }
+                    if token == self.wayland_token && (event.is_hangup() || event.is_error()) =>
+                {
+                    return AppAction::Quit;
+                }
+                ServiceEvent::Timeout => {}
+                ServiceEvent::Message { .. } | ServiceEvent::Ready { .. } => {}
+                ServiceEvent::InboxClosed => return AppAction::Quit,
             }
 
+            if needs_render {
+                self.cursor_blink_on = true;
+                self.last_cursor_blink_ns = stem::monotonic_ns();
+            }
             let now_ns = stem::monotonic_ns();
-            if model.cursor_visible
-                && now_ns.saturating_sub(last_cursor_blink_ns) >= CURSOR_BLINK_NS
+            if self.model.cursor_visible
+                && now_ns.saturating_sub(self.last_cursor_blink_ns) >= CURSOR_BLINK_NS
             {
-                cursor_blink_on = !cursor_blink_on;
-                last_cursor_blink_ns = now_ns;
+                self.cursor_blink_on = !self.cursor_blink_on;
+                self.last_cursor_blink_ns = now_ns;
                 needs_render = true;
             }
 
-            if pending.configured {
-                let cols = (pending.width / CELL_WIDTH).max(1);
-                let rows = (pending.height / CELL_HEIGHT).max(1);
-                if cols != model.cols || rows != model.rows {
-                    model.resize(cols, rows);
-                    model.write_str("\x1b[32mThing-OS Leaf\x1b[0m\n", &font);
-                    model.mark_all_dirty();
+            if self.pending.configured {
+                let cols = (self.pending.width / CELL_WIDTH).max(1);
+                let rows = (self.pending.height / CELL_HEIGHT).max(1);
+                if cols != self.model.cols || rows != self.model.rows {
+                    self.model.resize(cols, rows);
+                    self.model.write_str("\x1b[32mThing-OS Leaf\x1b[0m\n", &self.font);
+                    self.model.mark_all_dirty();
                     needs_render = true;
                 }
             }
 
-            let should_render = pending.configured && (pending.dirty || needs_render);
+            let should_render = self.pending.configured && (self.pending.dirty || needs_render);
             if should_render {
                 let buf = ensure_buffer(
-                    fd,
+                    self.fd,
                     SHM_ID,
-                    &mut buffer,
+                    &mut self.buffer,
                     SURFACE_ID + 100,
-                    pending.width,
-                    pending.height,
+                    self.pending.width,
+                    self.pending.height,
                 );
-                render_terminal(buf, &mut model, &font, cursor_blink_on);
-                if pending.dirty {
-                    ack_configure(fd, XDG_SURFACE_ID, pending.serial.unwrap_or(0));
-                    pending.dirty = false;
+                render_terminal(buf, &mut self.model, &self.font, self.cursor_blink_on);
+                if self.pending.dirty {
+                    ack_configure(self.fd, XDG_SURFACE_ID, self.pending.serial.unwrap_or(0));
+                    self.pending.dirty = false;
                 }
-                attach_buffer(fd, SURFACE_ID, buf.buffer_id);
-                damage_surface(fd, SURFACE_ID, 0, 0, pending.width, pending.height);
-                let cb_id = alloc_callback_id(&mut next_callback_id);
-                request_frame(fd, SURFACE_ID, cb_id);
-                pending_frame_callbacks.push(cb_id);
-                commit_surface(fd, SURFACE_ID);
+                attach_buffer(self.fd, SURFACE_ID, buf.buffer_id);
+                damage_surface(self.fd, SURFACE_ID, 0, 0, self.pending.width, self.pending.height);
+                let cb_id = alloc_callback_id(&mut self.next_callback_id);
+                request_frame(self.fd, SURFACE_ID, cb_id);
+                self.pending_frame_callbacks.push(cb_id);
+                commit_surface(self.fd, SURFACE_ID);
             }
 
-            sleep_ms(16);
+            AppAction::Continue
         }
     }
 
@@ -494,28 +590,22 @@ mod thingos_app {
         }
     }
 
-    fn drain_shell(shell: &mut ShellPipes, model: &mut TermModel, font: &Font) -> bool {
-        let mut changed = false;
-        for fd in [shell.stdout_read, shell.stderr_read] {
-            loop {
-                let mut pollfd =
-                    [PollHandle { handle: fd as i32, events: poll_flags::POLLIN, revents: 0 }];
-                if !matches!(vfs_poll(&mut pollfd, 0), Ok(n) if n > 0)
-                    || (pollfd[0].revents & poll_flags::POLLIN) == 0
-                {
-                    break;
-                }
-                let mut buf = [0u8; 512];
-                match vfs_read(fd, &mut buf) {
-                    Ok(n) if n > 0 => {
-                        model.write_bytes_lossy(&buf[..n], font);
-                        changed = true;
-                    }
-                    _ => break,
-                }
+    fn drain_shell_fd(
+        token: WaitToken,
+        stdout_token: WaitToken,
+        shell: &mut ShellPipes,
+        model: &mut TermModel,
+        font: &Font,
+    ) -> bool {
+        let fd = if token == stdout_token { shell.stdout_read } else { shell.stderr_read };
+        let mut buf = [0u8; 512];
+        match vfs_read(fd, &mut buf) {
+            Ok(n) if n > 0 => {
+                model.write_bytes_lossy(&buf[..n], font);
+                true
             }
+            _ => false,
         }
-        changed
     }
 
     fn connect_wayland() -> u32 {
@@ -555,14 +645,8 @@ mod thingos_app {
         shell: &mut ShellPipes,
         model: &mut TermModel,
         font: &Font,
+        quit: &mut bool,
     ) -> bool {
-        let mut pollfd = [PollHandle { handle: fd as i32, events: poll_flags::POLLIN, revents: 0 }];
-        if !matches!(vfs_poll(&mut pollfd, 0), Ok(n) if n > 0)
-            || (pollfd[0].revents & poll_flags::POLLIN) == 0
-        {
-            return false;
-        }
-
         let mut changed = false;
         let mut in_buf = [0u8; 4096];
         let len = match vfs_read(fd, &mut in_buf) {
@@ -611,7 +695,9 @@ mod thingos_app {
                 }
                 (TOPLEVEL_ID, 1) => {
                     stem::info!("leaf: compositor requested close; exiting");
-                    exit(0);
+                    vfs_write(1, b"leaf: explicit exit(0) call\n").ok();
+                    *quit = true;
+                    changed = true;
                 }
                 (KEYBOARD_ID, 3) if payload.len() >= 16 => {
                     let key = read_u32(payload, 8);
@@ -997,6 +1083,19 @@ mod thingos_app {
     fn commit_surface(fd: u32, surface_id: u32) {
         let mut buf = Vec::new();
         encode_header(surface_id, 6, 8, &mut buf);
+        send_request(fd, &buf);
+    }
+
+    fn close_toplevel(fd: u32) {
+        destroy_object(fd, TOPLEVEL_ID);
+        destroy_object(fd, XDG_SURFACE_ID);
+        destroy_object(fd, SURFACE_ID);
+        destroy_object(fd, KEYBOARD_ID);
+    }
+
+    fn destroy_object(fd: u32, object_id: u32) {
+        let mut buf = Vec::new();
+        encode_header(object_id, 0, 8, &mut buf);
         send_request(fd, &buf);
     }
 

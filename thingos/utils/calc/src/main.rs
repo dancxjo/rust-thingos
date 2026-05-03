@@ -13,14 +13,17 @@ use petals::{
     AlignItems, AvailableSpace, CalcInput, CalcKeyNode, CalcState, Calculator, Color,
     FlexDirection, JustifyContent, ResolvedStyle, Size, State, Theme, default_theme, theme_by_name,
 };
-use stem::abi::syscall::{PollHandle, poll_flags};
+use stem::application::{
+    AppAction, Application, ApplicationContext, ServiceLooper, run_application,
+};
 use stem::info;
+use stem::service_loop::ServiceEvent;
 use stem::syscall::socket::{connect, sendmsg, socket};
 use stem::syscall::socket_domain::AF_UNIX;
 use stem::syscall::socket_type::SOCK_STREAM;
-use stem::syscall::{
-    exit, memfd_create, sleep_ms, vfs_close, vfs_poll, vfs_read, vfs_write, vm_map,
-};
+use stem::syscall::{memfd_create, sleep_ms, vfs_close, vfs_read, vfs_write, vm_map};
+use stem::time::Duration;
+use stem::wait_set::WaitToken;
 
 const REGISTRY_ID: u32 = 2;
 const COMPOSITOR_ID: u32 = 3;
@@ -84,92 +87,185 @@ struct PointerState {
 
 #[stem::main]
 fn main(_arg: usize) -> ! {
-    let fd = connect_wayland();
-    let text_renderer = load_text_renderer();
-    let calc = Calculator::new();
-    let mut state = CalcState::default();
-    let mut theme_name = read_theme_name();
-    let mut theme = theme_by_name(&theme_name);
+    run_application::<CalcApp>()
+}
 
-    send_get_registry(fd, REGISTRY_ID);
-    read_initial_globals(fd);
+struct CalcApp {
+    fd: u32,
+    wayland_token: WaitToken,
+    text_renderer: Option<TextRenderer>,
+    calc: Calculator,
+    state: CalcState,
+    theme_name: String,
+    theme: Theme,
+    pending: PendingSurface,
+    buffer: Option<BufferState>,
+    next_callback_id: u32,
+    pending_frame_callbacks: Vec<u32>,
+    keyboard: KeyboardState,
+    pointer: PointerState,
+    rx: Vec<u8>,
+    last_rendered_expression: String,
+    last_rendered_display: String,
+    last_pressed_key: Option<usize>,
+}
 
-    bind_global(fd, 1, "wl_compositor", 4, COMPOSITOR_ID);
-    bind_global(fd, 2, "wl_shm", 1, SHM_ID);
-    bind_global(fd, 3, "xdg_wm_base", 1, WM_BASE_ID);
-    bind_global(fd, 4, "wl_seat", 5, SEAT_ID);
-    seat_get_pointer(fd, SEAT_ID, POINTER_ID);
-    seat_get_keyboard(fd, SEAT_ID, KEYBOARD_ID);
+impl Application for CalcApp {
+    const NAME: &'static str = "calc";
 
-    create_surface(fd, COMPOSITOR_ID, SURFACE_ID);
-    get_xdg_surface(fd, WM_BASE_ID, XDG_SURFACE_ID, SURFACE_ID);
-    get_toplevel(fd, XDG_SURFACE_ID, TOPLEVEL_ID);
-    set_toplevel_title(fd, TOPLEVEL_ID, "Calculator");
-    set_toplevel_app_id(fd, TOPLEVEL_ID, "thingos.calc");
-    commit_surface(fd, SURFACE_ID);
+    fn init(
+        ctx: &mut ApplicationContext,
+        looper: &mut ServiceLooper,
+    ) -> Result<Self, stem::errors::Errno> {
+        let fd = connect_wayland();
+        let text_renderer = load_text_renderer();
+        let calc = Calculator::new();
+        let state = CalcState::default();
+        let theme_name = read_theme_name();
+        let theme = theme_by_name(&theme_name);
+        let wayland_token = looper.add_fd_readable(fd)?;
 
-    let mut pending =
-        PendingSurface { serial: None, width: 360, height: 580, dirty: false, configured: false };
-    let mut buffer: Option<BufferState> = None;
-    let mut next_callback_id = 1000u32;
-    let mut pending_frame_callbacks: Vec<u32> = Vec::new();
-    let mut keyboard = KeyboardState::default();
-    let mut pointer = PointerState::default();
-    let mut rx = Vec::new();
-    let mut last_rendered_expression = String::new();
-    let mut last_rendered_display = String::new();
-    let mut last_pressed_key: Option<usize> = None;
+        send_get_registry(fd, REGISTRY_ID);
+        read_initial_globals(fd);
 
-    info!("Ready");
+        bind_global(fd, 1, "wl_compositor", 4, COMPOSITOR_ID);
+        bind_global(fd, 2, "wl_shm", 1, SHM_ID);
+        bind_global(fd, 3, "xdg_wm_base", 1, WM_BASE_ID);
+        bind_global(fd, 4, "wl_seat", 5, SEAT_ID);
+        seat_get_pointer(fd, SEAT_ID, POINTER_ID);
+        seat_get_keyboard(fd, SEAT_ID, KEYBOARD_ID);
 
-    loop {
-        let changed = read_events(
+        create_surface(fd, COMPOSITOR_ID, SURFACE_ID);
+        get_xdg_surface(fd, WM_BASE_ID, XDG_SURFACE_ID, SURFACE_ID);
+        get_toplevel(fd, XDG_SURFACE_ID, TOPLEVEL_ID);
+        set_toplevel_title(fd, TOPLEVEL_ID, "Calculator");
+        set_toplevel_app_id(fd, TOPLEVEL_ID, "thingos.calc");
+        commit_surface(fd, SURFACE_ID);
+
+        ctx.register_window("calculator toplevel", move || close_toplevel(fd));
+        ctx.register_cleanup("wayland fd", move || {
+            let _ = vfs_close(fd);
+        });
+
+        Ok(Self {
             fd,
-            &mut rx,
-            &mut pending,
-            &mut pending_frame_callbacks,
-            &mut keyboard,
-            &mut pointer,
-            &calc,
-            &mut state,
-        );
-        let hold_changed = update_hold_repeat(&mut pointer, &calc, &mut state);
-        let theme_changed = refresh_theme(&mut theme_name, &mut theme);
+            wayland_token,
+            text_renderer,
+            calc,
+            state,
+            theme_name,
+            theme,
+            pending: PendingSurface {
+                serial: None,
+                width: 360,
+                height: 580,
+                dirty: false,
+                configured: false,
+            },
+            buffer: None,
+            next_callback_id: 1000,
+            pending_frame_callbacks: Vec::new(),
+            keyboard: KeyboardState::default(),
+            pointer: PointerState::default(),
+            rx: Vec::new(),
+            last_rendered_expression: String::new(),
+            last_rendered_display: String::new(),
+            last_pressed_key: None,
+        })
+    }
 
-        let state_changed = state.expression != last_rendered_expression
-            || state.display != last_rendered_display
-            || pointer.pressed_key != last_pressed_key
+    fn ready(&mut self, _ctx: &mut ApplicationContext) {
+        info!("Ready");
+    }
+
+    fn timeout(&self) -> Option<Duration> {
+        Some(Duration::from_millis(IDLE_SLEEP_MS))
+    }
+
+    fn handle_event(
+        &mut self,
+        _ctx: &mut ApplicationContext,
+        event: ServiceEvent<'_>,
+    ) -> AppAction {
+        let mut changed = false;
+        match event {
+            ServiceEvent::Ready { token, event }
+                if token == self.wayland_token && event.is_readable() =>
+            {
+                let mut quit = false;
+                changed = read_events(
+                    self.fd,
+                    &mut self.rx,
+                    &mut self.pending,
+                    &mut self.pending_frame_callbacks,
+                    &mut self.keyboard,
+                    &mut self.pointer,
+                    &self.calc,
+                    &mut self.state,
+                    &mut quit,
+                );
+                if quit {
+                    return AppAction::Quit;
+                }
+            }
+            ServiceEvent::Ready { token, event }
+                if token == self.wayland_token && (event.is_hangup() || event.is_error()) =>
+            {
+                return AppAction::Quit;
+            }
+            ServiceEvent::Timeout => {}
+            ServiceEvent::Message { .. } | ServiceEvent::Ready { .. } => {}
+            ServiceEvent::InboxClosed => return AppAction::Quit,
+        }
+        self.tick(changed);
+        AppAction::Continue
+    }
+}
+
+impl CalcApp {
+    fn tick(&mut self, changed: bool) {
+        let hold_changed = update_hold_repeat(&mut self.pointer, &self.calc, &mut self.state);
+        let theme_changed = refresh_theme(&mut self.theme_name, &mut self.theme);
+
+        let state_changed = self.state.expression != self.last_rendered_expression
+            || self.state.display != self.last_rendered_display
+            || self.pointer.pressed_key != self.last_pressed_key
             || changed
             || hold_changed
             || theme_changed;
 
-        if pending.configured && (pending.dirty || state_changed) {
-            last_rendered_expression = state.expression.clone();
-            last_rendered_display = state.display.clone();
-            last_pressed_key = pointer.pressed_key;
+        if self.pending.configured && (self.pending.dirty || state_changed) {
+            self.last_rendered_expression = self.state.expression.clone();
+            self.last_rendered_display = self.state.display.clone();
+            self.last_pressed_key = self.pointer.pressed_key;
 
             let buf = ensure_buffer(
-                fd,
+                self.fd,
                 SHM_ID,
-                &mut buffer,
+                &mut self.buffer,
                 SURFACE_ID + 100,
-                pending.width,
-                pending.height,
+                self.pending.width,
+                self.pending.height,
             );
-            render_calc(buf, &calc, &state, pointer.pressed_key, theme, text_renderer.as_ref());
-            if pending.dirty {
-                ack_configure(fd, XDG_SURFACE_ID, pending.serial.unwrap_or(0));
-                pending.dirty = false;
+            render_calc(
+                buf,
+                &self.calc,
+                &self.state,
+                self.pointer.pressed_key,
+                self.theme,
+                self.text_renderer.as_ref(),
+            );
+            if self.pending.dirty {
+                ack_configure(self.fd, XDG_SURFACE_ID, self.pending.serial.unwrap_or(0));
+                self.pending.dirty = false;
             }
-            attach_buffer(fd, SURFACE_ID, buf.buffer_id);
-            damage_surface(fd, SURFACE_ID, 0, 0, pending.width, pending.height);
-            let cb_id = alloc_callback_id(&mut next_callback_id);
-            request_frame(fd, SURFACE_ID, cb_id);
-            pending_frame_callbacks.push(cb_id);
-            commit_surface(fd, SURFACE_ID);
+            attach_buffer(self.fd, SURFACE_ID, buf.buffer_id);
+            damage_surface(self.fd, SURFACE_ID, 0, 0, self.pending.width, self.pending.height);
+            let cb_id = alloc_callback_id(&mut self.next_callback_id);
+            request_frame(self.fd, SURFACE_ID, cb_id);
+            self.pending_frame_callbacks.push(cb_id);
+            commit_surface(self.fd, SURFACE_ID);
         }
-
-        sleep_ms(IDLE_SLEEP_MS);
     }
 }
 
@@ -182,14 +278,8 @@ fn read_events(
     pointer: &mut PointerState,
     calc: &Calculator,
     state: &mut CalcState,
+    quit: &mut bool,
 ) -> bool {
-    let mut pollfd = [PollHandle { handle: fd as i32, events: poll_flags::POLLIN, revents: 0 }];
-    if !matches!(vfs_poll(&mut pollfd, 0), Ok(n) if n > 0)
-        || (pollfd[0].revents & poll_flags::POLLIN) == 0
-    {
-        return false;
-    }
-
     let mut changed = false;
     let mut in_buf = [0u8; 4096];
     let len = match vfs_read(fd, &mut in_buf) {
@@ -236,7 +326,9 @@ fn read_events(
             }
             (TOPLEVEL_ID, 1) => {
                 info!("Closed");
-                exit(0);
+                vfs_write(1, b"calc: explicit exit(0) call\n").ok();
+                *quit = true;
+                changed = true;
             }
             (POINTER_ID, 2) if payload.len() >= 12 => {
                 pointer.x = wl_fixed_to_i32(read_i32(payload, 4));
@@ -868,6 +960,20 @@ fn request_frame(fd: u32, surface_id: u32, callback_id: u32) {
 fn commit_surface(fd: u32, surface_id: u32) {
     let mut buf = Vec::new();
     encode_header(surface_id, 6, 8, &mut buf);
+    send_request(fd, &buf);
+}
+
+fn close_toplevel(fd: u32) {
+    destroy_object(fd, TOPLEVEL_ID);
+    destroy_object(fd, XDG_SURFACE_ID);
+    destroy_object(fd, SURFACE_ID);
+    destroy_object(fd, POINTER_ID);
+    destroy_object(fd, KEYBOARD_ID);
+}
+
+fn destroy_object(fd: u32, object_id: u32) {
+    let mut buf = Vec::new();
+    encode_header(object_id, 0, 8, &mut buf);
     send_request(fd, &buf);
 }
 

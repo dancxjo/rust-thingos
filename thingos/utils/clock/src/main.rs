@@ -112,28 +112,28 @@ impl Application for ClockApp {
         ctx: &mut ApplicationContext,
         looper: &mut ServiceLooper,
     ) -> Result<Self, stem::errors::Errno> {
-    lower_clock_priority();
+        lower_clock_priority();
 
-    let fd = connect_wayland();
-    let text_renderer = load_text_renderer();
-    let clock = Clock::new();
+        let fd = connect_wayland();
+        let text_renderer = load_text_renderer();
+        let clock = Clock::new();
         let theme_name = read_theme_name();
         let theme = theme_by_name(&theme_name);
         let wayland_token = looper.add_fd_readable(fd)?;
 
-    send_get_registry(fd, REGISTRY_ID);
-    read_initial_globals(fd);
+        send_get_registry(fd, REGISTRY_ID);
+        read_initial_globals(fd);
 
-    bind_global(fd, 1, "wl_compositor", 4, COMPOSITOR_ID);
-    bind_global(fd, 2, "wl_shm", 1, SHM_ID);
-    bind_global(fd, 3, "xdg_wm_base", 1, WM_BASE_ID);
+        bind_global(fd, 1, "wl_compositor", 4, COMPOSITOR_ID);
+        bind_global(fd, 2, "wl_shm", 1, SHM_ID);
+        bind_global(fd, 3, "xdg_wm_base", 1, WM_BASE_ID);
 
-    create_surface(fd, COMPOSITOR_ID, SURFACE_ID);
-    get_xdg_surface(fd, WM_BASE_ID, XDG_SURFACE_ID, SURFACE_ID);
-    get_toplevel(fd, XDG_SURFACE_ID, TOPLEVEL_ID);
-    set_toplevel_title(fd, TOPLEVEL_ID, "Clock");
-    set_toplevel_app_id(fd, TOPLEVEL_ID, "thingos.clock");
-    commit_surface(fd, SURFACE_ID);
+        create_surface(fd, COMPOSITOR_ID, SURFACE_ID);
+        get_xdg_surface(fd, WM_BASE_ID, XDG_SURFACE_ID, SURFACE_ID);
+        get_toplevel(fd, XDG_SURFACE_ID, TOPLEVEL_ID);
+        set_toplevel_title(fd, TOPLEVEL_ID, "Clock");
+        set_toplevel_app_id(fd, TOPLEVEL_ID, "thingos.clock");
+        commit_surface(fd, SURFACE_ID);
 
         ctx.register_window("clock toplevel", move || close_toplevel(fd));
         ctx.register_cleanup("wayland fd", move || {
@@ -170,13 +170,26 @@ impl Application for ClockApp {
         Some(Duration::from_millis(IDLE_SLEEP_MS))
     }
 
-    fn handle_event(&mut self, _ctx: &mut ApplicationContext, event: ServiceEvent<'_>) -> AppAction {
+    fn handle_event(
+        &mut self,
+        _ctx: &mut ApplicationContext,
+        event: ServiceEvent<'_>,
+    ) -> AppAction {
         match event {
             ServiceEvent::Ready { token, event }
                 if token == self.wayland_token && event.is_readable() =>
             {
-                if read_events(self.fd, &mut self.pending, &mut self.pending_frame_callbacks) {
+                let mut quit = false;
+                if read_events(
+                    self.fd,
+                    &mut self.pending,
+                    &mut self.pending_frame_callbacks,
+                    &mut quit,
+                ) {
                     self.tick_and_render();
+                }
+                if quit {
+                    return AppAction::Quit;
                 }
             }
             ServiceEvent::Ready { token, event }
@@ -232,8 +245,7 @@ impl ClockApp {
             self.last_serial_tick_ns = now_ns;
         }
 
-        let time_changed =
-            clock_state != self.last_state || waiting_text != self.last_waiting_text;
+        let time_changed = clock_state != self.last_state || waiting_text != self.last_waiting_text;
         let theme_changed = refresh_theme(&mut self.theme_name, &mut self.theme);
         if time_changed {
             self.last_state = clock_state;
@@ -313,7 +325,12 @@ fn read_initial_globals(fd: u32) {
     let _ = vfs_read(fd, &mut buf);
 }
 
-fn read_events(fd: u32, pending: &mut PendingSurface, pending_frame_callbacks: &mut Vec<u32>) -> bool {
+fn read_events(
+    fd: u32,
+    pending: &mut PendingSurface,
+    pending_frame_callbacks: &mut Vec<u32>,
+    quit: &mut bool,
+) -> bool {
     let mut changed = false;
     let mut in_buf = [0u8; 4096];
     let len = match vfs_read(fd, &mut in_buf) {
@@ -352,7 +369,8 @@ fn read_events(fd: u32, pending: &mut PendingSurface, pending_frame_callbacks: &
             (TOPLEVEL_ID, 1) => {
                 info!("clock: compositor requested close; exiting");
                 stem::syscall::vfs_write(1, b"clock: explicit exit(0) call\n").ok();
-                exit(0);
+                *quit = true;
+                changed = true;
             }
             (_, 0) if pending_frame_callbacks.iter().any(|&id| id == object_id) => {
                 pending_frame_callbacks.retain(|&id| id != object_id);
@@ -895,6 +913,18 @@ fn request_frame(fd: u32, surface_id: u32, callback_id: u32) {
 fn commit_surface(fd: u32, surface_id: u32) {
     let mut buf = Vec::new();
     encode_header(surface_id, 6, 8, &mut buf);
+    send_request(fd, &buf);
+}
+
+fn close_toplevel(fd: u32) {
+    destroy_object(fd, TOPLEVEL_ID);
+    destroy_object(fd, XDG_SURFACE_ID);
+    destroy_object(fd, SURFACE_ID);
+}
+
+fn destroy_object(fd: u32, object_id: u32) {
+    let mut buf = Vec::new();
+    encode_header(object_id, 0, 8, &mut buf);
     send_request(fd, &buf);
 }
 
