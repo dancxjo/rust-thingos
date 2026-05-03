@@ -860,6 +860,7 @@ async fn when_press_combo(world: &mut ThingOsWorld, keys: String) {
                 "alt" => "alt",
                 "ctrl" | "control" => "ctrl",
                 "shift" => "shift",
+                "super" | "meta" | "win" => "meta_l",
                 _ => continue,
             };
             let cmd = format!(
@@ -898,6 +899,7 @@ async fn when_press_combo(world: &mut ThingOsWorld, keys: String) {
                 "alt" => "alt",
                 "ctrl" | "control" => "ctrl",
                 "shift" => "shift",
+                "super" | "meta" | "win" => "meta_l",
                 _ => continue,
             };
             let cmd = format!(

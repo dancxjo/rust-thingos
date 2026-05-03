@@ -35,6 +35,26 @@ pub enum LayerShellLayer {
     Overlay = 3,
 }
 
+/// Keyboard focus request from `zwlr_layer_surface_v1.set_keyboard_interactivity`.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+#[repr(u32)]
+pub enum LayerKeyboardInteractivity {
+    None = 0,
+    Exclusive = 1,
+    OnDemand = 2,
+}
+
+impl LayerKeyboardInteractivity {
+    pub fn from_wire(v: u32) -> Option<Self> {
+        match v {
+            0 => Some(Self::None),
+            1 => Some(Self::Exclusive),
+            2 => Some(Self::OnDemand),
+            _ => None,
+        }
+    }
+}
+
 impl LayerShellLayer {
     /// Decode from a `zwlr_layer_shell_v1.layer` wire value.  Returns `None`
     /// for out-of-range integers (the dispatcher should send a protocol
@@ -95,6 +115,7 @@ pub struct LayerSurfaceConfig {
     pub anchor: u32,
     pub size: (u32, u32),
     pub exclusive_zone: i32,
+    pub keyboard_interactivity: LayerKeyboardInteractivity,
     pub margin_top: i32,
     pub margin_right: i32,
     pub margin_bottom: i32,
@@ -109,6 +130,7 @@ impl LayerSurfaceConfig {
             anchor: 0,
             size: (0, 0),
             exclusive_zone: 0,
+            keyboard_interactivity: LayerKeyboardInteractivity::None,
             margin_top: 0,
             margin_right: 0,
             margin_bottom: 0,

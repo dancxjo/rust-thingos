@@ -61,6 +61,7 @@ const POINTER_OVERLAY_MAX_W: u32 = 460;
 const POINTER_OVERLAY_MAX_H: u32 = 144;
 const POINTER_OVERLAY_MARGIN: u32 = 12;
 const POINTER_OVERLAY_CURSOR_INSET: i32 = 12;
+const RUNBOX_CARET_W: u32 = 2;
 const CHROME_ICON_X_BIAS: i32 = 0;
 const CHROME_ICON_Y_BIAS: i32 = 0;
 
@@ -98,6 +99,7 @@ pub struct CompositorVisuals {
     pending_cursor: Option<CursorBuffer>,
     cursor_variants: Vec<(CursorKind, CursorBuffer)>,
     pointer_overlay: Option<PointerOverlayBuffer>,
+    runbox_overlay: Option<RunBoxOverlayBuffer>,
     body_overlays: Vec<ChromeOverlayBuffer>,
     chrome_overlays: Vec<ChromeOverlayBuffer>,
     pistil: Option<PistilLib>,
@@ -180,6 +182,13 @@ struct PointerOverlayBuffer {
     height: u32,
 }
 
+struct RunBoxOverlayBuffer {
+    texture: Texture,
+    buffer_id: u32,
+    width: u32,
+    height: u32,
+}
+
 struct ChromeOverlayBuffer {
     surface_id: u32,
     texture: Texture,
@@ -197,6 +206,7 @@ impl CompositorVisuals {
             pending_cursor: None,
             cursor_variants: Vec::new(),
             pointer_overlay: None,
+            runbox_overlay: None,
             body_overlays: Vec::new(),
             chrome_overlays: Vec::new(),
             pistil: None,
@@ -876,6 +886,66 @@ impl CompositorVisuals {
 
         self.pointer_overlay = Some(PointerOverlayBuffer { texture, buffer_id, width, height });
         stem::debug!("Pointer debug overlay ready: buffer={} size={}x{}", buffer_id, width, height);
+        Some(())
+    }
+
+    pub fn runbox_overlay_plane(
+        &mut self,
+        display: &DisplayBackend,
+        state: &blossom::runbox::RunState,
+    ) -> Option<OverlayPlane> {
+        if !state.visible {
+            return None;
+        }
+        self.ensure_runbox_overlay(display)?;
+        let (output_w, output_h) = display.output_size();
+        let placement = blossom::runbox::runbox_rect(output_w, output_h);
+
+        let overlay = self.runbox_overlay.as_mut()?;
+        draw_runbox_overlay(
+            overlay.texture.as_slice_mut(),
+            overlay.width,
+            overlay.height,
+            state,
+            self.pistil.as_ref().and_then(|lib| lib.draw_text),
+        );
+
+        Some(OverlayPlane {
+            buffer_id: overlay.buffer_id,
+            x: placement.x,
+            y: placement.y,
+            width: overlay.width,
+            height: overlay.height,
+        })
+    }
+
+    fn ensure_runbox_overlay(&mut self, display: &DisplayBackend) -> Option<()> {
+        let width = blossom::runbox::RUNBOX_WIDTH;
+        let height = blossom::runbox::RUNBOX_HEIGHT;
+        if matches!(
+            self.runbox_overlay.as_ref(),
+            Some(overlay) if overlay.width == width && overlay.height == height
+        ) {
+            return Some(());
+        }
+
+        let texture = Texture::new("bloom.compositor.runbox_overlay", width, height, 4)?;
+        let buffer_id = display.import_buffer(
+            texture.fd,
+            width,
+            height,
+            texture.stride,
+            PixelFormat::Bgra8888,
+            0,
+            0,
+        )?;
+
+        if let Some(old) = self.runbox_overlay.take() {
+            display.release_buffer(old.buffer_id);
+        }
+
+        self.runbox_overlay = Some(RunBoxOverlayBuffer { texture, buffer_id, width, height });
+        stem::debug!("Run dialog overlay ready: buffer={} size={}x{}", buffer_id, width, height);
         Some(())
     }
 }
@@ -2115,6 +2185,68 @@ fn plot_thick_pixel(
         thickness.max(1),
         thickness.max(1),
         color,
+    );
+}
+
+fn draw_runbox_overlay(
+    dst: &mut [u32],
+    width: u32,
+    height: u32,
+    state: &blossom::runbox::RunState,
+    pistil_draw_text: Option<DrawTextFn>,
+) {
+    dst.fill(0);
+    fill_rect(dst, width, 0, 0, width, height, 0xF5181C26);
+    draw_rect_stroke(dst, width, height, 0, 0, width, height, 1, 0xFF2A2F3D);
+
+    draw_overlay_text(pistil_draw_text, dst, width, height, 16, 24, 14.0, "Run", 0xFF8F98AA);
+
+    let field_x = 16;
+    let field_y = 38;
+    let field_w = width.saturating_sub(32);
+    let field_h = 42;
+    fill_rect(dst, width, field_x, field_y, field_w, field_h, 0xFF111318);
+    draw_rect_stroke(dst, width, height, field_x, field_y, field_w, field_h, 1, 0xFFD8A657);
+
+    let text_x = field_x + 10;
+    let text_y = field_y + 27;
+    draw_overlay_text(
+        pistil_draw_text,
+        dst,
+        width,
+        height,
+        text_x,
+        text_y,
+        18.0,
+        &state.input,
+        0xFFE6EAF0,
+    );
+    let caret_x = text_x + (state.cursor as i32 * 10);
+    fill_rect(
+        dst,
+        width,
+        caret_x,
+        field_y + 10,
+        RUNBOX_CARET_W,
+        field_h.saturating_sub(20),
+        0xFFD8A657,
+    );
+
+    let button_w = 72;
+    let button_h = 32;
+    let button_x = width.saturating_sub(16 + button_w) as i32;
+    let button_y = height.saturating_sub(16 + button_h) as i32;
+    fill_rect(dst, width, button_x, button_y, button_w, button_h, 0xFFD8A657);
+    draw_overlay_text(
+        pistil_draw_text,
+        dst,
+        width,
+        height,
+        button_x + 22,
+        button_y + 22,
+        14.0,
+        "Run",
+        0xFF111318,
     );
 }
 

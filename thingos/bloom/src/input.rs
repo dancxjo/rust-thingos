@@ -1,3 +1,6 @@
+use alloc::collections::BTreeMap;
+use alloc::string::{String, ToString};
+use alloc::vec::Vec;
 use core::sync::atomic::{AtomicU32, AtomicU64, Ordering};
 
 use abi::hid::{
@@ -7,6 +10,7 @@ use abi::hid::{
 use abi::{KindId, ui_event};
 use stem::syscall::message::msg_send;
 use stem::syscall::port_send_all;
+use stem::syscall::vfs::{vfs_close, vfs_open};
 
 use crate::damage::DamageTracker;
 use crate::protocol::{
@@ -70,6 +74,8 @@ pub struct InputState {
     pending_resize: Option<(u32, u32, u32)>,
     /// Whether we have already sent a resize event to a client during the current frame.
     resize_sent_this_frame: bool,
+    runbox: blossom::runbox::RunState,
+    runbox_keyboard_modal: bool,
 }
 
 #[derive(Clone, Copy, Debug)]
@@ -110,7 +116,13 @@ impl InputState {
             output_h,
             pending_resize: None,
             resize_sent_this_frame: false,
+            runbox: blossom::runbox::RunState::new(),
+            runbox_keyboard_modal: false,
         }
+    }
+
+    pub fn runbox(&self) -> &blossom::runbox::RunState {
+        &self.runbox
     }
 
     pub fn is_resizing(&self) -> bool {
@@ -598,7 +610,55 @@ impl InputState {
                     }
                     return true;
                 }
-                match blossom::input::handle_hotkey(key.key(), key.mods(), key.is_repeat()) {
+                let wm_action =
+                    blossom::input::handle_hotkey(key.key(), key.mods(), key.is_repeat());
+                if matches!(wm_action, blossom::input::WmAction::ToggleRunBox) {
+                    let visible = self.runbox.toggle();
+                    self.runbox_keyboard_modal = true;
+                    damage.mark_full(self.output_w as u32, self.output_h as u32);
+                    if visible {
+                        stem::info!("Run dialog. Input field focused");
+                    } else {
+                        stem::info!("Run dialog closed");
+                    }
+                    return true;
+                }
+                if self.runbox.visible {
+                    match self.runbox.handle_key(key.key(), key.mods()) {
+                        blossom::runbox::RunBoxEvent::Submit(
+                            blossom::runbox::RunAction::Execute(command),
+                        ) => {
+                            damage.mark_full(self.output_w as u32, self.output_h as u32);
+                            self.runbox_keyboard_modal = true;
+                            let launcher = BloomLauncher;
+                            match blossom::runbox::Launcher::run(&launcher, &command) {
+                                blossom::runbox::LaunchResult::Started { pid } => {
+                                    stem::info!("Launched {} as pid {}", command, pid);
+                                }
+                                blossom::runbox::LaunchResult::NotFound => {
+                                    stem::warn!(
+                                        "Could not launch '{}': command not found",
+                                        command
+                                    );
+                                }
+                                blossom::runbox::LaunchResult::Failed => {
+                                    stem::warn!("Could not launch '{}'", command);
+                                }
+                            }
+                        }
+                        blossom::runbox::RunBoxEvent::Closed => {
+                            self.runbox_keyboard_modal = true;
+                            damage.mark_full(self.output_w as u32, self.output_h as u32);
+                            stem::info!("Run dialog closed");
+                        }
+                        blossom::runbox::RunBoxEvent::Updated
+                        | blossom::runbox::RunBoxEvent::Consumed => {
+                            damage.mark_full(self.output_w as u32, self.output_h as u32);
+                        }
+                    }
+                    return true;
+                }
+                match wm_action {
                     blossom::input::WmAction::CycleFocus { forward } => {
                         let (old_focus, new_focus) = scene.cycle_focus(forward);
                         stem::debug!(
@@ -629,6 +689,7 @@ impl InputState {
                         }
                         return true;
                     }
+                    blossom::input::WmAction::ToggleRunBox => {}
                     blossom::input::WmAction::None => {}
                 }
                 if let Some(surface_id) = scene.keyboard_focus {
@@ -662,6 +723,12 @@ impl InputState {
                 let key = KeyEventPayload::from_bytes(&p);
                 self.keyboard_modifiers = key.mods;
                 if is_pointer_overlay_toggle(key) {
+                    return false;
+                }
+                if self.runbox.visible || self.runbox_keyboard_modal {
+                    if key.mods == 0 {
+                        self.runbox_keyboard_modal = self.runbox.visible;
+                    }
                     return false;
                 }
                 if let Some(surface_id) = scene.keyboard_focus {
@@ -935,11 +1002,7 @@ impl InputState {
             toggled.new_rect.w as i32,
             toggled.new_rect.h as i32,
         );
-        stem::debug!(
-            "Fullscreen toggled surface={} fullscreen={}",
-            surface_id,
-            toggled.active
-        );
+        stem::debug!("Fullscreen toggled surface={} fullscreen={}", surface_id, toggled.active);
     }
 
     fn update_pointer_grab(
@@ -1456,6 +1519,65 @@ fn is_pointer_overlay_toggle(key: KeyEventPayload) -> bool {
     key.key() == Key::F7 && key.mods().has_alt()
 }
 
+struct BloomLauncher;
+
+impl blossom::runbox::Launcher for BloomLauncher {
+    fn run(&self, command: &str) -> blossom::runbox::LaunchResult {
+        let mut parts = command.split_ascii_whitespace();
+        let Some(program) = parts.next() else {
+            return blossom::runbox::LaunchResult::Failed;
+        };
+        let Some(path) = resolve_run_command(program) else {
+            return blossom::runbox::LaunchResult::NotFound;
+        };
+
+        let mut argv = Vec::new();
+        argv.push(path.as_bytes().to_vec());
+        for arg in parts {
+            argv.push(arg.as_bytes().to_vec());
+        }
+        let argv_slices: Vec<&[u8]> = argv.iter().map(|arg| arg.as_slice()).collect();
+        let env = BTreeMap::new();
+
+        match stem::syscall::spawn_process_ex(
+            &path,
+            &argv_slices,
+            &env,
+            abi::types::stdio_mode::INHERIT,
+            abi::types::stdio_mode::INHERIT,
+            abi::types::stdio_mode::INHERIT,
+            0,
+            &[],
+        ) {
+            Ok(resp) => blossom::runbox::LaunchResult::Started { pid: resp.child_pid as u64 },
+            Err(_) => blossom::runbox::LaunchResult::Failed,
+        }
+    }
+}
+
+fn resolve_run_command(program: &str) -> Option<String> {
+    if program.contains('/') {
+        return file_exists(program).then(|| program.to_string());
+    }
+    for prefix in ["/bin", "/app", "/applications"] {
+        let path = alloc::format!("{}/{}", prefix, program);
+        if file_exists(&path) {
+            return Some(path);
+        }
+    }
+    None
+}
+
+fn file_exists(path: &str) -> bool {
+    match vfs_open(path, abi::syscall::vfs_flags::O_RDONLY) {
+        Ok(fd) => {
+            let _ = vfs_close(fd);
+            true
+        }
+        Err(_) => false,
+    }
+}
+
 /// Deliver a serialized Bloom event to a client.
 ///
 /// Prefers typed inbox delivery when the client registered `input_pid`
@@ -1484,11 +1606,9 @@ fn send_close_requested_to_owner(scene: &Scene, surface_id: u32) {
         return;
     };
     match msg_send(pid, KIND_UI_EVENT, &buf[..len]) {
-        Ok(()) => stem::debug!(
-            "Sent CloseRequested to app inbox pid={} surface={}",
-            pid,
-            surface_id
-        ),
+        Ok(()) => {
+            stem::debug!("Sent CloseRequested to app inbox pid={} surface={}", pid, surface_id)
+        }
         Err(err) => stem::warn!(
             "Failed to send CloseRequested to app inbox pid={} surface={} err={:?}",
             pid,

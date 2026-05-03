@@ -234,11 +234,8 @@ impl Pressable {
 
     fn begin_press(&mut self, source: ActiveSource, now_ns: u64) -> Vec<PressEvent> {
         self.source = Some(source);
-        self.state = PressState {
-            is_pressed: true,
-            press_started_at: Some(now_ns),
-            is_long_press: false,
-        };
+        self.state =
+            PressState { is_pressed: true, press_started_at: Some(now_ns), is_long_press: false };
         self.long_press_fired = false;
         self.last_repeat_ns = None;
         alloc::vec![PressEvent::Press]

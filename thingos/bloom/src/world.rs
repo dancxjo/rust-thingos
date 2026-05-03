@@ -565,6 +565,7 @@ impl BloomWorld {
         } else {
             None
         };
+        let runbox_overlay = self.visuals.runbox_overlay_plane(&self.display, self.input.runbox());
 
         // When hardware cursor is active the cursor plane is handled
         // independently; pass `None` to the software compositor so it is not
@@ -610,6 +611,7 @@ impl BloomWorld {
             &body_overlay,
             &chrome_overlay,
             pointer_overlay,
+            runbox_overlay,
             compositor_cursor,
             flags,
             self.visuals.corner_radius(),

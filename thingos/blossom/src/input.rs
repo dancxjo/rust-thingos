@@ -5,6 +5,7 @@ pub enum WmAction {
     CycleFocus { forward: bool },
     ToggleFullscreen,
     CloseSurface,
+    ToggleRunBox,
 }
 
 pub fn handle_hotkey(key: Key, mods: Mods, is_repeat: bool) -> WmAction {
@@ -14,6 +15,10 @@ pub fn handle_hotkey(key: Key, mods: Mods, is_repeat: bool) -> WmAction {
 
     if key == Key::Tab && mods.has_alt() {
         return WmAction::CycleFocus { forward: !mods.has_shift() };
+    }
+
+    if key == Key::R && mods.has_meta() {
+        return WmAction::ToggleRunBox;
     }
 
     if key == Key::F11 {

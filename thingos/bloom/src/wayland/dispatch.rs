@@ -2650,8 +2650,21 @@ fn dispatch_layer_surface(
             });
         }
         ZWLR_LAYER_SURFACE_SET_KEYBOARD_INTERACTIVITY => {
-            // Accepted as a no-op until input routing supports per-surface
-            // keyboard focus rules (Bloom currently uses scene-wide focus).
+            let mode = read_u32(&msg.data, 0).unwrap_or(u32::MAX);
+            match blossom::LayerKeyboardInteractivity::from_wire(mode) {
+                Some(interactivity) => {
+                    with_layer_state_mut(client, obj_id, |s| {
+                        s.config.keyboard_interactivity = interactivity
+                    });
+                }
+                None => {
+                    client.send_protocol_error(
+                        obj_id,
+                        blossom::layer_surface_error::INVALID_KEYBOARD_INTERACTIVITY,
+                        "invalid keyboard interactivity",
+                    );
+                }
+            }
         }
         ZWLR_LAYER_SURFACE_GET_POPUP => {
             // Accepted as no-op (see comment on ZWLR_LAYER_SHELL_GET_POPUP).

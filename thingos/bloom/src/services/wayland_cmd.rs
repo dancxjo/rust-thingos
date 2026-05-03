@@ -390,6 +390,7 @@ impl WaylandCommandService {
             anchor,
             size: (width, height),
             exclusive_zone,
+            keyboard_interactivity: blossom::layer_shell::LayerKeyboardInteractivity::None,
             margin_top,
             margin_right,
             margin_bottom,

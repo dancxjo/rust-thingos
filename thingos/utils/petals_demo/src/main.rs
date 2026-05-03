@@ -4,8 +4,8 @@
 extern crate alloc;
 
 use petals::{
-    AlignItems, Clock, Color, Declaration, Description, FlexDirection, JustifyContent,
-    ResolvedStyle, Rule, Selector, UiTree,
+    AlignItems, CalcInput, CalcState, Calculator, Clock, Color, Declaration, Description,
+    FlexDirection, JustifyContent, Op, ResolvedStyle, Rule, Selector, UiTree,
 };
 use taffy::prelude::{AvailableSpace, Size};
 
@@ -104,7 +104,78 @@ fn run_demo() -> i32 {
         return 1;
     }
 
+    if run_calc_petal_demo() != 0 {
+        return 1;
+    }
+
     stem::println!("petals_demo: PASS");
+    0
+}
+
+fn run_calc_petal_demo() -> i32 {
+    let calc = Calculator::new();
+    let mut state = CalcState::default();
+    for input in [
+        CalcInput::Digit(1),
+        CalcInput::Digit(2),
+        CalcInput::Operator(Op::Add),
+        CalcInput::Digit(7),
+        CalcInput::Operator(Op::Mul),
+        CalcInput::Digit(3),
+    ] {
+        calc.reduce(&mut state, input);
+    }
+
+    stem::println!("petals_demo: calc expression={} result={}", state.expression, state.display);
+    stem::println!("{}", calc.narration(CalcInput::Digit(3), &state));
+
+    let (mut tree, nodes) = match calc.build_tree(&state) {
+        Ok(value) => value,
+        Err(err) => {
+            stem::println!("petals_demo: calc tree failed: {:?}", err);
+            return 1;
+        }
+    };
+
+    let root = tree.root();
+    if let Err(err) = tree
+        .apply_style(
+            root,
+            ResolvedStyle {
+                width: Some(360.0),
+                height: Some(580.0),
+                flex_direction: Some(FlexDirection::Column),
+                justify_content: Some(JustifyContent::Start),
+                align_items: Some(AlignItems::Stretch),
+                ..ResolvedStyle::default()
+            },
+        )
+        .and_then(|_| {
+            tree.compute_layout(Size {
+                width: AvailableSpace::Definite(360.0),
+                height: AvailableSpace::Definite(580.0),
+            })
+        })
+    {
+        stem::println!("petals_demo: calc layout failed: {:?}", err);
+        return 1;
+    }
+
+    match tree.global_layout_box(nodes.keys[0].node) {
+        Ok(b) => stem::println!(
+            "petals_demo: calc first key box=({}, {}) {}x{}",
+            b.x as i32,
+            b.y as i32,
+            b.width as i32,
+            b.height as i32
+        ),
+        Err(err) => {
+            stem::println!("petals_demo: calc key layout error: {:?}", err);
+            return 1;
+        }
+    }
+
+    stem::println!("petals_demo: calc petal PASS");
     0
 }
 

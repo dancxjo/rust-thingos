@@ -351,6 +351,7 @@ impl DisplayBackend {
         body_overlays: &[WindowOverlayPlane],
         chrome_overlays: &[WindowOverlayPlane],
         pointer_overlay: Option<OverlayPlane>,
+        runbox_overlay: Option<OverlayPlane>,
         cursor: Option<CursorPlane>,
         flags: CommitFlags,
         corner_radius: u8,
@@ -366,6 +367,7 @@ impl DisplayBackend {
                 body_overlays,
                 chrome_overlays,
                 pointer_overlay,
+                runbox_overlay,
                 cursor,
                 corner_radius,
             );
@@ -465,7 +467,13 @@ impl DisplayBackend {
             }
         }
 
-        // 4. Diagnostic overlay. This is intentionally above the wallpaper and
+        // 4. Diagnostic/modal overlays. These are intentionally above the
+        // wallpaper and client surfaces so coordinates and modal UI stay visible.
+        if let Some(overlay) = runbox_overlay {
+            push_overlay_commit(&mut planes, &mut plane_count, overlay, i32::MAX - 2);
+        }
+
+        // Diagnostic overlay. This is intentionally above the wallpaper and
         // client surfaces so pointer coordinates stay visible while debugging.
         if let Some(overlay) = pointer_overlay {
             if plane_count < MAX_COMMIT_PLANES {
@@ -628,6 +636,7 @@ impl DisplayBackend {
         body_overlays: &[WindowOverlayPlane],
         chrome_overlays: &[WindowOverlayPlane],
         pointer_overlay: Option<OverlayPlane>,
+        runbox_overlay: Option<OverlayPlane>,
         cursor: Option<CursorPlane>,
         corner_radius: u8,
     ) -> PresentResult {
@@ -738,7 +747,21 @@ impl DisplayBackend {
             }
         }
 
-        // 3. Diagnostic pointer overlay (above all windows).
+        // 3. Modal and diagnostic overlays (above all windows).
+        if let Some(overlay) = runbox_overlay {
+            if !batch.is_full() {
+                let dst = Rect {
+                    x: overlay.x.max(0) as u32,
+                    y: overlay.y.max(0) as u32,
+                    w: overlay.width,
+                    h: overlay.height,
+                };
+                let src = Rect { x: 0, y: 0, w: overlay.width, h: overlay.height };
+                batch.alpha_blit(BufferId(overlay.buffer_id), src, BufferId(0), dst, 255);
+            }
+        }
+
+        // Diagnostic pointer overlay.
         if let Some(overlay) = pointer_overlay {
             if !batch.is_full() {
                 let dst = Rect {

@@ -204,6 +204,20 @@ fn default_stylable_for(descriptions: &[Description]) -> Stylable {
             StyleProperty::OutlineWidth,
         ]);
     }
+    if descriptions.iter().any(|description| {
+        matches!(
+            description,
+            Description::Calculator
+                | Description::DisplayPanel
+                | Description::KeypadGrid
+                | Description::KeypadRow
+                | Description::ModeToggle
+                | Description::RunBox
+                | Description::TextField
+        )
+    }) {
+        stylable.properties.push(StyleProperty::BackgroundColor);
+    }
     if descriptions.contains(&Description::Textual) {
         stylable.properties.extend_from_slice(&[
             StyleProperty::Color,

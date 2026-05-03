@@ -24,3 +24,10 @@ Feature: Keyboard Shortcut Relocation
     And I click at 500, 500
     And I press alt+f
     Then the serial output should NOT contain "BLOOM_FULLSCREEN_TOGGLE_TRIGGERED" within 5s
+
+  Scenario: Super+R opens the Run dialog
+    Given the machine is booted
+    When I wait for the shell prompt
+    And I wait for the serial output to contain "bloom: registered bristle pointer sink"
+    And I press super+r
+    Then the serial output should contain "Run dialog. Input field focused" within 10s
