@@ -418,16 +418,7 @@ impl BootProgressState {
     }
 
     fn store_message(&mut self, msg: &str) {
-        let mut len = msg.len().min(MAX_MESSAGE_BYTES);
-        while !msg.is_char_boundary(len) {
-            len -= 1;
-        }
-
-        self.message_len = len;
-        self.message[..len].copy_from_slice(&msg.as_bytes()[..len]);
-        if len < MAX_MESSAGE_BYTES {
-            self.message[len] = 0;
-        }
+        self.message_len = copy_message(&mut self.message, msg);
     }
 
     fn draw_current_message(&mut self) {
@@ -629,4 +620,40 @@ fn parse_hex(hex: &[u8]) -> Option<u32> {
         };
     }
     Some(res)
+}
+
+fn copy_message(buffer: &mut [u8; MAX_MESSAGE_BYTES], msg: &str) -> usize {
+    let mut len = msg.len().min(MAX_MESSAGE_BYTES);
+    while !msg.is_char_boundary(len) {
+        len -= 1;
+    }
+
+    buffer[..len].copy_from_slice(&msg.as_bytes()[..len]);
+    if len < MAX_MESSAGE_BYTES {
+        buffer[len] = 0;
+    }
+    len
+}
+
+#[cfg(test)]
+mod tests {
+    use super::{MAX_MESSAGE_BYTES, copy_message};
+
+    #[test]
+    fn copy_message_preserves_latest_step_text() {
+        let mut buffer = [0; MAX_MESSAGE_BYTES];
+        let len = copy_message(&mut buffer, "Modules scanned");
+
+        assert_eq!(core::str::from_utf8(&buffer[..len]), Ok("Modules scanned"));
+    }
+
+    #[test]
+    fn copy_message_truncates_on_utf8_boundary() {
+        let mut buffer = [0; MAX_MESSAGE_BYTES];
+        let long = "Preparing ".repeat(8) + "✓";
+        let len = copy_message(&mut buffer, &long);
+
+        assert!(len <= MAX_MESSAGE_BYTES);
+        assert!(core::str::from_utf8(&buffer[..len]).is_ok());
+    }
 }
