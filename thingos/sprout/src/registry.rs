@@ -8,7 +8,7 @@ use alloc::string::String;
 
 use abi::module_manifest::{MANIFEST_MAGIC, ManifestHeader, ModuleKind, SECTION_NAME};
 use abi::schema::kinds;
-use stem::info;
+use stem::debug;
 use stem::syscall::vfs::{vfs_close, vfs_open};
 use stem::thing::{ThingId, sys as thingsys};
 
@@ -22,11 +22,11 @@ impl Registry {
     }
 
     pub fn scan(&mut self) {
-        info!("SPROUT: Scanning driver modules via /drivers...");
+        debug!("Scanning driver modules via /drivers...");
         let fd = match vfs_open("/drivers", abi::syscall::vfs_flags::O_RDONLY) {
             Ok(fd) => fd,
             Err(_) => {
-                info!("SPROUT: Failed to open /drivers");
+                debug!("Driver module directory /drivers is not available");
                 return;
             }
         };
@@ -57,7 +57,7 @@ impl Registry {
             offset = end.saturating_add(1);
         }
 
-        info!("SPROUT: Registry scan complete. Found {} drivers.", self.drivers.len());
+        debug!("Registry scan complete; found {} driver(s)", self.drivers.len());
     }
 
     fn scan_module_name(&mut self, mod_name: &str) {
@@ -68,7 +68,7 @@ impl Registry {
                     let raw = &header.device_kind;
                     let end = raw.iter().position(|&c| c == 0).unwrap_or(raw.len());
                     if let Ok(dk_str) = core::str::from_utf8(&raw[..end]) {
-                        info!("SPROUT: Registering driver '{}' -> '{}'", dk_str, mod_name);
+                        debug!("Registering driver '{}' -> '{}'", dk_str, mod_name);
                         self.drivers.insert(dk_str.to_string(), mod_name.to_string());
                     }
                 }
@@ -77,7 +77,10 @@ impl Registry {
         } else {
             // Fallback for v0 if parsing fails
             if mod_name.contains("rtc_cmos") {
-                info!("SPROUT: Registering driver 'dev.rtc.Cmos' -> '{}' (fallback)", mod_name);
+                debug!(
+                    "Registering driver 'dev.rtc.Cmos' -> '{}' using fallback metadata",
+                    mod_name
+                );
                 self.drivers.insert("dev.rtc.Cmos".to_string(), mod_name.to_string());
             }
         }

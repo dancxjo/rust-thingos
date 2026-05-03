@@ -79,7 +79,7 @@ impl BloomService for ResourceRetryService {
         let wallpaper_and_cursor_settled =
             tracks_wallpaper_or_cursor && !status.wallpaper_pending && !status.cursor_pending;
         if wallpaper_and_cursor_settled && !self.all_settled_logged {
-            stem::info!("Wallpaper and cursor are ready.");
+            stem::info!("Wallpaper and cursor are ready");
             self.all_settled_logged = true;
         }
         if !status.pending
@@ -98,7 +98,7 @@ impl BloomService for ResourceRetryService {
             }
         } else if defer_font_checks {
             if !self.ready_logged {
-                stem::info!("Deferred visual resources are ready.");
+                stem::info!("Deferred visual resources are ready");
                 self.ready_logged = true;
             }
             if status.improved {
@@ -111,13 +111,13 @@ impl BloomService for ResourceRetryService {
             }
         } else if status.improved {
             if !self.ready_logged {
-                stem::info!("Deferred visual resources are ready.");
+                stem::info!("Deferred visual resources are ready");
                 self.ready_logged = true;
             }
             LoopAction::RequestRepaint
         } else {
             if !self.ready_logged {
-                stem::info!("Deferred visual resources are ready.");
+                stem::info!("Deferred visual resources are ready");
                 self.ready_logged = true;
             }
             LoopAction::None

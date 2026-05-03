@@ -28,7 +28,7 @@ use abi::driver_interface::{
 use abi::seed::{INTERFACE_DRIVER_V1, SEED_ABI_VERSION, SEED_SYMBOL, Seed};
 use abi::syscall::vfs_flags::O_RDONLY;
 use stem::syscall::vfs::{vfs_close, vfs_open, vfs_read, vfs_readdir, vfs_seek};
-use stem::{debug, info};
+use stem::{debug, trace};
 
 /// Maximum ELF binary size the catalog will read into memory for symbol
 /// inspection.  Binaries larger than this are silently skipped.
@@ -134,7 +134,7 @@ impl Catalog {
         for &dir in SEARCH_PATHS {
             self.scan_dir(dir);
         }
-        stem::info!("DEVD CATALOG: {} driver(s) found", self.entries.len());
+        stem::debug!("Driver catalog scan found {} driver(s)", self.entries.len());
     }
 
     /// Return the first driver entry whose PCI match criteria cover the given
@@ -228,8 +228,8 @@ impl Catalog {
         // Canonical path: Seed descriptor declares DriverV1 interface.
         if let Some(seed) = seed_descriptor {
             if seed.abi_version != SEED_ABI_VERSION {
-                debug!(
-                    "DEVD CATALOG: {} has unknown seed abi_version {} (expected {}), skipping",
+                trace!(
+                    "Driver catalog skipped {}: seed abi_version {} expected {}",
                     path, seed.abi_version, SEED_ABI_VERSION
                 );
                 return;
@@ -246,8 +246,8 @@ impl Catalog {
             None => {
                 // Transitional compatibility path: legacy marker-only drivers.
                 if seed_descriptor.is_some() {
-                    debug!(
-                        "DEVD CATALOG: {} declares DriverV1 in its Seed but lacks legacy THINGOS_DRIVER descriptor; skipping",
+                    trace!(
+                        "Driver catalog skipped {}: DriverV1 seed without THINGOS_DRIVER descriptor",
                         path
                     );
                     return;
@@ -256,15 +256,15 @@ impl Catalog {
                     return;
                 };
                 if iface.abi_version != DRIVER_INTERFACE_ABI_VERSION {
-                    debug!(
-                        "DEVD CATALOG: {} has unknown legacy abi_version {} (expected {}), skipping",
+                    trace!(
+                        "Driver catalog skipped {}: legacy abi_version {} expected {}",
                         path, iface.abi_version, DRIVER_INTERFACE_ABI_VERSION
                     );
                     return;
                 }
                 let start_symbol = iface.entry_symbol_name().to_string();
-                debug!(
-                    "DEVD CATALOG: registered legacy driver '{}' vendor=0x{:04x} device=0x{:04x} \
+                trace!(
+                    "Registered legacy driver '{}' vendor=0x{:04x} device=0x{:04x} \
                      class=0x{:06x} entry='{}'",
                     path, iface.vendor_id, iface.device_id, iface.class_code, start_symbol
                 );
@@ -285,8 +285,8 @@ impl Catalog {
         };
 
         if descriptor.abi_version != DRIVER_DESCRIPTOR_ABI_VERSION {
-            debug!(
-                "DEVD CATALOG: {} has unknown descriptor abi_version {} (expected {}), skipping",
+            trace!(
+                "Driver catalog skipped {}: descriptor abi_version {} expected {}",
                 path, descriptor.abi_version, DRIVER_DESCRIPTOR_ABI_VERSION
             );
             return;
@@ -318,8 +318,8 @@ impl Catalog {
             })
             .unwrap_or_else(|| "unknown".into());
 
-        info!(
-            "DEVD CATALOG: registered driver '{}' name='{}' class={:?} kind='{}' start='{}'",
+        trace!(
+            "Registered driver: path='{}' name='{}' class={:?} kind='{}' start='{}'",
             path, driver_name, descriptor.driver_class, device_kind, start_symbol
         );
 

@@ -8,7 +8,7 @@ use stem::kinds::{
 };
 use stem::service_loop::{ServiceEvent, ServiceLoop};
 use stem::syscall::message::{KindId, msg_send};
-use stem::{info, warn};
+use stem::{debug, info, warn};
 
 use crate::pipelines::{
     kernel_terminal_requested, spawn_bloom, spawn_bristle, spawn_chime, spawn_shell,
@@ -26,7 +26,7 @@ impl Supervisor {
     }
 
     pub fn run_forever(&mut self) -> ! {
-        info!("SPROUT: minimal supervisor online");
+        info!("Starting session supervisor...");
 
         let kernel_terminal = kernel_terminal_requested();
         let shell_pid = spawn_shell();
@@ -34,13 +34,13 @@ impl Supervisor {
         stem::sleep_ms(SHELL_HEADSTART_MS);
 
         let cambium_pid = if kernel_terminal {
-            info!("SPROUT: kernel terminal requested; skipping UI service handoff");
+            info!("Kernel terminal requested; skipping desktop handoff");
             None
         } else {
             // Bristle must come up before Cambium can launch input drivers that
             // publish through `/run/bristle/*`.
             if spawn_bristle().is_some() {
-                info!("SPROUT: bristle launched; disabling kernel framebuffer terminal");
+                debug!("Bristle launched; disabling kernel framebuffer terminal");
                 stem::syscall::console_disable();
             }
             self.spawn_cambium()
@@ -58,7 +58,7 @@ impl Supervisor {
                 stem::debug!("SPROUT: waiting for shell PID {} to exit", pid);
                 match stem::syscall::waitpid(pid as i64, 0) {
                     Ok((reaped_pid, status)) => {
-                        info!("SPROUT: shell PID {} exited with status {:#x}", reaped_pid, status);
+                        debug!("Shell PID {} exited with status {:#x}", reaped_pid, status);
                     }
                     Err(err) => {
                         warn!("SPROUT: waitpid for shell PID {} failed: {:?}", pid, err);
@@ -75,7 +75,7 @@ impl Supervisor {
     fn spawn_cambium(&mut self) -> Option<u64> {
         match stem::syscall::spawn_process("/services/cambium", 0) {
             Ok(pid) => {
-                info!("SPROUT: spawned cambium (PID={})", pid);
+                debug!("Spawned cambium with PID {}", pid);
                 Some(pid)
             }
             Err(err) => {
@@ -109,7 +109,7 @@ impl Supervisor {
         };
 
         match stem::syscall::waitpid(pid as i64, 0) {
-            Ok((_pid, 0)) => info!("SPROUT: /etc/roots activation complete"),
+            Ok((_pid, 0)) => info!("Root filesystem activation complete"),
             Ok((_pid, status)) => {
                 warn!("SPROUT: /etc/roots activation exited status {:#x}", status)
             }
@@ -124,7 +124,7 @@ impl Supervisor {
         };
 
         let request = ShutdownRequestV1::new(stem::syscall::getpid(), 0);
-        info!("SPROUT: sending shutdown request to cambium PID {}", cambium_pid);
+        debug!("Sending shutdown request to cambium PID {}", cambium_pid);
         if let Err(err) = msg_send(
             cambium_pid as u32,
             KindId(KIND_ID_THINGOS_SHUTDOWN_REQUEST),
@@ -187,7 +187,7 @@ impl Supervisor {
 
         match stem::syscall::waitpid(cambium_pid as i64, 0) {
             Ok((pid, status)) => {
-                info!("SPROUT: cambium PID {} exited with status {:#x}", pid, status)
+                debug!("Cambium PID {} exited with status {:#x}", pid, status)
             }
             Err(err) => warn!("SPROUT: waitpid for cambium PID {} failed: {:?}", cambium_pid, err),
         }

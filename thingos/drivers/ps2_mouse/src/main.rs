@@ -145,7 +145,7 @@ fn wait_input_empty() {
     }
     // Timed out: log the controller status so the phase and cause are auditable.
     let status = ioport_read(PS2_STATUS, 1) as u8;
-    warn!("ps2_mouse: wait_input_empty timed out (status=0x{:02x}); proceeding anyway", status);
+    warn!("wait_input_empty timed out: status=0x{:02x}; proceeding anyway", status);
 }
 
 fn flush_output_buffer() {
@@ -155,7 +155,7 @@ fn flush_output_buffer() {
         if status & STATUS_OUTPUT_FULL != 0 {
             if status & STATUS_AUX_DATA != 0 {
                 let b = ioport_read(PS2_DATA, 1);
-                trace!("ps2_mouse: flushed garbage byte: 0x{:02x}", b);
+                trace!("Flushed PS/2 mouse garbage byte: 0x{:02x}", b);
             } else {
                 // Not ours, leave it for ps2_kbd
                 break;
@@ -195,7 +195,7 @@ fn read_data_filtered(expect_aux: bool, label: &str) -> Option<u8> {
     }
     let status = ioport_read(PS2_STATUS, 1) as u8;
     debug!(
-        "ps2_mouse: timed out waiting for {} (status=0x{:02x} discarded_aux={} discarded_non_aux={})",
+        "Timed out waiting for {}: status=0x{:02x} discarded_aux={} discarded_non_aux={}",
         label, status, discarded_aux, discarded_non_aux
     );
     None
@@ -210,7 +210,7 @@ fn read_controller_config() -> u8 {
         return val;
     }
     // Fallback if we keep getting garbage
-    debug!("ps2_mouse: read_cfg failed, assuming default safe config (0x47)");
+    debug!("read_cfg failed; assuming default safe PS/2 mouse config 0x47");
     0x47 // IRQ1, IRQ12, SysFlag, Translation
 }
 
@@ -236,20 +236,20 @@ fn set_sample_rate(rate: u8) -> bool {
     send_aux_byte(0xF3);
     let cmd_ack = read_data_filtered(true, "sample rate cmd ACK").unwrap_or(0);
     if cmd_ack != 0xFA {
-        debug!("ps2_mouse: sample rate cmd NACK (0x{:02x}) for rate={}", cmd_ack, rate);
+        debug!("Sample rate command NACK: ack=0x{:02x} rate={}", cmd_ack, rate);
         return false;
     }
     send_aux_byte(rate);
     let rate_ack = read_data_filtered(true, "sample rate set ACK").unwrap_or(0);
     if rate_ack != 0xFA {
-        debug!("ps2_mouse: sample rate set NACK (0x{:02x}) for rate={}", rate_ack, rate);
+        debug!("Sample rate set NACK: ack=0x{:02x} rate={}", rate_ack, rate);
         return false;
     }
     true
 }
 
 fn init_mouse() {
-    info!("Initializing PS/2 mouse controller.");
+    info!("Initializing PS/2 mouse controller...");
     trace!("ps2.phase=aux_enable_begin");
 
     // Clear any initial garbage
@@ -296,7 +296,7 @@ fn init_mouse() {
             FALLBACK_SAMPLE_RATE
         } else {
             warn!(
-                "PS/2 mouse fallback sample rate {} Hz failed; continuing with the device default.",
+                "PS/2 mouse fallback sample rate {} Hz failed; continuing with the device default",
                 FALLBACK_SAMPLE_RATE
             );
             0
@@ -337,13 +337,13 @@ fn init_mouse() {
             let byte = ioport_read(PS2_DATA, 1) as u8;
             drained += 1;
             last_drained = byte;
-            trace!("ps2_mouse: drained lingering byte 0x{:02x}", byte);
+            trace!("Drained lingering PS/2 mouse byte 0x{:02x}", byte);
         }
         stem::sleep_ms(10);
     }
 
     debug!(
-        "ps2_mouse: init summary cfg=0x{:02x}->0x{:02x} changed={} reset_ack=0x{:02x} bat=0x{:02x} id=0x{:02x} sample_rate={} status=[0x{:02x},0x{:02x},0x{:02x}] enable_ack={} drained={} last_drained=0x{:02x}",
+        "PS/2 mouse init summary: cfg=0x{:02x}->0x{:02x} changed={} reset_ack=0x{:02x} bat=0x{:02x} id=0x{:02x} sample_rate={} status=[0x{:02x},0x{:02x},0x{:02x}] enable_ack={} drained={} last_drained=0x{:02x}",
         cfg,
         new_cfg,
         cfg_changed,
@@ -358,7 +358,7 @@ fn init_mouse() {
         drained,
         last_drained
     );
-    info!("PS/2 mouse controller ready.");
+    info!("PS/2 mouse controller ready");
 }
 
 /// Path where bristle publishes its inbox-owning PID.
@@ -378,10 +378,10 @@ fn read_u32_file(path: &str) -> Option<u32> {
 
 #[stem::main]
 fn main(_raw_arg: usize) -> ! {
-    stem::debug!("ps2_mouse: online — waiting for bristle pid");
+    stem::debug!("PS/2 mouse service online; waiting for bristle pid");
 
     if let Err(e) = stem::fs::wait_until_exists(BRISTLE_PID_PATH) {
-        stem::error!("ps2_mouse: failed waiting for {}: {:?}", BRISTLE_PID_PATH, e);
+        stem::error!("Failed waiting for {}: {:?}", BRISTLE_PID_PATH, e);
         loop {
             stem::time::sleep_ms(1000);
         }
@@ -390,7 +390,7 @@ fn main(_raw_arg: usize) -> ! {
     let bristle_pid = match read_u32_file(BRISTLE_PID_PATH) {
         Some(pid) if pid != 0 => pid,
         _ => {
-            stem::error!("ps2_mouse: failed to read bristle pid from {}", BRISTLE_PID_PATH);
+            stem::error!("Failed to read bristle pid from {}", BRISTLE_PID_PATH);
             loop {
                 stem::time::sleep_ms(1000);
             }
@@ -404,11 +404,11 @@ fn main(_raw_arg: usize) -> ! {
     // Subscribe to mouse interrupt
     match irq_subscribe(MOUSE_VECTOR) {
         Ok(()) => {
-            debug!("ps2_mouse: subscribed to IRQ12 (vector 0x{:02x})", MOUSE_VECTOR);
+            debug!("Subscribed to PS/2 mouse IRQ12: vector=0x{:02x}", MOUSE_VECTOR);
             interrupt_loop(bristle_pid);
         }
         Err(e) => {
-            debug!("ps2_mouse: IRQ subscribe failed ({:?}), falling back to polling", e);
+            debug!("PS/2 mouse IRQ subscribe failed ({:?}); falling back to polling", e);
             polling_loop(bristle_pid);
         }
     }
@@ -491,10 +491,7 @@ fn send_pointer_event(bristle_pid: u32, event_type: EventType, payload: &[u8]) -
 fn record_drop(drop_counter: &mut u32, bristle_pid: u32) {
     *drop_counter = drop_counter.wrapping_add(1);
     if *drop_counter <= 4 || *drop_counter % 100 == 0 {
-        trace!(
-            "ps2_mouse: dropped {} mouse events (send pid={} failed)",
-            *drop_counter, bristle_pid
-        );
+        trace!("Dropped {} mouse events: send to pid={} failed", *drop_counter, bristle_pid);
     }
 }
 
@@ -598,7 +595,7 @@ fn drain_mouse_data(
             let byte_no = PS2_MOUSE_BYTE_COUNT.fetch_add(1, Ordering::Relaxed) + 1;
             if should_log_input(byte_no) {
                 trace!(
-                    "ps2_mouse: take_scancode byte=0x{:02x} status=0x{:02x} packet_idx={} drain_depth={}",
+                    "PS/2 mouse take_scancode: byte=0x{:02x} status=0x{:02x} packet_idx={} drain_depth={}",
                     byte, status, *idx, bytes_read
                 );
             }
@@ -638,7 +635,7 @@ fn drain_mouse_data(
         let drain_no = PS2_MOUSE_DRAIN_COUNT.fetch_add(1, Ordering::Relaxed) + 1;
         if should_log_input(drain_no) {
             trace!(
-                "ps2_mouse: drain exit bytes={} packets={} pending_idx={} elapsed_ns={} dropped={}",
+                "PS/2 mouse drain exit: bytes={} packets={} pending_idx={} elapsed_ns={} dropped={}",
                 bytes_read, packets_sent, *idx, elapsed_ns, *drop_counter
             );
         }
@@ -653,7 +650,7 @@ fn drain_mouse_data(
 /// updates depend on a perfectly routed IRQ line.
 fn interrupt_loop(bristle_pid: u32) -> ! {
     debug!(
-        "ps2_mouse: using IRQ-assisted loop (IRQ vector 0x{:02x}, poll={}ms)",
+        "Using PS/2 mouse IRQ-assisted loop: vector=0x{:02x} poll={}ms",
         MOUSE_VECTOR, IRQ_ASSIST_POLL_MS
     );
 
@@ -661,7 +658,7 @@ fn interrupt_loop(bristle_pid: u32) -> ! {
     let irq_token = match waitset.add_irq(MOUSE_VECTOR as u64) {
         Ok(token) => token,
         Err(e) => {
-            warn!("ps2_mouse: failed to add IRQ wait source ({:?}), switching to polling", e);
+            warn!("Failed to add PS/2 mouse IRQ wait source ({:?}); switching to polling", e);
             polling_loop(bristle_pid);
         }
     };
@@ -698,14 +695,14 @@ fn interrupt_loop(bristle_pid: u32) -> ! {
                 }
                 if saw_irq && should_log_input(irq_wake_count) {
                     trace!(
-                        "ps2_mouse: irq_wait exit vector=0x{:02x} wakes={} timeouts={}",
+                        "PS/2 mouse irq_wait exit: vector=0x{:02x} wakes={} timeouts={}",
                         MOUSE_VECTOR, irq_wake_count, timeout_count
                     );
                 }
             }
             Err(e) => {
                 warn!(
-                    "ps2_mouse: IRQ wait error ({:?}) after {} wakes, switching to polling fallback",
+                    "PS/2 mouse IRQ wait error ({:?}) after {} wakes; switching to polling fallback",
                     e, irq_wake_count
                 );
                 break;
@@ -746,7 +743,7 @@ fn interrupt_loop(bristle_pid: u32) -> ! {
 
         if (irq_wake_count + timeout_count) % 256 == 0 {
             trace!(
-                "ps2_mouse: irq_wakes={} poll_timeouts={} last_drain_bytes={}",
+                "PS/2 mouse input loop: irq_wakes={} poll_timeouts={} last_drain_bytes={}",
                 irq_wake_count, timeout_count, drained
             );
         }
@@ -760,7 +757,7 @@ fn should_log_input(count: u64) -> bool {
 
 /// Fallback polling loop – used only when IRQ subscription or wait fails.
 fn polling_loop(bristle_pid: u32) -> ! {
-    debug!("ps2_mouse: using fallback polling loop ({}ms interval)", POLLING_INTERVAL_MS);
+    debug!("Using PS/2 mouse fallback polling loop: interval={}ms", POLLING_INTERVAL_MS);
 
     let mut packet = [0u8; 3];
     let mut idx = 0usize;

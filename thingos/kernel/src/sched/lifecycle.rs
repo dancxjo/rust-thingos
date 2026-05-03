@@ -21,9 +21,7 @@ pub fn end_bringup<R: BootRuntime>() {
     if let Some(ptr) = *lock {
         let sched = unsafe { &mut *(ptr as *mut types::Scheduler<R>) };
         if sched.bringup_in_progress {
-            crate::kdebug!(
-                "SCHED: early-boot bringup complete; resuming steady-state SMP scheduling"
-            );
+            crate::kdebug!("Early boot bring-up complete; resuming steady-state SMP scheduling");
             sched.bringup_in_progress = false;
         }
     }
@@ -519,7 +517,7 @@ fn mark_task_exited_in_registry<R: BootRuntime>(
                 task.exit_code = Some(code);
                 let sibling_waiters = task.exit_waiters.drain();
                 waiters.extend(sibling_waiters);
-                crate::kdebug!("SCHED: Killed sibling thread {} (thread-group exit)", sibling);
+                crate::kdebug!("Killed sibling thread {} during thread-group exit", sibling);
             }
         }
     }
@@ -578,7 +576,7 @@ fn release_task_devices<R: BootRuntime>(tid: TaskId) {
     debug_assert_scheduler_not_held_by_this_cpu::<R>("release_task_devices");
     let released = crate::device_registry::REGISTRY.lock().release_all_for_task(tid);
     if released > 0 {
-        crate::kdebug!("DEVICE: released {} claims for task {}", released, tid);
+        crate::ktrace!("Released {} device claim(s) for task {}", released, tid);
     }
 }
 
@@ -703,7 +701,11 @@ pub fn kill_by_tid<R: BootRuntime>(tid: u64) -> bool {
                         let released =
                             crate::device_registry::REGISTRY.lock().release_all_for_task(tid);
                         if released > 0 {
-                            crate::kdebug!("DEVICE: released {} claims for task {}", released, tid);
+                            crate::ktrace!(
+                                "Released {} device claim(s) for task {}",
+                                released,
+                                tid
+                            );
                         }
 
                         (true, waiters)

@@ -243,7 +243,7 @@ impl<R: BootRuntime> Scheduler<R> {
 
         // Determine target CPU: Balanced among online CPUs.
         let target_cpu = self.pick_cpu_and_bringup(affinity, false);
-        crate::kdebug!("SCHED: Task {} assigned to CPU {}", id, target_cpu);
+        crate::ktrace!("Assigned task {} to CPU {}", id, target_cpu);
 
         // Push to target CPU's run queue
         let cpu_count = self.state.per_cpu.len(); // Should match rt.cpu_count()
@@ -384,7 +384,7 @@ impl<R: BootRuntime> Scheduler<R> {
         let ctx = rt.tasking().init_user_context(spec, kstack_top);
 
         let target_cpu = self.pick_cpu_and_bringup(affinity, false);
-        crate::kdebug!("SCHED: Task {} (user thread) assigned to CPU {}", id, target_cpu);
+        crate::ktrace!("Assigned user thread task {} to CPU {}", id, target_cpu);
 
         // Push to target CPU's run queue
         let cpu_count = self.state.per_cpu.len();
@@ -810,11 +810,7 @@ fn nudge_spawned_task<R: BootRuntime>(current_cpu: usize, id: TaskId) {
             if !super::should_send_remote_resched_ipi(target_cpu) {
                 return;
             }
-            crate::kdebug!(
-                "SCHED: Sending post-unlock Resched IPI to CPU {} for task {}",
-                target_cpu,
-                id
-            );
+            crate::ktrace!("Sending post-unlock resched IPI to CPU {} for task {}", target_cpu, id);
             super::DIAG_IPI_SENT.fetch_add(1, core::sync::atomic::Ordering::Relaxed);
             super::DIAG_IPI_SENT_SPAWN.fetch_add(1, core::sync::atomic::Ordering::Relaxed);
             crate::runtime::<R>().send_ipi(target_cpu, 0x30);
@@ -948,7 +944,7 @@ pub unsafe fn boot_spawn_process_with_priority<R: BootRuntime>(
         // Zero means no PT_TLS segment was found; FS_BASE starts at its default state.
         task.user_fs_base = aux_info.tls_tp;
     }
-    crate::kdebug!("SCHED: TID {} → task '{}' (pid={} from boot module)", id, module.name, id);
+    crate::ktrace!("Boot module task registered: tid={} name='{}' pid={}", id, module.name, id);
 
     // Phase 3: make the task runnable.  wake_task acquires SCHEDULER briefly
     // to transition Blocked → Runnable and enqueue the task.  During bringup
@@ -989,8 +985,8 @@ fn setup_stdio_fds<R: BootRuntime>(
 
     use crate::vfs::{OpenFlags, VfsNode};
 
-    crate::kdebug!(
-        "SETUP_STDIO: stdin={:?} stdout={:?} stderr={:?}",
+    crate::ktrace!(
+        "Setting up stdio: stdin={:?} stdout={:?} stderr={:?}",
         stdin_spec,
         stdout_spec,
         stderr_spec
@@ -1055,7 +1051,7 @@ fn setup_stdio_fds<R: BootRuntime>(
                 let _ = handle_table.insert_at(0, node, flags, path);
             } else {
                 crate::kwarn!(
-                    "SPAWN: stdin explicit fd {} missing in parent; falling back to /dev/console",
+                    "Spawn stdin fd {} was missing in parent; falling back to /dev/console",
                     fd
                 );
                 let _ = handle_table.insert_at(
@@ -1120,7 +1116,7 @@ fn setup_stdio_fds<R: BootRuntime>(
                 let _ = handle_table.insert_at(1, node, flags, path);
             } else {
                 crate::kwarn!(
-                    "SPAWN: stdout explicit fd {} missing in parent; falling back to /dev/console",
+                    "Spawn stdout fd {} was missing in parent; falling back to /dev/console",
                     fd
                 );
                 let _ = handle_table.insert_at(
@@ -1179,7 +1175,7 @@ fn setup_stdio_fds<R: BootRuntime>(
                 let _ = handle_table.insert_at(2, node, flags, path);
             } else {
                 crate::kwarn!(
-                    "SPAWN: stderr explicit fd {} missing in parent; falling back to /dev/console",
+                    "Spawn stderr fd {} was missing in parent; falling back to /dev/console",
                     fd
                 );
                 let _ = handle_table.insert_at(
@@ -1319,7 +1315,7 @@ pub unsafe fn boot_spawn_process_ex<R: BootRuntime>(
     for remap in fd_remap {
         if let Err(e) = handle_table.dup2(remap.src_handle, remap.dst_handle) {
             crate::kwarn!(
-                "SPAWN: FD remap failed: {} -> {} (errno {:?})",
+                "Spawn fd remap failed: {} -> {} (errno {:?})",
                 remap.src_handle,
                 remap.dst_handle,
                 e
@@ -1447,7 +1443,7 @@ pub unsafe fn boot_spawn_process_ex<R: BootRuntime>(
         // Apply initial TLS base (FS_BASE on x86_64) for the new process's main thread.
         task.user_fs_base = aux_info.tls_tp;
     }
-    crate::kdebug!("SCHED: TID {} → task '{}' (pid={} from boot module)", id, module.name, id);
+    crate::ktrace!("Boot module task registered: tid={} name='{}' pid={}", id, module.name, id);
 
     // Phase 3: make the task runnable.  wake_task acquires SCHEDULER briefly
     // to transition Blocked → Runnable and enqueue the task.
@@ -1524,7 +1520,7 @@ pub unsafe fn spawn_process_from_path<R: BootRuntime>(
     // covers `buffer`, which borrows from it.
     let cached_buf: alloc::sync::Arc<alloc::vec::Vec<u8>>;
     let buffer: &[u8] = if let Some(cached) = crate::vfs::page_cache::get(path) {
-        crate::kdebug!("SPAWN: page cache hit for '{}'", path);
+        crate::ktrace!("Spawn page cache hit for '{}'", path);
         cached_buf = cached;
         &cached_buf[..]
     } else {
@@ -1537,7 +1533,7 @@ pub unsafe fn spawn_process_from_path<R: BootRuntime>(
         if read_n < size {
             return Err(abi::errors::Errno::EIO);
         }
-        crate::kdebug!("SPAWN: page cache miss for '{}', caching {} bytes", path, size);
+        crate::ktrace!("Spawn page cache miss for '{}', caching {} bytes", path, size);
         let arc_buf = alloc::sync::Arc::new(buf);
         crate::vfs::page_cache::put(path, arc_buf.clone());
         cached_buf = arc_buf;
@@ -1608,15 +1604,15 @@ pub unsafe fn spawn_process_from_path<R: BootRuntime>(
             let resolved_pc = sym_vaddr.wrapping_add(load_bias) as usize;
             if resolved_pc < 0x1000 {
                 crate::kerror!(
-                    "SPAWN: entry symbol '{}' in '{}' resolved to invalid PC 0x{:x}",
+                    "Spawn entry symbol '{}' in '{}' resolved to invalid PC 0x{:x}",
                     sym_name,
                     path,
                     resolved_pc
                 );
                 return Err(abi::errors::Errno::ENOEXEC);
             }
-            crate::kdebug!(
-                "SPAWN: driver entrypoint override '{}' => VA 0x{:x} + bias 0x{:x} = PC 0x{:x}",
+            crate::ktrace!(
+                "Driver entrypoint override '{}' resolved: va=0x{:x} bias=0x{:x} pc=0x{:x}",
                 sym_name,
                 sym_vaddr,
                 load_bias,
@@ -1626,7 +1622,7 @@ pub unsafe fn spawn_process_from_path<R: BootRuntime>(
             // Ensure user stack is 16-byte aligned.
             entry.user_sp = entry.user_sp & !0xF;
         } else {
-            crate::kerror!("SPAWN: entry symbol '{}' not found in '{}'", sym_name, path);
+            crate::kerror!("Spawn entry symbol '{}' not found in '{}'", sym_name, path);
             return Err(abi::errors::Errno::ENOEXEC);
         }
     }
@@ -1638,7 +1634,7 @@ pub unsafe fn spawn_process_from_path<R: BootRuntime>(
     let t_task_create_start = crate::trace::now();
     let _irq = rt.irq_disable();
 
-    crate::kdebug!("SPAWN_FROM_PATH: Starting Phase 1 for {}", path);
+    crate::ktrace!("Spawn phase 1 starting for {}", path);
     let (id, deferred_registry_inserts) = {
         let lock = SCHEDULER.lock();
         let _tracking = super::sched_lock_tracking_guard::<R>(current_cpu);
@@ -1659,9 +1655,9 @@ pub unsafe fn spawn_process_from_path<R: BootRuntime>(
     };
     #[cfg(feature = "spawn_timing")]
     let t_task_create_end = crate::trace::now();
-    crate::kdebug!("SPAWN_FROM_PATH: Phase 1 complete, ID={}, applying inserts", id);
+    crate::ktrace!("Spawn phase 1 complete for {}, tid={}, applying inserts", path, id);
     super::apply_deferred_registry_inserts::<R>(deferred_registry_inserts);
-    crate::kdebug!("SPAWN_FROM_PATH: Inserts applied, entering Phase 2");
+    crate::ktrace!("Spawn registry inserts applied for {}, entering phase 2", path);
 
     // Phase 2: post-spawn setup — REGISTRY lock only, no SCHEDULER held.
     // The task is Blocked and cannot be scheduled until wake_task(id) is called.
@@ -1705,7 +1701,7 @@ pub unsafe fn spawn_process_from_path<R: BootRuntime>(
     for remap in fd_remap {
         if let Err(e) = handle_table.dup2(remap.src_handle, remap.dst_handle) {
             crate::kwarn!(
-                "SPAWN: FD remap failed: {} -> {} (errno {:?})",
+                "Spawn fd remap failed: {} -> {} (errno {:?})",
                 remap.src_handle,
                 remap.dst_handle,
                 e
@@ -1844,8 +1840,8 @@ pub unsafe fn spawn_process_from_path<R: BootRuntime>(
     //   TP-B: logged after wake_task returns  → hang inside irq_restore / at interrupt re-enable point
     //   TP-D: logged after irq_restore        → hang is further along in the spawn return path
     let spawn_caller_tid = rt.current_tid();
-    crate::kdebug!(
-        "SPAWN_FROM_PATH[TP-A]: cpu={} caller_tid={} spawned_tid={} irq_saved={} need_resched={} \
+    crate::ktrace!(
+        "Spawn tracepoint A: cpu={} caller_tid={} spawned_tid={} irq_saved={} need_resched={} \
          calling wake_task path={}",
         current_cpu,
         spawn_caller_tid,
@@ -1855,8 +1851,8 @@ pub unsafe fn spawn_process_from_path<R: BootRuntime>(
         path,
     );
     crate::sched::blocking::wake_task::<R>(id);
-    crate::kdebug!(
-        "SPAWN_FROM_PATH[TP-B]: cpu={} caller_tid={} spawned_tid={} irq_saved={} need_resched={} \
+    crate::ktrace!(
+        "Spawn tracepoint B: cpu={} caller_tid={} spawned_tid={} irq_saved={} need_resched={} \
          wake_task returned, about to restore IRQs path={}",
         current_cpu,
         spawn_caller_tid,
@@ -1866,9 +1862,8 @@ pub unsafe fn spawn_process_from_path<R: BootRuntime>(
         path,
     );
     rt.irq_restore(_irq);
-    crate::kdebug!(
-        "SPAWN_FROM_PATH[TP-D]: cpu={} caller_tid={} spawned_tid={} irq_restore complete, \
-         Done for {}",
+    crate::ktrace!(
+        "Spawn tracepoint D: cpu={} caller_tid={} spawned_tid={} irq_restore complete path={}",
         current_cpu,
         spawn_caller_tid,
         id,
@@ -1918,8 +1913,8 @@ pub extern "C" fn user_thread_trampoline<R: BootRuntime>(arg: usize) -> ! {
     let entry_ptr = arg as *mut UserEntry;
     let entry = unsafe { *alloc::boxed::Box::from_raw(entry_ptr) };
 
-    crate::kdebug!(
-        "USER_TRAMPOLINE: PC=0x{:x} SP=0x{:x} ARG0=0x{:x}",
+    crate::ktrace!(
+        "User trampoline: pc=0x{:x} sp=0x{:x} arg0=0x{:x}",
         entry.entry_pc,
         entry.user_sp,
         entry.arg0

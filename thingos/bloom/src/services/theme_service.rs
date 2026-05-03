@@ -98,7 +98,7 @@ impl ThemeService {
         self.last_stamp = theme_config_stamp(self.config_path);
         let requested = theme_target_or_default(self.config_path);
         let applied = world.visuals.set_theme_by_name(&requested);
-        stem::info!("bloom: reacting to theme change: {} -> {}", requested, applied);
+        stem::info!("Applying theme {}", applied);
         world.damage.mark_full(world.primary.width, world.primary.height);
     }
 

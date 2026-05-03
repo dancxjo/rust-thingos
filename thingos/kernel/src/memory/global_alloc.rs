@@ -116,8 +116,8 @@ pub fn init<R: BootRuntime>(_rt: &R) {
         INNER_ALLOCATOR.lock().init(base as *mut u8, size);
     }
     HEAP_TOP.store(base + size as u64, Ordering::Relaxed);
-    crate::kdebug!(
-        "[kernel:global_alloc] initialized bootstrap heap base=0x{:x} size={} pages={}",
+    crate::ktrace!(
+        "Bootstrap heap initialized: base=0x{:x} size={} pages={}",
         base,
         size,
         BOOTSTRAP_HEAP_PAGES

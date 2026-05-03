@@ -90,8 +90,8 @@ pub fn init_kernel_context(
         unsafe { (sp as *mut u64).write(val) };
     };
 
-    kernel::kdebug!(
-        "INIT KERNEL CTX: entry={:p} kstack_top={:#x} arg={:#x}",
+    kernel::ktrace!(
+        "Initialized kernel context: entry={:p} kstack_top={:#x} arg={:#x}",
         entry,
         kstack_top,
         arg

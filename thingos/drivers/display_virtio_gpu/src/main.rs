@@ -3089,10 +3089,7 @@ fn initial_display_dimensions(gpu: &mut VirtioGpu) -> (u32, u32, u32, u32) {
         }
         Ok(_) => {
             let stride = boot_w.saturating_mul(DISPLAY_BPP);
-            warn!(
-                "Host scanout is unavailable; using boot framebuffer {}x{}.",
-                boot_w, boot_h
-            );
+            warn!("Host scanout is unavailable; using boot framebuffer {}x{}.", boot_w, boot_h);
             (boot_w, boot_h, stride, boot_format)
         }
         Err(e) => {
@@ -3203,14 +3200,14 @@ fn refresh_display_mode(driver: &mut VirtioGpuDriver) -> bool {
     match resize_frame_pool(driver, scanout.width, scanout.height, stride) {
         Ok(()) => {
             info!(
-                "Display output resized from {}x{} to {}x{}.",
+                "Display output resized from {}x{} to {}x{}",
                 old_w, old_h, driver.disp_width, driver.disp_height
             );
             true
         }
         Err(e) => {
             warn!(
-                "Display output resize from {}x{} to {}x{} failed: {}.",
+                "Display output resize from {}x{} to {}x{} failed: {}",
                 old_w, old_h, scanout.width, scanout.height, e
             );
             false
@@ -3220,16 +3217,13 @@ fn refresh_display_mode(driver: &mut VirtioGpuDriver) -> bool {
 
 #[stem::main]
 fn main(boot_arg: usize) -> ! {
-    stem::info!("Starting display driver.");
+    stem::info!("Starting display driver...");
 
     if boot_arg == 0 {
-        stem::error!(
-            "display_virtio_gpu: No boot argument provided! Standard driver entry required."
-        );
+        stem::error!("No boot argument provided; standard driver entry is required");
         stem::syscall::exit(1);
     }
-    stem::debug!("display_virtio_gpu: Starting VFS-native VirtIO GPU driver...");
-    stem::debug!("display_virtio_gpu: boot_arg={}", boot_arg);
+    stem::trace!("Starting VFS-native VirtIO GPU driver with boot_arg={}", boot_arg);
 
     let mut drv_req_read = 0;
     let mut drv_resp_write = 0;
@@ -3247,10 +3241,10 @@ fn main(boot_arg: usize) -> ! {
         backing: abi::vm::VmBacking::File { thing: boot_arg as u32, offset: 0 },
     };
 
-    stem::debug!("display_virtio_gpu: Mapping bootstrap memfd {} size={}...", boot_arg, boot_size);
+    stem::trace!("Mapping bootstrap memfd {} size={}...", boot_arg, boot_size);
     match stem::syscall::vm_map(&req) {
         Ok(resp) => {
-            stem::debug!("display_virtio_gpu: vm_map success at 0x{:x}", resp.addr);
+            stem::trace!("Bootstrap memfd mapped at 0x{:x}", resp.addr);
             let entry_ctx = unsafe { &*(resp.addr as *const DriverEntryCtx) };
             if entry_ctx.version == 1 {
                 let path = entry_ctx.device_path_str();
@@ -3264,10 +3258,7 @@ fn main(boot_arg: usize) -> ! {
                         drv_resp_write = dummy_write;
                     }
                     Err(e) => {
-                        stem::error!(
-                            "display_virtio_gpu: failed to create direct-mode protocol ports: {:?}",
-                            e
-                        );
+                        stem::error!("Failed to create direct-mode protocol ports: {:?}", e);
                         stem::syscall::exit(1);
                     }
                 }
@@ -3288,7 +3279,7 @@ fn main(boot_arg: usize) -> ! {
                 bind_instance_id = id_low | (id_high << 32);
 
                 stem::debug!(
-                    "display_virtio_gpu: Recovered handles: req_read={}, resp_write={}, svc={}, id={}",
+                    "Recovered display bootstrap handles: req_read={} resp_write={} svc={} id={}",
                     drv_req_read,
                     drv_resp_write,
                     reserved_supervisor_port,
@@ -3297,18 +3288,14 @@ fn main(boot_arg: usize) -> ! {
             }
         }
         Err(e) => {
-            stem::error!(
-                "display_virtio_gpu: ERROR: Failed to vm_map bootstrap memfd {}: {:?}",
-                boot_arg,
-                e
-            );
+            stem::error!("Failed to vm_map bootstrap memfd {}: {:?}", boot_arg, e);
         }
     }
 
     if drv_req_read == 0 || drv_resp_write == 0 || (!cambium_direct_mount && bind_instance_id == 0)
     {
         stem::error!(
-            "DISP: ERROR: Invalid/Missing bootstrap components (req={}, resp={}, svc={}, id={})",
+            "Invalid or missing bootstrap components: req={} resp={} svc={} id={}",
             drv_req_read,
             drv_resp_write,
             reserved_supervisor_port,
@@ -3319,8 +3306,8 @@ fn main(boot_arg: usize) -> ! {
         }
     }
 
-    debug!(
-        "display_virtio_gpu: starting (drv_req_r={}, drv_resp_w={}, svc={}, id={})",
+    trace!(
+        "Display driver bootstrap: drv_req_r={} drv_resp_w={} svc={} id={}",
         drv_req_read, drv_resp_write, reserved_supervisor_port, bind_instance_id
     );
 
@@ -3328,7 +3315,7 @@ fn main(boot_arg: usize) -> ! {
     let gpu_path = match cambium_device_path.clone().or_else(find_gpu) {
         Some(path) => path,
         None => {
-            error!("display_virtio_gpu: GPU device not found");
+            error!("GPU device not found");
             loop {
                 stem::time::sleep_ms(1);
             }
@@ -3338,7 +3325,7 @@ fn main(boot_arg: usize) -> ! {
     let mut gpu = match VirtioGpu::new(&gpu_path) {
         Ok(g) => g,
         Err(e) => {
-            error!("display_virtio_gpu: Failed to initialize GPU: {:?}", e);
+            error!("Failed to initialize GPU: {:?}", e);
             loop {
                 stem::time::sleep_ms(1);
             }
@@ -3346,17 +3333,17 @@ fn main(boot_arg: usize) -> ! {
     };
 
     if let Err(e) = gpu.init_virtio() {
-        error!("display_virtio_gpu: Virtio init failed: {}", e);
+        error!("Virtio init failed: {}", e);
         loop {
             stem::time::sleep_ms(1);
         }
     }
 
-    info!("Display driver ready with GPU copy and CPU blending.");
+    info!("Display driver ready with GPU copy and CPU blending");
     if gpu.has_3d_feature() {
-        debug!("display_virtio_gpu: Virgl 3D supported — GPU alpha blend path will be initialized");
+        debug!("Virgl 3D supported; GPU alpha blend path will be initialized");
     } else {
-        debug!("display_virtio_gpu: Virgl 3D not supported, using 2D only");
+        debug!("Virgl 3D not supported; using 2D only");
     }
 
     // =========================================================================
@@ -3364,8 +3351,8 @@ fn main(boot_arg: usize) -> ! {
     // =========================================================================
     let (disp_width, disp_height, disp_stride, disp_format) = initial_display_dimensions(&mut gpu);
 
-    debug!(
-        "display_virtio_gpu: creating frame pool 1x {}x{} stride={} format={}",
+    trace!(
+        "Creating frame pool: count=1 size={}x{} stride={} format={}",
         disp_width, disp_height, disp_stride, disp_format
     );
 
@@ -3373,7 +3360,7 @@ fn main(boot_arg: usize) -> ! {
     {
         Ok(pool) => pool,
         Err(e) => {
-            error!("display_virtio_gpu: frame pool setup failed: {}", e);
+            error!("Frame pool setup failed: {}", e);
             loop {
                 stem::time::sleep_ms(1);
             }
@@ -3383,14 +3370,14 @@ fn main(boot_arg: usize) -> ! {
 
     // Set initial scanout to first buffer
     if let Err(e) = gpu.set_scanout(driver_initial_res_id, disp_width, disp_height) {
-        error!("display_virtio_gpu: set_scanout failed: {}", e);
+        error!("set_scanout failed: {}", e);
         loop {
             stem::time::sleep_ms(1);
         }
     }
 
-    debug!(
-        "display_virtio_gpu: frame pool ready ({} buffer{})",
+    trace!(
+        "Frame pool ready: {} buffer{}",
         FRAME_POOL_COUNT,
         if FRAME_POOL_COUNT == 1 { "" } else { "s" }
     );
@@ -3406,25 +3393,16 @@ fn main(boot_arg: usize) -> ! {
         match device_alloc_dma(claim, MAX_CURSOR_PAGES) {
             Ok(virt) => match device_dma_phys(virt) {
                 Ok(phys) => {
-                    debug!(
-                        "Cursor DMA buffer ready: pages={} phys=0x{:x}.",
-                        MAX_CURSOR_PAGES, phys
-                    );
+                    trace!("Cursor DMA buffer ready: pages={} phys=0x{:x}", MAX_CURSOR_PAGES, phys);
                     (virt, phys)
                 }
                 Err(e) => {
-                    warn!(
-                        "display_virtio_gpu: cursor DMA phys lookup failed: {:?}; hw cursor unavailable",
-                        e
-                    );
+                    warn!("Cursor DMA phys lookup failed: {:?}; hardware cursor unavailable", e);
                     (0u64, 0u64)
                 }
             },
             Err(e) => {
-                warn!(
-                    "display_virtio_gpu: cursor DMA alloc failed: {:?}; hw cursor unavailable",
-                    e
-                );
+                warn!("Cursor DMA alloc failed: {:?}; hardware cursor unavailable", e);
                 (0u64, 0u64)
             }
         }
@@ -3443,7 +3421,7 @@ fn main(boot_arg: usize) -> ! {
     ) = init_virgl_blend(&mut gpu, disp_width, disp_height, &frame_pool_buffers);
     if virgl_ctx_id != 0 {
         info!(
-            "GPU composition ready: opaque copy, alpha blend, CPU fallback, and accelerated 2D commands are enabled."
+            "GPU composition ready: opaque copy, alpha blend, CPU fallback, and accelerated 2D commands are enabled"
         );
     }
 
@@ -3470,17 +3448,17 @@ fn main(boot_arg: usize) -> ! {
 
     if cambium_direct_mount {
         let Some(dev_path) = assigned_dev_path() else {
-            error!("display_virtio_gpu: Cambium did not assign a dev path");
+            error!("Cambium did not assign a dev path");
             loop {
                 stem::yield_now();
             }
         };
         match stem::syscall::vfs::vfs_mount(vfs_write, &dev_path) {
             Ok(()) => {
-                info!("Display service mounted at {}.", dev_path)
+                info!("Display service mounted at {}", dev_path)
             }
             Err(e) => {
-                error!("display_virtio_gpu: vfs_mount({}) failed: {:?}", dev_path, e);
+                error!("vfs_mount({}) failed: {:?}", dev_path, e);
                 loop {
                     stem::yield_now();
                 }
@@ -3513,20 +3491,17 @@ fn main(boot_arg: usize) -> ! {
                     &ready_buf[..total_len],
                     &[vfs_write_fd],
                 );
-                debug!("display_virtio_gpu: Sent MSG_BIND_READY (ID: {})", bind_instance_id);
+                trace!("Sent MSG_BIND_READY with id={}", bind_instance_id);
             }
         }
 
         // Wait for MSG_BIND_ASSIGNED or MSG_BIND_FAILED
         let mut loop_count = 0;
-        debug!("display_virtio_gpu: Waiting for BIND_ASSIGNED...");
+        debug!("Waiting for BIND_ASSIGNED...");
         let assigned_bind_id = loop {
             loop_count += 1;
             if loop_count % 100 == 0 {
-                debug!(
-                    "display_virtio_gpu: Still waiting for BIND_ASSIGNED (loop={})...",
-                    loop_count
-                );
+                trace!("Still waiting for BIND_ASSIGNED: loop={}", loop_count);
             }
             let msg = msg_recv_blocking(512);
             if msg.kind.0 != drvproto::KIND_ID_DISPLAY_DRIVER_CONTROL {
@@ -3541,7 +3516,7 @@ fn main(boot_arg: usize) -> ! {
                             &assigned.primary_path[..path_len],
                         )
                         .to_string();
-                        debug!("Display driver assigned to {}.", assigned_path);
+                        debug!("Display driver assigned to {}", assigned_path);
                         break assigned.bind_instance_id;
                     }
                 } else if header.msg_type == supervisor_protocol::MSG_BIND_FAILED {
@@ -3550,7 +3525,7 @@ fn main(boot_arg: usize) -> ! {
                         let reason =
                             core::str::from_utf8(&failed.reason[..reason_len]).unwrap_or("?");
                         warn!(
-                            "display_virtio_gpu: Registration REJECTED by supervisor (code={}, reason={}). Halting.",
+                            "Registration rejected by supervisor: code={} reason={}",
                             failed.error_code, reason
                         );
                         loop {
@@ -3582,7 +3557,7 @@ fn main(boot_arg: usize) -> ! {
                     &svc_buf[..total_len],
                     &[],
                 );
-                debug!("display_virtio_gpu: Sent MSG_SERVICE_READY.");
+                trace!("Sent MSG_SERVICE_READY");
             }
         }
     }
@@ -3647,7 +3622,7 @@ fn main(boot_arg: usize) -> ! {
     // response with the req_id the kernel needs to route the reply.
     let mut vfs_loop = ProviderLoop::new(vfs_read);
     let mut last_watchdog_ns = stem::time::monotonic_ns();
-    debug!("Display VFS provider loop online.");
+    debug!("Display VFS provider loop online");
 
     loop {
         let mut did_work = false;
@@ -3756,13 +3731,13 @@ fn main(boot_arg: usize) -> ! {
         while let Some((header, payload)) = frames.next_message() {
             did_work = true;
             stem::trace!(
-                "display_virtio_gpu: next_message -> msg_type={}, len={}",
+                "Display protocol message: msg_type={} len={}",
                 header.msg_type,
                 payload.len()
             );
             match header.msg_type {
                 drvproto::MSG_HELLO => {
-                    debug!("display_virtio_gpu: received MSG_HELLO");
+                    trace!("Received MSG_HELLO");
                     let want_caps = drvproto::decode_hello_payload_le(payload)
                         .map(|hello| hello.want_caps)
                         .unwrap_or(0);
@@ -3783,7 +3758,7 @@ fn main(boot_arg: usize) -> ! {
                 }
                 drvproto::MSG_ACQUIRE => {
                     let _ = refresh_display_mode(&mut driver);
-                    stem::debug!("display_virtio_gpu: received MSG_ACQUIRE");
+                    stem::trace!("Received MSG_ACQUIRE");
                     let mut buffer_age = 0;
                     let idx = driver.next_buffer_idx;
 

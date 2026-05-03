@@ -85,8 +85,8 @@ impl IpcHandleTable {
                 let port_id = super::find_port_id(&port).unwrap();
                 *slot = Some(IpcHandleEntry::new(port, mode));
                 let h = IpcHandle(i as u32);
-                crate::kdebug!(
-                    "ALLOC_HANDLE: handle={} port_id={:?} mode={:?}",
+                crate::ktrace!(
+                    "Allocated IPC handle {} for port_id={:?} mode={:?}",
                     h.0,
                     port_id,
                     mode

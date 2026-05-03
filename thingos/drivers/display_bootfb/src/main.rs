@@ -100,14 +100,8 @@ pub static MANIFEST: ManifestHeader = ManifestHeader {
 
 #[stem::main]
 fn main(boot_fd: usize) -> ! {
-    let self_tid = stem::syscall::get_tid().unwrap_or(0);
-    let self_pid = stem::syscall::getpid();
-    stem::info!(
-        "display_bootfb: Starting VFS-native bootfb driver (v0.4.1) TID={} PID={}",
-        self_tid,
-        self_pid
-    );
-    stem::info!("display_bootfb: boot_arg={}", boot_fd);
+    stem::info!("Starting boot framebuffer display driver...");
+    stem::debug!("Boot framebuffer driver boot_arg={}", boot_fd);
 
     // 1. Map bootstrap memfd to get handles
     let mut drv_req_read = 0;
@@ -162,10 +156,10 @@ fn main(boot_fd: usize) -> ! {
             backing: abi::vm::VmBacking::File { thing: boot_fd as u32, offset: 0 },
         };
 
-        stem::info!("display_bootfb: Mapping bootstrap memfd {} size={}...", boot_fd, boot_size);
+        stem::debug!("Mapping boot framebuffer bootstrap memfd {} size={}...", boot_fd, boot_size);
         match stem::syscall::vm_map(&req) {
             Ok(resp) => {
-                stem::info!("display_bootfb: vm_map success at 0x{:x}", resp.addr);
+                stem::debug!("Boot framebuffer bootstrap mapped at 0x{:x}", resp.addr);
                 let entry_ctx = unsafe { &*(resp.addr as *const DriverEntryCtx) };
                 if entry_ctx.version == 1 {
                     let device_path = entry_ctx.device_path_str();
@@ -183,8 +177,8 @@ fn main(boot_fd: usize) -> ! {
                             stem::syscall::exit(1);
                         }
                     }
-                    stem::info!(
-                        "display_bootfb: recovered Cambium DriverEntryCtx device_path='{}'",
+                    stem::debug!(
+                        "Recovered driver entry context with device_path='{}'",
                         device_path
                     );
                 } else {
@@ -199,8 +193,8 @@ fn main(boot_fd: usize) -> ! {
                     let id_high = slice[4] as u64;
                     bind_instance_id = id_low | (id_high << 32);
 
-                    stem::info!(
-                        "display_bootfb: Recovered handles: req_read={}, resp_write={}, svc={}, id={}",
+                    stem::debug!(
+                        "Recovered boot framebuffer handles: req_read={} resp_write={} svc={} id={}",
                         drv_req_read,
                         drv_resp_write,
                         reserved_supervisor_port,
@@ -209,15 +203,11 @@ fn main(boot_fd: usize) -> ! {
                 }
             }
             Err(e) => {
-                stem::info!(
-                    "display_bootfb: ERROR: Failed to vm_map bootstrap memfd {}: {:?}",
-                    boot_fd,
-                    e
-                );
+                stem::error!("Failed to map boot framebuffer bootstrap memfd {}: {:?}", boot_fd, e);
             }
         }
     } else {
-        stem::info!("display_bootfb: ERROR: No bootstrap memfd arg provided (boot_arg is 0)");
+        stem::error!("No boot framebuffer bootstrap memfd was provided");
         stem::syscall::exit(1);
     }
 
@@ -269,7 +259,7 @@ fn main(boot_fd: usize) -> ! {
         };
         match vfs_mount(vfs_write, &dev_path) {
             Ok(()) => {
-                info!("display_bootfb: mounted VFS provider at {} via cambium", dev_path)
+                info!("Boot framebuffer display service mounted at {}", dev_path)
             }
             Err(e) => {
                 stem::error!("display_bootfb: vfs_mount({}) failed: {:?}", dev_path, e);
@@ -310,8 +300,8 @@ fn main(boot_fd: usize) -> ! {
                 supervisor_protocol::MSG_BIND_READY,
                 &ready_bytes[..len],
             ) {
-                info!(
-                    "display_bootfb: Sending MSG_BIND_READY handshake (class_mask=0x{:x}) to sprout inbox...",
+                debug!(
+                    "Sending boot framebuffer bind-ready handshake with class_mask=0x{:x}...",
                     ready.class_mask
                 );
                 // Bundle the VFS provider handle and the BIND_READY notification atomically.
@@ -321,10 +311,7 @@ fn main(boot_fd: usize) -> ! {
                     &buf[..total_len],
                     &[vfs_write_fd],
                 );
-                info!(
-                    "display_bootfb: Sent MSG_BIND_READY (result={:?}), waiting for MSG_BIND_ASSIGNED...",
-                    res
-                );
+                debug!("Boot framebuffer bind-ready result={:?}; waiting for assignment...", res);
             }
         }
 
@@ -394,7 +381,7 @@ fn main(boot_fd: usize) -> ! {
 
     // VFS provider service loop — ProviderLoop blocks on port_recv and
     // dispatches each decoded request to dispatch_vfs_rpc.
-    info!("display_bootfb: entering VFS provider service loop");
+    debug!("Boot framebuffer VFS provider service loop started");
     let mut lp = ProviderLoop::new(vfs_read);
     loop {
         let req = match lp.next_request() {
@@ -417,7 +404,7 @@ fn main(boot_fd: usize) -> ! {
         }
     }
 
-    info!("display_bootfb: VFS provider port closed — exiting");
+    debug!("Boot framebuffer VFS provider port closed; exiting");
     stem::syscall::exit(0);
 }
 

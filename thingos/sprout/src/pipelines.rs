@@ -6,7 +6,7 @@ use alloc::string::{String, ToString};
 use abi::errors::Errno;
 use abi::syscall::vfs_flags::{O_RDONLY, O_RDWR};
 use stem::syscall::vfs::{vfs_close, vfs_open, vfs_read};
-use stem::{debug, info, warn};
+use stem::{debug, warn};
 
 const BLOOM_SPAWN_ATTEMPTS: usize = 3;
 const BLOOM_SPAWN_RETRY_MS: u64 = 250;
@@ -49,7 +49,7 @@ pub fn select_shell() -> String {
 
 pub fn spawn_shell() -> Option<u64> {
     let shell_path = select_shell();
-    info!("SPROUT: launching shell '{}'", shell_path);
+    debug!("Launching shell '{}'", shell_path);
 
     let open_console = || vfs_open("/dev/console", O_RDWR);
     let stdin_fd = match open_console() {
@@ -97,7 +97,7 @@ pub fn spawn_shell() -> Option<u64> {
 
     match result {
         Ok(resp) => {
-            info!("SPROUT: spawned shell '{}' (PID={})", shell_path, resp.child_tid);
+            debug!("Spawned shell '{}' with PID {}", shell_path, resp.child_tid);
             Some(resp.child_tid)
         }
         Err(err) => {
@@ -149,7 +149,7 @@ pub fn spawn_bristle() -> Option<u64> {
     match stem::syscall::spawn_process_ex(path, &argv, &env, null, inherit, inherit, 0, &[]) {
         Ok(resp) => {
             let pid = resp.child_tid;
-            info!("SPROUT: spawned bristle (PID={})", pid);
+            debug!("Spawned bristle with PID {}", pid);
             let _ = stem::thread::set_priority(pid, 3);
             Some(pid)
         }
@@ -169,9 +169,9 @@ pub fn spawn_chime() -> Option<u64> {
     match stem::syscall::spawn_process_ex(path, &argv, &env, null, null, null, 0, &[]) {
         Ok(resp) => {
             let pid = resp.child_tid;
-            info!("SPROUT: spawned startup chime (PID={})", pid);
+            debug!("Spawned startup chime with PID {}", pid);
             match stem::thread::set_priority(pid, 3) {
-                Ok(()) => debug!("SPROUT: startup chime priority set to 3"),
+                Ok(()) => debug!("Startup chime priority set to 3"),
                 Err(err) => {
                     warn!("SPROUT: failed to set startup chime realtime priority: {:?}", err)
                 }
@@ -196,7 +196,7 @@ pub fn spawn_bloom() -> Option<u64> {
         match stem::syscall::spawn_process_ex(path, &argv, &env, null, inherit, inherit, 0, &[]) {
             Ok(resp) => {
                 let pid = resp.child_tid;
-                info!("SPROUT: spawned bloom (PID={})", pid);
+                debug!("Spawned bloom with PID {}", pid);
                 let _ = stem::thread::set_priority(pid, 2);
                 return Some(pid);
             }

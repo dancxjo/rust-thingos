@@ -139,7 +139,7 @@ pub fn seed_from_hardware() {
         crate::ktrace!("[kernel:entropy] add_sample(hw) ok");
         mark_seeded();
         crate::ktrace!("[kernel:entropy] mark_seeded(hw) ok");
-        crate::kdebug!("ENTROPY: seeded {} bytes from hardware RNG", filled);
+        crate::kdebug!("Seeded {} entropy bytes from hardware RNG", filled);
     } else {
         // Fallback: mix monotonic timer as weak entropy (not marked as seeded
         // because this alone isn't sufficient, but it adds diversity).
@@ -151,8 +151,8 @@ pub fn seed_from_hardware() {
         // This is a conscious tradeoff: weak entropy > no entropy > panic.
         mark_seeded();
         crate::ktrace!("[kernel:entropy] mark_seeded(timer) ok");
-        crate::kwarn!("ENTROPY: no hardware RNG available, using timer fallback (weak entropy)");
-        crate::kdebug!("ENTROPY: marked seeded with weak entropy (timer-only fallback)");
+        crate::kwarn!("No hardware RNG is available; using timer fallback with weak entropy");
+        crate::kdebug!("Marked entropy as seeded with timer-only fallback");
     }
     crate::ktrace!("[kernel:entropy] seed done");
 }

@@ -192,35 +192,35 @@ fn collect_entropy(buf: &mut [u8; 64], counter: u64) {
 fn main(arg: usize) -> ! {
     let cpu = stem::arch::whoami();
     debug!(
-        "hwrng: cs=0x{:x} ss=0x{:x} cpl={} rsp=0x{:x} rip=0x{:x}",
+        "Task state: cs=0x{:x} ss=0x{:x} cpl={} rsp=0x{:x} rip=0x{:x}",
         cpu.cs, cpu.ss, cpu.cpl, cpu.rsp, cpu.rip
     );
 
-    debug!("hwrng: Starting... arg={:x}", arg);
+    debug!("Starting hardware RNG driver with arg={:x}...", arg);
 
     if arg != 0 {
         let ctx = DriverCtx::from_raw(arg);
         let id = stem::thing::ThingId(ctx.device_id.0);
-        debug!("hwrng: Serving device ID: {:?}", id);
+        debug!("Serving hardware RNG device ID: {:?}", id);
     } else {
-        debug!("hwrng: Starting without explicit context (phased boot mode).");
+        debug!("Starting without explicit context in phased boot mode");
     }
 
     #[cfg(target_arch = "x86_64")]
     if has_rdrand() {
-        info!("hwrng: RDRAND instruction is available and will be used.");
+        debug!("RDRAND instruction is available and will be used");
     } else {
-        info!("hwrng: RDRAND is not available, falling back to timing jitter.");
+        debug!("RDRAND is not available; falling back to timing jitter");
     }
 
     #[cfg(not(target_arch = "x86_64"))]
-    info!("hwrng: Non-x86_64 architecture, using timing jitter.");
+    debug!("Non-x86_64 architecture; using timing jitter");
 
     // Perform an initial seeding of the kernel entropy pool.
     let mut entropy_buf = [0u8; 64];
     collect_entropy(&mut entropy_buf, 0);
     stem::syscall::entropy_seed(&entropy_buf);
-    info!("hwrng: Kernel entropy pool seeded.");
+    info!("Kernel entropy pool seeded");
 
     // Enter a maintenance loop, periodically refreshing the entropy pool.
     // This ensures the pool accumulates timing jitter over the system lifetime.
@@ -229,7 +229,7 @@ fn main(arg: usize) -> ! {
         stem::sleep(core::time::Duration::from_secs(60));
         collect_entropy(&mut entropy_buf, counter);
         stem::syscall::entropy_seed(&entropy_buf);
-        debug!("hwrng: Entropy pool refreshed (cycle {})", counter);
+        debug!("Entropy pool refreshed: cycle={}", counter);
         counter = counter.wrapping_add(1);
     }
 }

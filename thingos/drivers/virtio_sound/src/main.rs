@@ -630,17 +630,17 @@ fn debug_log_rpc(op: VfsRpcOp, payload: &[u8]) {
                     u32::from_le_bytes([payload[0], payload[1], payload[2], payload[3]]) as usize;
                 if payload.len() >= 4 + path_len {
                     if let Ok(path) = core::str::from_utf8(&payload[4..4 + path_len]) {
-                        trace!("SND: rpc Lookup '{}'", path);
+                        trace!("Audio RPC lookup '{}'", path);
                         return;
                     }
                 }
             }
-            trace!("SND: rpc Lookup <malformed>");
+            trace!("Audio RPC lookup malformed path");
         }
         VfsRpcOp::Stat => {
             if payload.len() >= 8 {
                 let handle = u64::from_le_bytes(payload[..8].try_into().unwrap_or([0; 8]));
-                trace!("SND: rpc Stat handle={}", handle);
+                trace!("Audio RPC stat handle={}", handle);
             }
         }
         VfsRpcOp::DeviceCall => {
@@ -651,7 +651,7 @@ fn debug_log_rpc(op: VfsRpcOp, payload: &[u8]) {
                         payload[8..].as_ptr() as *const abi::device::DeviceCall
                     )
                 };
-                trace!("SND: rpc DeviceCall handle={} op={}", handle, dc.op);
+                trace!("Audio RPC device_call handle={} op={}", handle, dc.op);
             }
         }
         VfsRpcOp::Write => {
@@ -659,29 +659,29 @@ fn debug_log_rpc(op: VfsRpcOp, payload: &[u8]) {
                 let handle = u64::from_le_bytes(payload[..8].try_into().unwrap_or([0; 8]));
                 let data_len =
                     u32::from_le_bytes(payload[16..20].try_into().unwrap_or([0; 4])) as usize;
-                trace!("SND: rpc Write handle={} len={}", handle, data_len);
+                trace!("Audio RPC write handle={} len={}", handle, data_len);
             }
         }
         VfsRpcOp::Poll => {
             if payload.len() >= 8 {
                 let handle = u64::from_le_bytes(payload[..8].try_into().unwrap_or([0; 8]));
-                trace!("SND: rpc Poll handle={}", handle);
+                trace!("Audio RPC poll handle={}", handle);
             }
         }
         VfsRpcOp::SubscribeReady => {
             if payload.len() >= 8 {
                 let handle = u64::from_le_bytes(payload[..8].try_into().unwrap_or([0; 8]));
-                trace!("SND: rpc SubscribeReady handle={}", handle);
+                trace!("Audio RPC subscribe_ready handle={}", handle);
             }
         }
         VfsRpcOp::UnsubscribeReady => {
             if payload.len() >= 8 {
                 let handle = u64::from_le_bytes(payload[..8].try_into().unwrap_or([0; 8]));
-                trace!("SND: rpc UnsubscribeReady handle={}", handle);
+                trace!("Audio RPC unsubscribe_ready handle={}", handle);
             }
         }
         _ => {
-            trace!("SND: rpc {:?}", op as u8);
+            trace!("Audio RPC op={:?}", op as u8);
         }
     }
 }
@@ -839,7 +839,7 @@ fn ok_device_call(ret_val: u32, out_data: &[u8]) -> ProviderResponse {
 // ── Entry point ───────────────────────────────────────────────────────────────
 
 fn run_driver(mut boot_fd: usize, explicit_path: Option<&str>) -> ! {
-    stem::debug!("SND: Starting VirtIO Sound Driver (boot_fd={})...", boot_fd);
+    stem::debug!("Starting VirtIO sound driver with boot_fd={}...", boot_fd);
 
     // Try to recover boot_fd from argv[1] if not passed directly.
     if boot_fd == 0 && explicit_path.is_none() {
@@ -861,7 +861,7 @@ fn run_driver(mut boot_fd: usize, explicit_path: Option<&str>) -> ! {
                             if let Ok(s) = core::str::from_utf8(&buf[offset..offset + arg1_len]) {
                                 if let Ok(val) = s.parse::<usize>() {
                                     boot_fd = val;
-                                    stem::debug!("SND: Recovered boot_fd {} from argv[1]", boot_fd);
+                                    stem::trace!("Recovered boot_fd {} from argv[1]", boot_fd);
                                 }
                             }
                         }
@@ -876,10 +876,10 @@ fn run_driver(mut boot_fd: usize, explicit_path: Option<&str>) -> ! {
     } else if let Some(path) = resolve_device_path_from_boot_fd(boot_fd) {
         path
     } else if let Some(found) = find_virtio_sound_device() {
-        stem::debug!("SND: Discovered device at {}", found);
+        stem::debug!("Discovered VirtIO sound device at {}", found);
         found
     } else {
-        error!("SND: No virtio-sound device found");
+        error!("No VirtIO sound device found");
         loop {
             stem::time::sleep_ms(1000);
         }
@@ -889,7 +889,7 @@ fn run_driver(mut boot_fd: usize, explicit_path: Option<&str>) -> ! {
     let mut driver = match VirtioDevice::new(&path_str) {
         Ok(d) => d,
         Err(e) => {
-            error!("SND: Failed to claim device at {}: {:?}", path_str, e);
+            error!("Failed to claim device at {}: {:?}", path_str, e);
             loop {
                 stem::time::sleep_ms(1000);
             }
@@ -897,7 +897,7 @@ fn run_driver(mut boot_fd: usize, explicit_path: Option<&str>) -> ! {
     };
 
     if let Err(e) = driver.init(VIRTIO_SND_F_CTLS) {
-        error!("SND: Failed to init device: {}", e);
+        error!("Failed to init device: {}", e);
         loop {
             stem::time::sleep_ms(1);
         }
@@ -905,7 +905,7 @@ fn run_driver(mut boot_fd: usize, explicit_path: Option<&str>) -> ! {
 
     for q in 0..4 {
         if let Err(e) = driver.setup_queue(q, QUEUE_SIZE) {
-            error!("SND: Failed to setup queue {}: {}", q, e);
+            error!("Failed to setup queue {}: {}", q, e);
             loop {
                 stem::time::sleep_ms(1);
             }
@@ -913,13 +913,13 @@ fn run_driver(mut boot_fd: usize, explicit_path: Option<&str>) -> ! {
     }
 
     driver.driver_ok();
-    stem::debug!("SND: Device initialized");
+    stem::debug!("VirtIO sound device initialized");
 
     let dma_dev = driver.claim_handle();
     let control_dma = match setup_control_dma(dma_dev) {
         Some(v) => v,
         None => {
-            error!("SND: Failed to allocate control DMA buffers");
+            error!("Failed to allocate control DMA buffers");
             loop {
                 stem::time::sleep_ms(1000);
             }
@@ -929,7 +929,7 @@ fn run_driver(mut boot_fd: usize, explicit_path: Option<&str>) -> ! {
     let mut event_queue = match setup_event_queue(&mut driver, dma_dev) {
         Some(v) => v,
         None => {
-            error!("SND: Failed to populate event queue");
+            error!("Failed to populate event queue");
             loop {
                 stem::time::sleep_ms(1000);
             }
@@ -939,13 +939,13 @@ fn run_driver(mut boot_fd: usize, explicit_path: Option<&str>) -> ! {
     let stream_id = match find_output_stream(&mut driver) {
         Some(id) => id,
         None => {
-            error!("SND: No output stream found");
+            error!("No output stream found");
             loop {
                 stem::time::sleep_ms(1);
             }
         }
     };
-    stem::debug!("SND: Using stream {}", stream_id);
+    stem::debug!("Using audio stream {}", stream_id);
 
     // ── Mount VFS provider at /dev/audio/card0/ ───────────────────────────────
     // Mount early — before configure_stream/PCM_START/DMA alloc — so that
@@ -954,7 +954,7 @@ fn run_driver(mut boot_fd: usize, explicit_path: Option<&str>) -> ! {
     let (req_write, req_read) = match port_create(VFS_RPC_MAX_REQ * 16) {
         Ok(p) => p,
         Err(e) => {
-            error!("SND: port_create failed: {:?}", e);
+            error!("port_create failed: {:?}", e);
             loop {
                 stem::time::sleep_ms(1000);
             }
@@ -962,9 +962,9 @@ fn run_driver(mut boot_fd: usize, explicit_path: Option<&str>) -> ! {
     };
 
     match vfs_mount(req_write, "/dev/audio/card0") {
-        Ok(()) => stem::debug!("SND: Mounted at /dev/audio/card0"),
+        Ok(()) => stem::debug!("Mounted audio device at /dev/audio/card0"),
         Err(e) => {
-            warn!("SND: vfs_mount failed: {:?} — continuing without VFS interface", e);
+            warn!("vfs_mount failed: {:?}; continuing without VFS interface", e);
         }
     }
 
@@ -974,7 +974,7 @@ fn run_driver(mut boot_fd: usize, explicit_path: Option<&str>) -> ! {
     let tx_dma = match stem::syscall::device_alloc_dma(dma_dev, tx_dma_pages) {
         Ok(v) => v,
         Err(e) => {
-            error!("SND: Failed to allocate TX DMA staging buffer: {:?}", e);
+            error!("Failed to allocate TX DMA staging buffer: {:?}", e);
             loop {
                 stem::time::sleep_ms(1000);
             }
@@ -983,7 +983,7 @@ fn run_driver(mut boot_fd: usize, explicit_path: Option<&str>) -> ! {
     let tx_dma_phys = match stem::syscall::device_dma_phys(tx_dma) {
         Ok(p) => p,
         Err(e) => {
-            error!("SND: Failed to resolve TX DMA physical address: {:?}", e);
+            error!("Failed to resolve TX DMA physical address: {:?}", e);
             loop {
                 stem::time::sleep_ms(1000);
             }
@@ -996,9 +996,9 @@ fn run_driver(mut boot_fd: usize, explicit_path: Option<&str>) -> ! {
     let mut provider_loop = ProviderLoop::new(req_read);
     let mapped_listener = setup_mapped_ring_listener();
     if mapped_listener.is_some() {
-        stem::debug!("SND: mapped ring control socket at {}", AUDIO_RING_SOCKET_PATH);
+        stem::debug!("Mapped ring control socket at {}", AUDIO_RING_SOCKET_PATH);
     } else {
-        warn!("SND: mapped ring socket unavailable; using write() path");
+        warn!("Mapped ring socket unavailable; using write() path");
     }
     let mut mapped_pending_fd: Option<u32> = None;
 
@@ -1030,7 +1030,7 @@ fn run_driver(mut boot_fd: usize, explicit_path: Option<&str>) -> ! {
                 }
                 Ok(None) => break,
                 Err(e) => {
-                    warn!("SND: RPC loop error: {:?}", e);
+                    warn!("Audio RPC loop error: {:?}", e);
                     break;
                 }
             }
@@ -1059,15 +1059,15 @@ fn run_driver(mut boot_fd: usize, explicit_path: Option<&str>) -> ! {
                                 }
                                 Err(Errno::EAGAIN) => {}
                                 Err(e) => {
-                                    warn!("SND: mapped ring accept failed: {:?}", e);
+                                    warn!("Mapped ring accept failed: {:?}", e);
                                 }
                             }
                         } else if (revents & (POLLERR | POLLHUP)) != 0 {
-                            warn!("SND: mapped ring listener poll revents=0x{:x}", revents);
+                            warn!("Mapped ring listener poll revents=0x{:x}", revents);
                         }
                     }
                     Ok(_) => {}
-                    Err(e) => warn!("SND: mapped ring listener poll failed: {:?}", e),
+                    Err(e) => warn!("Mapped ring listener poll failed: {:?}", e),
                 }
             }
 
@@ -1130,11 +1130,14 @@ fn run_driver(mut boot_fd: usize, explicit_path: Option<&str>) -> ! {
                                             card.mapped_attach_count.saturating_add(1);
                                         card.mapped_was_empty = false;
                                         mapped_pending_fd = None;
-                                        info!("SND: mapped ring attached ({} bytes)", resp.len);
+                                        debug!(
+                                            "Mapped audio ring attached with {} bytes",
+                                            resp.len
+                                        );
                                         progress = true;
                                     }
                                     Err(e) => {
-                                        warn!("SND: mapped ring vm_map failed: {:?}", e);
+                                        warn!("Mapped ring vm_map failed: {:?}", e);
                                         let _ = stem::syscall::vfs_close(ring_fd);
                                         let _ = stem::syscall::vfs_close(ctrl_fd);
                                         mapped_pending_fd = None;
@@ -1145,7 +1148,7 @@ fn run_driver(mut boot_fd: usize, explicit_path: Option<&str>) -> ! {
                         Ok(_) => {}
                         Err(Errno::EAGAIN) => {}
                         Err(e) => {
-                            warn!("SND: mapped ring recvmsg failed: {:?}", e);
+                            warn!("Mapped ring recvmsg failed: {:?}", e);
                             let _ = stem::syscall::vfs_close(ctrl_fd);
                             mapped_pending_fd = None;
                         }
@@ -1157,7 +1160,7 @@ fn run_driver(mut boot_fd: usize, explicit_path: Option<&str>) -> ! {
         // 3. Detect xruns from the event queue.
         if process_event_queue(&mut driver, &mut event_queue) {
             card.xruns += 1;
-            warn!("SND: PCM xrun");
+            warn!("PCM xrun");
             progress = true;
         }
 
@@ -1198,15 +1201,15 @@ fn run_driver(mut boot_fd: usize, explicit_path: Option<&str>) -> ! {
                 card.hw_config_dirty = false;
                 if send_pcm_command(&mut driver, &control_dma, VIRTIO_SND_R_PCM_START, stream_id) {
                     card.hw_started = true;
-                    info!("SND: Hardware playback started");
+                    info!("Hardware audio playback started");
                     progress = true;
                 } else {
-                    warn!("SND: Hardware playback start did not complete cleanly");
+                    warn!("Hardware playback start did not complete cleanly");
                     card.hw_faulted = true;
                     card.state = AudioState::Stopped as u32;
                 }
             } else {
-                warn!("SND: stream {} configuration did not complete cleanly", stream_id);
+                warn!("Stream {} configuration did not complete cleanly", stream_id);
                 card.hw_faulted = true;
                 card.state = AudioState::Stopped as u32;
             }
@@ -1403,14 +1406,14 @@ fn alloc_dma_page(claim_handle: usize, tag: &str) -> Option<DmaPage> {
     let virt = match stem::syscall::device_alloc_dma(claim_handle, 1) {
         Ok(v) => v,
         Err(e) => {
-            warn!("SND: DMA alloc failed for {}: {:?}", tag, e);
+            warn!("DMA alloc failed for {}: {:?}", tag, e);
             return None;
         }
     };
     let phys = match stem::syscall::device_dma_phys(virt) {
         Ok(p) => p,
         Err(e) => {
-            warn!("SND: DMA phys failed for {}: {:?}", tag, e);
+            warn!("DMA phys failed for {}: {:?}", tag, e);
             return None;
         }
     };
@@ -1442,7 +1445,7 @@ fn setup_event_queue(driver: &mut VirtioDevice, claim_handle: usize) -> Option<E
             ) {
                 Some(d) => d,
                 None => {
-                    warn!("SND: event queue full while populating");
+                    warn!("Event queue full while populating");
                     break;
                 }
             };
@@ -1485,7 +1488,7 @@ fn process_event_queue(driver: &mut VirtioDevice, state: &mut EventQueueState) -
                 state.desc_to_slot[new_desc as usize] = slot;
                 needs_notify = true;
             } else {
-                warn!("SND: event queue full while requeueing");
+                warn!("Event queue full while requeueing");
                 break;
             }
         }
@@ -1513,7 +1516,7 @@ fn send_pcm_command(
     cmd: u32,
     stream_id: u32,
 ) -> bool {
-    debug!("SND: control {} begin for stream {}", pcm_cmd_name(cmd), stream_id);
+    trace!("Audio control {} begin for stream {}", pcm_cmd_name(cmd), stream_id);
     unsafe {
         *(control_dma.req.virt as *mut VirtioSndPcmHdr) =
             VirtioSndPcmHdr { hdr: VirtioSndHdr { code: cmd }, stream_id };
@@ -1526,7 +1529,7 @@ fn send_pcm_command(
     {
         let q = driver.queue_mut(VIRTIO_SND_VQ_CONTROL).unwrap();
         if q.add_buffer(&bufs).is_none() {
-            warn!("SND: control {} queue full for stream {}", pcm_cmd_name(cmd), stream_id);
+            warn!("Audio control {} queue full for stream {}", pcm_cmd_name(cmd), stream_id);
             return false;
         }
     }
@@ -1541,20 +1544,20 @@ fn send_pcm_command(
             let resp = unsafe { *(control_dma.resp.virt as *const VirtioSndHdr) };
             if resp.code != VIRTIO_SND_S_OK {
                 warn!(
-                    "SND: control {} for stream {} completed with status {:x}",
+                    "Audio control {} for stream {} completed with status {:x}",
                     pcm_cmd_name(cmd),
                     stream_id,
                     resp.code
                 );
                 return false;
             }
-            debug!("SND: control {} complete for stream {}", pcm_cmd_name(cmd), stream_id);
+            trace!("Audio control {} complete for stream {}", pcm_cmd_name(cmd), stream_id);
             return true;
         }
         if stem::time::monotonic_ns().saturating_sub(start_ns) > 2_000_000_000 {
             let resp = unsafe { *(control_dma.resp.virt as *const VirtioSndHdr) };
             warn!(
-                "SND: control {} for stream {} timed out (resp={:x})",
+                "Audio control {} for stream {} timed out: resp={:x}",
                 pcm_cmd_name(cmd),
                 stream_id,
                 resp.code
@@ -1599,7 +1602,7 @@ fn configure_stream(
     stream_id: u32,
     params: &AudioParams,
 ) -> bool {
-    debug!("SND: control SET_PARAMS begin for stream {}", stream_id);
+    trace!("Audio control SET_PARAMS begin for stream {}", stream_id);
     let bytes_per_frame = AudioSampleFormat::from_u32(params.sample_format)
         .unwrap_or(AudioSampleFormat::S16LE)
         .bytes_per_sample() as u32
@@ -1629,7 +1632,7 @@ fn configure_stream(
     {
         let q = driver.queue_mut(VIRTIO_SND_VQ_CONTROL).unwrap();
         if q.add_buffer(&bufs).is_none() {
-            warn!("SND: control queue full for set_params");
+            warn!("Audio control queue full for set_params");
             return false;
         }
     }
@@ -1643,18 +1646,15 @@ fn configure_stream(
         if done {
             let resp = unsafe { *(control_dma.resp.virt as *const VirtioSndHdr) };
             if resp.code != VIRTIO_SND_S_OK {
-                warn!(
-                    "SND: set_params for stream {} completed with status {:x}",
-                    stream_id, resp.code
-                );
+                warn!("set_params for stream {} completed with status {:x}", stream_id, resp.code);
                 return false;
             }
-            debug!("SND: control SET_PARAMS complete for stream {}", stream_id);
+            trace!("Audio control SET_PARAMS complete for stream {}", stream_id);
             break;
         }
         if stem::time::monotonic_ns().saturating_sub(start_ns) > 2_000_000_000 {
             let resp = unsafe { *(control_dma.resp.virt as *const VirtioSndHdr) };
-            warn!("SND: set_params for stream {} timed out (resp={:x})", stream_id, resp.code);
+            warn!("set_params for stream {} timed out: resp={:x}", stream_id, resp.code);
             return false;
         }
         stem::time::sleep_ms(1);

@@ -130,7 +130,7 @@ struct WaylandServer {
 impl WaylandServer {
     fn run(args: WaylandThreadArgs) -> ! {
         let _ = stem::thread::set_name(b"wayland-server");
-        info!("wayland-server: starting");
+        debug!("Wayland server thread starting...");
 
         // ── ServiceLoop ───────────────────────────────────────────────────
         let mut svc = match ServiceLoop::new(256) {
@@ -193,14 +193,14 @@ impl WaylandServer {
             }
         };
 
-        info!("wayland-server: listening on {}", WAYLAND_SOCKET_PATH);
+        debug!("Wayland server listening on {}", WAYLAND_SOCKET_PATH);
         if args.output.supports_dmabuf {
-            info!(
-                "wayland-server: advertising globals wl_compositor wl_shm xdg_wm_base wl_seat wl_output wl_subcompositor wl_data_device_manager zwp_linux_dmabuf_v1"
+            debug!(
+                "Wayland globals advertised: wl_compositor wl_shm xdg_wm_base wl_seat wl_output wl_subcompositor wl_data_device_manager zwp_linux_dmabuf_v1"
             );
         } else {
-            info!(
-                "wayland-server: advertising globals wl_compositor wl_shm xdg_wm_base wl_seat wl_output wl_subcompositor wl_data_device_manager"
+            debug!(
+                "Wayland globals advertised: wl_compositor wl_shm xdg_wm_base wl_seat wl_output wl_subcompositor wl_data_device_manager"
             );
         }
 
@@ -276,7 +276,7 @@ impl WaylandServer {
                 }
 
                 ServiceEvent::InboxClosed => {
-                    info!("wayland-server: inbox closed, shutting down");
+                    debug!("Wayland server inbox closed; shutting down");
                     loop {
                         stem::sleep_ms(1000);
                     }
@@ -515,7 +515,7 @@ impl WaylandServer {
             }
         }
 
-        info!("wayland-server: updated output0 to {}x{} @ {}mHz", width, height, refresh_mhz);
+        debug!("Wayland output updated to {}x{} @ {}mHz", width, height, refresh_mhz);
     }
 
     // ── Main thread events ───────────────────────────────────────────────
@@ -1176,7 +1176,7 @@ impl WaylandServer {
             self.clipboard_owner = None;
             self.clipboard_source_obj = 0;
             self.clipboard_mime_types = Vec::new();
-            info!("wayland-server: clipboard selection cleared");
+            debug!("Clipboard selection cleared");
             self.broadcast_selection_null();
             return;
         }
@@ -1184,11 +1184,7 @@ impl WaylandServer {
         self.clipboard_owner = Some(owner_token);
         self.clipboard_source_obj = source_obj;
         self.clipboard_mime_types = mime_types.clone();
-        info!(
-            "wayland-server: clipboard selection set source={} mimes={}",
-            source_obj,
-            mime_types.len()
-        );
+        debug!("Clipboard selection set: source={} mimes={}", source_obj, mime_types.len());
 
         // Broadcast the new selection to all OTHER clients that have a data device.
         let tokens: Vec<WaitToken> = self.clients.keys().copied().collect();

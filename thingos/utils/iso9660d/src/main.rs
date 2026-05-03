@@ -22,7 +22,7 @@ use stem::syscall::vfs::{
     vfs_close, vfs_mount, vfs_open, vfs_read, vfs_readdir, vfs_seek, vfs_write,
 };
 use stem::syscall::{PortHandle, argv_get, port_create};
-use stem::{info, warn};
+use stem::{debug, info, warn};
 
 const DEFAULT_MOUNT_POINT: &str = "/media/livedisk";
 
@@ -253,9 +253,9 @@ fn handle_stat(payload: &[u8]) -> ProviderResponse {
 fn main(_arg: usize) -> ! {
     let config = mount_config_from_args();
     if let Some(device) = config.device.as_ref() {
-        info!("ISO9660D: Starting VFS provider for {} at {}", device, config.mount_point);
+        info!("Mounting ISO9660 filesystem from {} at {}...", device, config.mount_point);
     } else {
-        info!("ISO9660D: Starting VFS provider scan for {}", config.mount_point);
+        info!("Scanning for ISO9660 filesystem to mount at {}...", config.mount_point);
     }
 
     let (fs, dev, req_read) = loop {
@@ -381,14 +381,14 @@ fn try_mount_device(
     let fd = vfs_open(device_path, abi::syscall::vfs_flags::O_RDONLY).ok()?;
     let _ = vfs_close(fd);
 
-    info!("iso9660d: probing device {}", device_name);
+    debug!("Probing {} for ISO9660", device_name);
     let dev = VfsBlockDevice::new(device_path);
     let fs = IsoFs::probe(&dev)?;
-    info!("iso9660d: found ISO9660 on device {}", device_name);
+    debug!("Found ISO9660 on {}", device_name);
     let (w, r) = port_create(65536).ok()?;
     match vfs_mount(w, mount_point) {
         Ok(()) => {
-            info!("iso9660d: mounted at {}", mount_point);
+            info!("ISO9660 filesystem mounted at {}", mount_point);
             Some((fs, dev, r))
         }
         Err(e) => {

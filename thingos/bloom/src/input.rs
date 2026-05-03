@@ -869,7 +869,7 @@ impl InputState {
             0,
             0,
         );
-        stem::info!("bloom: close button pressed surface={}", surface_id);
+        stem::debug!("Close button pressed for surface={}", surface_id);
     }
 
     fn toggle_shade(
@@ -889,7 +889,7 @@ impl InputState {
         scene.keyboard_focus = new_focus;
         mark_focus_damage(scene, damage, old_focus, new_focus);
         self.send_keyboard_focus_events(scene, old_focus, scene.keyboard_focus, wayland_evt_write);
-        stem::info!("bloom: shade toggled surface={} shaded={}", surface_id, toggled.active);
+        stem::debug!("Shade toggled for surface={} shaded={}", surface_id, toggled.active);
     }
 
     fn toggle_fullscreen(
@@ -1032,7 +1032,7 @@ impl InputState {
         self.resize_sent_this_frame = false;
         match grab.kind {
             PointerGrabKind::Move { .. } => {
-                stem::info!("bloom: window drag ended surface={}", grab.surface_id);
+                stem::debug!("Window drag ended for surface={}", grab.surface_id);
             }
             PointerGrabKind::Resize { .. } => {
                 if let Some(rect) = scene.surface_rect(grab.surface_id) {
@@ -1044,7 +1044,7 @@ impl InputState {
                         false,
                     );
                 }
-                stem::info!("bloom: window resize ended surface={}", grab.surface_id);
+                stem::debug!("Window resize ended for surface={}", grab.surface_id);
             }
         }
         true

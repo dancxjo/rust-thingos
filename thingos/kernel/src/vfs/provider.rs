@@ -230,7 +230,7 @@ impl ProviderRpc {
     /// Perform a multiplexed, concurrent round-trip RPC with the provider.
     pub fn rpc(&self, op: VfsRpcOp, payload: &[u8]) -> SysResult<Vec<u8>> {
         let tid = unsafe { crate::sched::current_tid_current() };
-        crate::kdebug!("VFS_RPC: request op={:?} len={} tid={}", op, payload.len(), tid);
+        crate::ktrace!("VFS RPC request: op={:?} len={} tid={}", op, payload.len(), tid);
         let (req_id, wq) = {
             let mut state = self.state.lock();
             let mut req_id = state.next_req_id;
@@ -304,16 +304,16 @@ impl ProviderRpc {
 
                     let status = resp[0];
                     if status != 0 {
-                        crate::kdebug!(
-                            "VFS_RPC: response op={:?} id={} -> ERR({})",
+                        crate::ktrace!(
+                            "VFS RPC response: op={:?} id={} -> ERR({})",
                             op,
                             req_id,
                             status
                         );
                         return Err(errno_from_u8(status));
                     }
-                    crate::kdebug!(
-                        "VFS_RPC: response op={:?} id={} -> OK({})",
+                    crate::ktrace!(
+                        "VFS RPC response: op={:?} id={} -> OK({})",
                         op,
                         req_id,
                         resp.len() - 1
@@ -876,8 +876,8 @@ impl VfsNode for ProviderNode {
         let provider_pid = if is_display { self.rpc.provider_pid() } else { 0 };
         let enter_ns = if is_display { crate::time::monotonic_now_ns() } else { 0 };
         if is_display {
-            crate::kdebug!(
-                "VFS_RPC: display device_call.enter op={} caller_tid={} provider_pid={}",
+            crate::ktrace!(
+                "Display device_call enter: op={} caller_tid={} provider_pid={}",
                 display_op_name(call.op),
                 caller_tid,
                 provider_pid,
@@ -888,8 +888,8 @@ impl VfsNode for ProviderNode {
 
         if is_display {
             let duration_ms = crate::time::monotonic_now_ns().saturating_sub(enter_ns) / 1_000_000;
-            crate::kdebug!(
-                "VFS_RPC: display device_call.exit op={} caller_tid={} provider_pid={} duration_ms={}",
+            crate::ktrace!(
+                "Display device_call exit: op={} caller_tid={} provider_pid={} duration_ms={}",
                 display_op_name(call.op),
                 caller_tid,
                 provider_pid,
@@ -898,7 +898,7 @@ impl VfsNode for ProviderNode {
             // Per-RPC watchdog: upgrade to warn on high-latency or stalled calls.
             if duration_ms >= 1000 {
                 crate::kwarn!(
-                    "VFS_RPC: display device_call.stall op={} duration_ms={} caller_tid={} provider_pid={}",
+                    "Display device_call stalled: op={} duration_ms={} caller_tid={} provider_pid={}",
                     display_op_name(call.op),
                     duration_ms,
                     caller_tid,
@@ -906,7 +906,7 @@ impl VfsNode for ProviderNode {
                 );
             } else if duration_ms >= 200 {
                 crate::kwarn!(
-                    "VFS_RPC: display device_call.slow op={} duration_ms={} caller_tid={} provider_pid={}",
+                    "Display device_call slow: op={} duration_ms={} caller_tid={} provider_pid={}",
                     display_op_name(call.op),
                     duration_ms,
                     caller_tid,

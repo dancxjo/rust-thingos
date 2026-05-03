@@ -655,8 +655,8 @@ impl ArchRuntime for X86_64Runtime {
     unsafe fn enter_user(&self, entry: UserEntry) -> ! {
         // Map required pages before entering user mode
         let tid = self.current_tid();
-        kernel::kdebug!(
-            "ENTER_USER: TID={} entry_pc={:x} user_sp={:x}",
+        kernel::ktrace!(
+            "Entering user mode: tid={} entry_pc={:x} user_sp={:x}",
             tid,
             entry.entry_pc,
             entry.user_sp

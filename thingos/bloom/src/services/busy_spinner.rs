@@ -39,7 +39,7 @@ impl BloomService for BusySpinnerService {
     }
 
     fn on_added(&mut self) -> LoopAction {
-        stem::info!("bloom: busy spinner serviceLoop started");
+        stem::debug!("Busy spinner service loop started");
         Self::arm_frame_timer()
     }
 
@@ -54,7 +54,7 @@ impl BloomService for BusySpinnerService {
 
         self.frame = (self.frame + 1) % BUSY_SPINNER_FRAMES;
         if matches!(self.phase, BusySpinnerPhase::Running) && world.busy_spinner_can_fade() {
-            stem::info!("bloom: busy spinner fading out");
+            stem::debug!("Busy spinner fading out");
             self.phase = BusySpinnerPhase::Fading { frame: 0 };
         }
 

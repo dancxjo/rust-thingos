@@ -563,7 +563,7 @@ impl XhciController {
             write_volatile(self.dcbaa.as_mut_ptr::<u64>(), array.phys);
         }
         self.scratchpad_array = Some(array);
-        debug!("xHCI scratchpad DMA ready: count={} page_size={}.", count, page_size);
+        trace!("xHCI scratchpad DMA ready: count={} page_size={}", count, page_size);
         Ok(())
     }
 
@@ -599,7 +599,7 @@ impl XhciController {
         if observed == 0 {
             return Err("CONFIG rejected max slot enable");
         }
-        debug!("xHCI configured {} device slot(s).", observed);
+        debug!("xHCI configured {} device slot(s)", observed);
         Ok(())
     }
 
@@ -626,7 +626,7 @@ impl XhciController {
             },
             Err(e) => {
                 self.irq_enabled = false;
-                warn!("xhci: MSI/MSI-X unavailable: {:?}; polling controller", e);
+                warn!("MSI/MSI-X unavailable: {:?}; polling controller", e);
             }
         }
     }
@@ -635,7 +635,7 @@ impl XhciController {
         write32(self.regs.op, OP_USBSTS, USBSTS_EINT | USBSTS_PCD);
         write32(self.regs.op, OP_USBCMD, read32(self.regs.op, OP_USBCMD) | USBCMD_RS);
         self.wait_status_clear(USBSTS_HCH, 250_000, "controller run")?;
-        debug!("xHCI controller is running.");
+        debug!("xHCI controller is running");
         Ok(())
     }
 
@@ -662,11 +662,11 @@ impl XhciController {
                 continue;
             }
 
-            debug!("xHCI port {} connected at {} speed.", port_number, port_speed_name(speed));
+            debug!("xHCI port {} connected at {} speed", port_number, port_speed_name(speed));
             let reset_speed = match self.reset_port(port) {
                 Ok(s) => s,
                 Err(e) => {
-                    warn!("xhci: port {} reset failed: {}", port_number, e);
+                    warn!("Port {} reset failed: {}", port_number, e);
                     continue;
                 }
             };
@@ -688,7 +688,7 @@ impl XhciController {
                         *p = true;
                     }
                 }
-                Err(e) => warn!("xhci: port {} enumeration failed: {}", port_number, e),
+                Err(e) => warn!("Port {} enumeration failed: {}", port_number, e),
             }
         }
         None
@@ -723,7 +723,7 @@ impl XhciController {
         speed: u8,
     ) -> Result<Option<UsbMassStorage>, &'static str> {
         let slot_id = self.enable_slot()?;
-        debug!("USB device detected on xHCI port {}.", port);
+        debug!("USB device detected on xHCI port {}", port);
 
         let csz = self.regs.context_size();
         let input_context = DmaAlloc::alloc(self.claim, (MAX_ENDPOINT_ID + 2) * csz)
@@ -824,7 +824,7 @@ impl XhciController {
             .find(|i| i.class == 0x08 && i.subclass == 0x06 && i.protocol == 0x50)
         else {
             self.set_configuration(&mut dev, config_value)?;
-            debug!("USB device on port {} has no mass-storage BOT interface.", port);
+            trace!("USB device on port {} has no mass-storage BOT interface", port);
             return Ok(None);
         };
 
@@ -887,7 +887,7 @@ impl XhciController {
         });
         doorbell(self.regs.doorbells, 0, 0);
         self.wait_command_completion(ptr)?;
-        debug!("xHCI NO_OP command completed.");
+        trace!("xHCI NO_OP command completed");
         Ok(())
     }
 
@@ -900,7 +900,7 @@ impl XhciController {
         doorbell(self.regs.doorbells, 0, 0);
         let ev = self.wait_command_completion(ptr)?;
         let slot_id = ((ev.control >> TRB_SLOT_SHIFT) & 0xff) as u8;
-        debug!("xHCI slot enabled: slot_id={}.", slot_id);
+        debug!("xHCI slot enabled: slot_id={}", slot_id);
         Ok(slot_id)
     }
 
@@ -912,7 +912,7 @@ impl XhciController {
         });
         doorbell(self.regs.doorbells, 0, 0);
         let _ = self.wait_command_completion(ptr)?;
-        debug!("xHCI device addressed on slot {}.", slot_id);
+        debug!("xHCI device addressed on slot {}", slot_id);
         Ok(())
     }
 
@@ -957,7 +957,7 @@ impl XhciController {
         });
         doorbell(self.regs.doorbells, 0, 0);
         let _ = self.wait_command_completion(ptr)?;
-        debug!("xHCI bulk endpoints configured: in={} out={}.", in_id, out_id);
+        debug!("xHCI bulk endpoints configured: in={} out={}", in_id, out_id);
         Ok(())
     }
 
@@ -988,7 +988,7 @@ impl XhciController {
     fn set_configuration(&mut self, dev: &mut UsbDevice, value: u8) -> Result<(), &'static str> {
         let setup = [0x00, USB_REQ_SET_CONFIGURATION, value, 0, 0, 0, 0, 0];
         let _ = self.control_transfer(dev, &setup, 0, false)?;
-        debug!("USB configuration set to {}.", value);
+        trace!("USB configuration set to {}", value);
         Ok(())
     }
 
@@ -1063,11 +1063,11 @@ impl XhciController {
                         if cc == CC_SUCCESS {
                             return Ok(ev);
                         }
-                        warn!("xhci: command failed cc={}", cc);
+                        warn!("Command failed with completion code {}", cc);
                         return Err("command completion error");
                     }
                     TRB_TYPE_PORT_STATUS_CHANGE_EVENT => self.log_port_event(ev),
-                    _ => trace!("xhci: ignored event type={}", event_type(ev.control)),
+                    _ => trace!("Ignored xHCI event type={}", event_type(ev.control)),
                 }
             }
             self.wait_for_event_delay();
@@ -1089,12 +1089,12 @@ impl XhciController {
                             if cc == CC_SUCCESS || cc == CC_SHORT_PACKET {
                                 return Ok(ev);
                             }
-                            warn!("xhci: transfer failed slot={} ep={} cc={}", ev_slot, ev_ep, cc);
+                            warn!("Transfer failed: slot={} ep={} cc={}", ev_slot, ev_ep, cc);
                             return Err("transfer completion error");
                         }
                     }
                     TRB_TYPE_PORT_STATUS_CHANGE_EVENT => self.log_port_event(ev),
-                    _ => trace!("xhci: ignored event type={}", event_type(ev.control)),
+                    _ => trace!("Ignored xHCI event type={}", event_type(ev.control)),
                 }
             }
             self.wait_for_event_delay();
@@ -1125,7 +1125,7 @@ impl XhciController {
 
     fn log_port_event(&self, ev: Trb) {
         let port = ((ev.parameter >> 24) & 0xff) as u8;
-        trace!("xhci: port status change event port={}", port);
+        trace!("Port status change event: port={}", port);
     }
 
     fn wait_for_event_delay(&self) {
@@ -1165,7 +1165,7 @@ impl XhciController {
                 stem::yield_now();
             }
         }
-        warn!("xhci: timeout waiting for {}", label);
+        warn!("Timeout waiting for {}", label);
         Err(label)
     }
 
@@ -1183,7 +1183,7 @@ impl XhciController {
                 stem::yield_now();
             }
         }
-        warn!("xhci: timeout waiting for {}", label);
+        warn!("Timeout waiting for {}", label);
         Err(label)
     }
 
@@ -1201,7 +1201,7 @@ impl XhciController {
                 stem::yield_now();
             }
         }
-        warn!("xhci: timeout waiting for {}", label);
+        warn!("Timeout waiting for {}", label);
         Err(label)
     }
 }
@@ -1212,19 +1212,22 @@ impl UsbMassStorage {
         let vendor = ascii_field(&inquiry, 8, 8);
         let product = ascii_field(&inquiry, 16, 16);
         if let Err(e) = self.scsi_test_unit_ready(xhci) {
-            debug!("USB mass storage TEST UNIT READY failed ({}); issuing REQUEST SENSE.", e);
+            trace!("USB mass storage TEST UNIT READY failed ({}); issuing REQUEST SENSE", e);
             let _ = self.scsi_request_sense(xhci);
         }
         let (sectors, sector_size) = self.scsi_read_capacity_10(xhci)?;
         self.sector_count = sectors;
         self.sector_size = sector_size;
-        info!(
-            "USB mass storage attached: vendor=\"{}\" product=\"{}\" capacity={} sectors sector_size={}.",
-            vendor, product, sectors, sector_size
-        );
+        let device_name = storage_display_name(&vendor, &product);
+        if device_name.is_empty() {
+            info!("USB storage device attached");
+        } else {
+            info!("USB storage device attached: {}", device_name);
+        }
+        trace!("USB storage capacity: {} sectors of {} bytes", sectors, sector_size);
         let mut first = vec![0u8; sector_size as usize];
         self.read_sectors(xhci, 0, 1, &mut first)?;
-        debug!("USB mass storage probe read completed at LBA 0.");
+        trace!("USB mass storage probe read completed at LBA 0");
         log_hex_prefix("ums: lba0", &first[..min(first.len(), 64)]);
         Ok(())
     }
@@ -1294,7 +1297,7 @@ impl UsbMassStorage {
         let (got, _) = self.bot_transfer_raw(xhci, &cdb, SCSI_CDB_6_LEN, SENSE_LEN, true)?;
         let valid = got.min(SENSE_LEN);
         if valid < MIN_SENSE_DATA_LEN {
-            warn!("ums: REQUEST SENSE returned only {} bytes", valid);
+            warn!("REQUEST SENSE returned only {} bytes", valid);
             return Ok(());
         }
         let mut sense = [0u8; SENSE_LEN];
@@ -1497,7 +1500,7 @@ impl UsbBlockProvider {
                         ProviderResponse::ok_read(&bounce[inner..inner + len])
                     }
                     Err(e) => {
-                        warn!("ums: read failed: {}", e);
+                        warn!("USB storage read failed: {}", e);
                         ProviderResponse::err(Errno::EIO)
                     }
                 }
@@ -1551,7 +1554,7 @@ impl UsbBlockProvider {
                         ProviderResponse::ok_read(&bounce[inner..inner + actual_len])
                     }
                     Err(e) => {
-                        warn!("ums: partition read failed: {}", e);
+                        warn!("USB partition read failed: {}", e);
                         ProviderResponse::err(Errno::EIO)
                     }
                 }
@@ -1576,7 +1579,7 @@ fn parse_mbr_partitions(sector: &[u8], disk_sectors: u64) -> Vec<MbrPartition> {
         return parts;
     }
     if sector[510] != 0x55 || sector[511] != 0xAA {
-        debug!("USB storage partition scan found no MBR signature.");
+        trace!("USB storage partition scan found no MBR signature");
         return parts;
     }
     for i in 0..4usize {
@@ -1733,12 +1736,22 @@ fn ascii_field(bytes: &[u8], start: usize, len: usize) -> String {
     s.trim().to_string()
 }
 
+fn storage_display_name(vendor: &str, product: &str) -> String {
+    match (vendor.is_empty(), product.is_empty()) {
+        (true, true) => String::new(),
+        (true, false) => product.to_string(),
+        (false, true) => vendor.to_string(),
+        (false, false) if product.starts_with(vendor) => product.to_string(),
+        (false, false) => format!("{} {}", vendor, product),
+    }
+}
+
 fn log_hex_prefix(prefix: &str, bytes: &[u8]) {
     let mut line = String::new();
     for b in bytes {
         line.push_str(&format!("{:02x} ", b));
     }
-    trace!("{}: {}.", prefix, line.trim());
+    trace!("{}: {}", prefix, line.trim());
 }
 
 fn resolve_device_path(boot_fd: usize) -> String {
@@ -1796,12 +1809,12 @@ fn spawn_whole_disk_provider(provider: SharedUsbBlockProvider, ploop: ProviderLo
             }
         };
         svc.register_mount_path("/dev/block/usb0");
-        debug!("USB whole-disk service provider online for /dev/block/usb0.");
+        trace!("USB whole-disk service provider online for /dev/block/usb0");
         loop {
             let req = match svc.next_event(Some(Duration::from_millis(10))) {
                 Ok(ServiceProviderEvent::ProviderRequest(req)) => req,
                 Ok(ServiceProviderEvent::Message { kind, payload }) => {
-                    debug!(
+                    trace!(
                         "ums: control message on /dev/block/usb0 kind={:?} len={}",
                         kind,
                         payload.len()
@@ -1812,7 +1825,7 @@ fn spawn_whole_disk_provider(provider: SharedUsbBlockProvider, ploop: ProviderLo
                     continue;
                 }
                 Ok(ServiceProviderEvent::InboxClosed) => {
-                    debug!("USB block service loop closed for /dev/block/usb0.");
+                    trace!("USB block service loop closed for /dev/block/usb0");
                     svc.shutdown_sequence();
                     return;
                 }
@@ -1829,8 +1842,8 @@ fn spawn_whole_disk_provider(provider: SharedUsbBlockProvider, ploop: ProviderLo
             let _ = svc.send_response(&req, resp);
         }
     }) {
-        Ok(tid) => debug!("USB whole-disk service provider spawned with tid={}.", tid),
-        Err(e) => warn!("USB whole-disk service provider failed to spawn: {:?}.", e),
+        Ok(tid) => trace!("USB whole-disk service provider spawned with tid={}", tid),
+        Err(e) => warn!("USB whole-disk service provider failed to spawn: {:?}", e),
     }
 }
 
@@ -1846,7 +1859,9 @@ fn spawn_partition_provider(
     match stem::thread::spawn_task_detached(move || {
         run_partition_provider(provider, ploop, path, start_lba, lba_count, ino);
     }) {
-        Ok(tid) => debug!("USB partition service provider spawned for {} with tid={}.", log_path, tid),
+        Ok(tid) => {
+            trace!("USB partition service provider spawned for {} with tid={}", log_path, tid)
+        }
         Err(e) => {
             warn!("USB partition service provider failed to spawn for {}: {:?}.", log_path, e)
         }
@@ -1869,17 +1884,22 @@ fn run_partition_provider(
         }
     };
     svc.register_mount_path(&path);
-    debug!("USB partition service provider online for {}.", path);
+    trace!("USB partition service provider online for {}", path);
     loop {
         let req = match svc.next_event(Some(Duration::from_millis(10))) {
             Ok(ServiceProviderEvent::ProviderRequest(req)) => req,
             Ok(ServiceProviderEvent::Message { kind, payload }) => {
-                debug!("ums: control message on {} kind={:?} len={}", path, kind, payload.len());
+                trace!(
+                    "USB partition control message on {} kind={:?} len={}",
+                    path,
+                    kind,
+                    payload.len()
+                );
                 continue;
             }
             Ok(ServiceProviderEvent::Ready { .. }) | Ok(ServiceProviderEvent::Timeout) => continue,
             Ok(ServiceProviderEvent::InboxClosed) => {
-                debug!("USB partition service loop closed for {}.", path);
+                trace!("USB partition service loop closed for {}", path);
                 svc.shutdown_sequence();
                 return;
             }
@@ -1923,7 +1943,7 @@ fn scan_mbr_partitions_from_vfs(
         warn!("USB partition scan read only {} bytes from {}.", n, path);
         return Vec::new();
     }
-    debug!("USB partition scan read {} LBA 0.", path);
+    trace!("USB partition scan read {} LBA 0", path);
     parse_mbr_partitions(&mbr_buf, disk_sectors)
 }
 
@@ -1936,38 +1956,38 @@ fn serve_usb_block(controller: XhciController, storage: UsbMassStorage) -> ! {
     let (v_w, v_r) = match port_create(65536) {
         Ok(p) => p,
         Err(e) => {
-            error!("ums: failed to create provider port: {:?}", e);
+            error!("Failed to create USB provider port: {:?}", e);
             loop {
                 stem::time::sleep_ms(60_000);
             }
         }
     };
     if let Err(e) = vfs_mount(v_w, "/dev/block/usb0") {
-        error!("ums: failed to mount /dev/block/usb0: {:?}", e);
+        error!("Failed to mount /dev/block/usb0: {:?}", e);
         loop {
             stem::time::sleep_ms(60_000);
         }
     }
-    debug!("USB block device mounted read-only at /dev/block/usb0.");
+    trace!("USB block device mounted read-only at /dev/block/usb0");
 
     // Create standard /dev/disk aliases so the block stack can find the device
     // through the same paths used for AHCI drives.
     if let Err(e) = vfs_symlink("/dev/block/usb0", "/dev/disk/usb0") {
         warn!("USB disk alias /dev/disk/usb0 could not be created: {:?}.", e);
     } else {
-        debug!("USB disk alias created at /dev/disk/usb0.");
+        trace!("USB disk alias created at /dev/disk/usb0");
     }
     if let Err(e) = vfs_symlink("/dev/block/usb0", "/dev/disk/by-bus/usb0") {
         warn!("USB disk bus alias /dev/disk/by-bus/usb0 could not be created: {:?}.", e);
     } else {
-        debug!("USB disk bus alias created at /dev/disk/by-bus/usb0.");
+        trace!("USB disk bus alias created at /dev/disk/by-bus/usb0");
     }
     if let Err(e) = vfs_symlink("/dev/block/usb0", "/dev/storage/usb0") {
         warn!("USB storage alias /dev/storage/usb0 could not be created: {:?}.", e);
     } else {
-        debug!("USB storage alias created at /dev/storage/usb0.");
+        trace!("USB storage alias created at /dev/storage/usb0");
     }
-    info!("USB storage is available at /dev/storage/usb0.");
+    info!("USB storage is available at /dev/storage/usb0");
 
     let mut provider = UsbBlockProvider { controller, storage };
     let sector_size = provider.storage.sector_size as usize;
@@ -1977,7 +1997,7 @@ fn serve_usb_block(controller: XhciController, storage: UsbMassStorage) -> ! {
     // subscribed the controller IRQ. Poll completions here so USB block reads
     // do not depend on IRQ delivery affinity.
     provider.controller.irq_enabled = false;
-    debug!("USB block provider is using xHCI completion polling.");
+    trace!("USB block provider is using xHCI completion polling");
 
     let provider = Arc::new(Mutex::new(provider));
     spawn_whole_disk_provider(provider.clone(), ProviderLoop::new(v_r));
@@ -2033,7 +2053,7 @@ fn serve_usb_block(controller: XhciController, storage: UsbMassStorage) -> ! {
             }
         }
     }
-    debug!(
+    trace!(
         "USB storage partition scan completed with {} mounted partition(s).",
         mounted_partition_count
     );
@@ -2049,31 +2069,31 @@ fn serve_usb_block(controller: XhciController, storage: UsbMassStorage) -> ! {
 
 #[stem::main]
 fn main(boot_fd: usize) -> ! {
-    info!("Starting USB controller.");
+    info!("Starting USB controller...");
     let device_path = resolve_device_path(boot_fd);
 
     let claim = match device_claim(&device_path) {
         Ok(claim) => claim,
         Err(e) => {
-            warn!("xhci: failed to claim device {}: {:?}", device_path, e);
+            warn!("Failed to claim device {}: {:?}", device_path, e);
             stem::syscall::exit(Status::NoMatch as i32);
         }
     };
-    debug!("xHCI device claimed at {}.", device_path);
+    debug!("xHCI device claimed at {}", device_path);
 
     let mmio = match device_map_mmio(claim, 0) {
         Ok(mmio) => mmio,
         Err(e) => {
-            error!("xhci: failed to map BAR0 for {}: {:?}", device_path, e);
+            error!("Failed to map BAR0 for {}: {:?}", device_path, e);
             stem::syscall::exit(Status::BindFailed as i32);
         }
     };
-    debug!("xHCI BAR0 mapped at 0x{:x}.", mmio);
+    trace!("xHCI BAR0 mapped at 0x{:x}", mmio);
 
     let mut controller = match XhciController::new(claim, mmio) {
         Ok(controller) => controller,
         Err(e) => {
-            error!("xhci: controller init failed: {}", e);
+            error!("xHCI controller init failed: {}", e);
             stem::syscall::exit(Status::BindFailed as i32);
         }
     };

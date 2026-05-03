@@ -645,27 +645,27 @@ pub fn init(modules: &'static [crate::BootModuleDesc]) {
     root_union.push(root_fs); // Layer 1: Writable RAM overlay
 
     mount::mount("/", Arc::new(root_union), abi::syscall::mount_flags::MREPL);
-    crate::kdebug!("vfs: mounted union filesystem at / (root)");
+    crate::ktrace!("Mounted union filesystem at /");
 
     // Device filesystem
     mount::mount("/dev", Arc::new(devfs::DevFs::new()), abi::syscall::mount_flags::MREPL);
-    crate::kdebug!("vfs: mounted devfs at /dev");
+    crate::ktrace!("Mounted devfs at /dev");
 
     // Process info filesystem
     mount::mount("/proc", Arc::new(procfs::ProcFs::new()), abi::syscall::mount_flags::MREPL);
-    crate::kdebug!("vfs: mounted procfs at /proc");
+    crate::ktrace!("Mounted procfs at /proc");
 
     // Kernel device metadata
     mount::mount("/sys", Arc::new(sysfs::SysFs::new()), abi::syscall::mount_flags::MREPL);
-    crate::kdebug!("vfs: mounted sysfs at /sys");
+    crate::ktrace!("Mounted sysfs at /sys");
 
     // Temporary filesystem — scratch space for userland.
     mount::mount("/tmp", Arc::new(ramfs::RamFs::new()), abi::syscall::mount_flags::MREPL);
-    crate::kdebug!("vfs: mounted tmpfs at /tmp");
+    crate::ktrace!("Mounted tmpfs at /tmp");
 
     // Transient runtime state
     mount::mount("/run", Arc::new(ramfs::RamFs::new()), abi::syscall::mount_flags::MREPL);
-    crate::kdebug!("vfs: mounted tmpfs at /run");
+    crate::ktrace!("Mounted tmpfs at /run");
 
     // Keep `/services` and `/drivers` unmounted so bootfs service/driver binaries remain visible.
     // The writable root layer can still create service-owned files underneath these directories.
@@ -673,7 +673,7 @@ pub fn init(modules: &'static [crate::BootModuleDesc]) {
     // Session namespace — filesystem-native GUI objects live here.
     mount::mount("/session", Arc::new(ramfs::RamFs::new()), abi::syscall::mount_flags::MREPL);
     crate::kdebug!(
-        "vfs: initialized mounts root=/ dev=/dev proc=/proc sys=/sys tmp=/tmp run=/run session=/session visible_dirs={}",
+        "VFS root mounted with dev, proc, sys, tmp, run, and session directories: visible_dirs={}",
         ROOTFS_VISIBLE_DIRS.len()
     );
 }

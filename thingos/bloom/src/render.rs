@@ -282,7 +282,7 @@ impl CompositorVisuals {
             if self.background.is_some() {
                 return;
             }
-            stem::info!("bloom: using facet-frame fallback background");
+            stem::info!("Using facet-frame fallback background");
             texture.as_slice_mut().fill(0xFF0B0A10);
         }
 
@@ -349,7 +349,7 @@ impl CompositorVisuals {
         if self.pistil.is_none() {
             self.pistil = load_pistil(false);
             if self.pistil.is_some() {
-                stem::info!("bloom: deferred pistil renderer became available");
+                stem::debug!("Deferred Pistil renderer became available");
                 improved = true;
             }
         }
@@ -369,7 +369,7 @@ impl CompositorVisuals {
                 match lib.default_font_ready {
                     Some(ready) if ready() != 0 => {
                         if !self.default_font_ready {
-                            stem::info!("bloom: deferred default font became available");
+                            stem::debug!("Deferred default font became available");
                             improved = true;
                         }
                         self.default_font_ready = true;
@@ -382,7 +382,7 @@ impl CompositorVisuals {
                 match lib.symbol_font_ready {
                     Some(ready) if ready() != 0 => {
                         if !self.symbol_font_ready {
-                            stem::info!("bloom: deferred symbol font became available");
+                            stem::debug!("Deferred symbol font became available");
                             improved = true;
                         }
                         self.symbol_font_ready = true;
@@ -398,7 +398,7 @@ impl CompositorVisuals {
                 let before = self.wallpaper_path.clone();
                 self.start_background_load(display, path);
                 if self.wallpaper_path.as_deref() == Some(path) && before.as_deref() != Some(path) {
-                    stem::info!("bloom: deferred wallpaper became available: {}", path);
+                    stem::debug!("Deferred wallpaper became available: {}", path);
                     improved = true;
                 }
             }
@@ -481,8 +481,8 @@ impl CompositorVisuals {
             hotspot_y: BUSY_CURSOR_HOTSPOT_Y,
             fallback: true,
         });
-        stem::info!(
-            "bloom: built-in busy spinner ready buffer={} size={}x{} hotspot={},{}",
+        stem::debug!(
+            "Built-in busy spinner ready: buffer={} size={}x{} hotspot={},{}",
             buffer_id,
             CURSOR_SIZE,
             CURSOR_SIZE,
@@ -578,8 +578,8 @@ impl CompositorVisuals {
             }
             self.cursor = Some(cursor);
         }
-        stem::info!(
-            "bloom: cursor ready buffer={} size={}x{} hotspot={},{}",
+        stem::debug!(
+            "Cursor ready: buffer={} size={}x{} hotspot={},{}",
             buffer_id,
             CURSOR_SIZE,
             CURSOR_SIZE,
@@ -613,10 +613,7 @@ impl CompositorVisuals {
             display.release_buffer(old.buffer_id);
         }
         self.cursor = Some(cursor);
-        stem::info!(
-            "bloom: busy spinner handoff complete; real cursor active buffer={}",
-            buffer_id
-        );
+        stem::debug!("Busy spinner handoff complete; real cursor active buffer={}", buffer_id);
         true
     }
 
@@ -787,7 +784,7 @@ impl CompositorVisuals {
                 fallback: false,
             },
         ));
-        stem::info!("bloom: cursor {:?} ready from {} buffer={}", kind, cursor_path, buffer_id);
+        stem::debug!("Cursor {:?} ready from {} with buffer={}", kind, cursor_path, buffer_id);
         Some(())
     }
 
@@ -878,12 +875,7 @@ impl CompositorVisuals {
         }
 
         self.pointer_overlay = Some(PointerOverlayBuffer { texture, buffer_id, width, height });
-        stem::info!(
-            "bloom: pointer debug overlay ready buffer={} size={}x{}",
-            buffer_id,
-            width,
-            height
-        );
+        stem::debug!("Pointer debug overlay ready: buffer={} size={}x{}", buffer_id, width, height);
         Some(())
     }
 }
@@ -936,12 +928,12 @@ fn load_pistil(log_failures: bool) -> Option<PistilLib> {
     } else {
         Some(unsafe { core::mem::transmute(symbol_font_ready_sym) })
     };
-    stem::info!("bloom: pistil background renderer loaded from {}", PISTIL_PATH);
+    stem::debug!("Pistil background renderer loaded from {}", PISTIL_PATH);
     if draw_text.is_some() {
-        stem::info!("bloom: pistil font text renderer loaded with default {}", DEFAULT_FONT_PATH);
+        stem::debug!("Pistil font text renderer loaded with default {}", DEFAULT_FONT_PATH);
     }
     if draw_symbol_text.is_some() {
-        stem::info!("bloom: pistil symbol renderer loaded with {}", SYMBOL_FONT_PATH);
+        stem::debug!("Pistil symbol renderer loaded with {}", SYMBOL_FONT_PATH);
     }
     Some(PistilLib {
         _handle: handle,
@@ -1200,8 +1192,8 @@ fn sync_overlay_set(
             continue;
         }
         if let Some(buffer) = make_overlay_buffer(display, name, entry.surface_id, width, height) {
-            stem::info!(
-                "bloom: flat window overlays ready surface={} size={}x{}",
+            stem::debug!(
+                "Flat window overlay ready: surface={} size={}x{}",
                 entry.surface_id,
                 width,
                 height

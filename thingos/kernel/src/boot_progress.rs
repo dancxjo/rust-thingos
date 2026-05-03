@@ -178,7 +178,7 @@ pub fn set_unifont_data(data: &'static [u8]) {
         // Font is now available; redraw the hint so it appears as soon as possible.
         state.draw_hint();
         // LOG TO SERIAL NOW that logger is initialized.
-        crate::kinfo!("boot_progress: hint=\"{}\"", HINT_TEXT);
+        crate::kinfo!("{}", HINT_TEXT);
     }
 }
 
@@ -193,7 +193,7 @@ pub fn push(phase: BootPhase, message: &str) {
     // ── Milestone text → serial / kernel log ────────────────────────────────
     // Safe to call even before logging::init() — the logger silently no-ops
     // when the global logger has not yet been installed.
-    crate::kinfo!("boot_progress: milestone=\"{}\"", message);
+    crate::kinfo!("{}", message);
 
     // ── Visual update (lock held) ────────────────────────────────────────────
     {

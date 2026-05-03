@@ -27,7 +27,7 @@ use stem::service_loop::{ServiceEvent, ServiceLoop};
 use stem::syscall::message::{KindId, msg_recv, msg_send};
 use stem::syscall::vfs::{vfs_close, vfs_open, vfs_read, vfs_watch_path, vfs_write};
 use stem::time::{Duration, monotonic_ns};
-use stem::{debug, error, warn};
+use stem::{debug, error, trace, warn};
 use sysfs::{SysDevice, scan_devices};
 
 /// Periodic fallback rescan interval (milliseconds) when no events arrive.
@@ -55,7 +55,7 @@ const SHUTDOWN_POLL_MS: u64 = 25;
 
 #[stem::main]
 fn main(_arg: usize) -> ! {
-    stem::info!("CAMBIUM: main started");
+    stem::debug!("Cambium main started");
     // ── Parse argv ──────────────────────────────────────────────────────────
     let args = get_args();
 
@@ -85,7 +85,7 @@ fn main(_arg: usize) -> ! {
 ///    matching device and monitor it — restarting on exit while the device is
 ///    still present.
 fn run_manual_mode(driver_path: &str, slot_filter: Option<&str>) -> ! {
-    debug!("CAMBIUM: manual mode, driver={}", driver_path);
+    debug!("Manual mode: driver={}", driver_path);
 
     // Resolve to an absolute path if needed.
     let abs_path: String = if driver_path.starts_with('/') {
@@ -100,13 +100,13 @@ fn run_manual_mode(driver_path: &str, slot_filter: Option<&str>) -> ! {
     let entry = match catalog.inspect_binary_path(&abs_path) {
         Some(e) => e.clone(),
         None => {
-            error!("CAMBIUM: '{}' does not export THING_DRIVER_V1 or could not be read", abs_path);
+            error!("'{}' does not export THING_DRIVER_V1 or could not be read", abs_path);
             stem::syscall::exit(1);
         }
     };
 
     debug!(
-        "CAMBIUM: driver '{}' name='{}' class={:?} vendor=0x{:04x} device=0x{:04x} class_code=0x{:06x} start='{}'",
+        "Driver '{}' inspected: name='{}' class={:?} vendor=0x{:04x} device=0x{:04x} class_code=0x{:06x} start='{}'",
         abs_path,
         entry.driver_name,
         entry.driver_class,
@@ -120,7 +120,7 @@ fn run_manual_mode(driver_path: &str, slot_filter: Option<&str>) -> ! {
     let devices = match scan_devices() {
         Ok(d) => d,
         Err(e) => {
-            error!("CAMBIUM: failed to scan /sys/devices: {:?}", e);
+            error!("Failed to scan /sys/devices: {:?}", e);
             stem::syscall::exit(1);
         }
     };
@@ -147,10 +147,7 @@ fn run_manual_mode(driver_path: &str, slot_filter: Option<&str>) -> ! {
         if let Some(slot) = slot_filter {
             // If an explicit slot was given, try to run the driver for it
             // regardless of the marker's match hints — the user said to do it.
-            debug!(
-                "CAMBIUM: no match by hints for slot '{}'; spawning anyway (explicit override)",
-                slot
-            );
+            debug!("No match by hints for slot '{}'; spawning anyway by explicit override", slot);
             // Create a synthetic device record from what we know.
             let fake_device = SysDevice {
                 slot: slot.to_string(),
@@ -168,7 +165,7 @@ fn run_manual_mode(driver_path: &str, slot_filter: Option<&str>) -> ! {
                 None,
             ));
         } else {
-            warn!("CAMBIUM: no matching devices found for driver '{}'", abs_path);
+            warn!("No matching devices found for driver '{}'", abs_path);
             stem::syscall::exit(0);
         }
     }
@@ -200,11 +197,13 @@ fn path_exists(path: &str) -> bool {
 // ── Daemon mode ──────────────────────────────────────────────────────────────
 
 fn run_daemon_mode() -> ! {
-    stem::info!("CAMBIUM: starting device discovery manager (daemon mode)");
+    stem::info!("Starting device discovery manager...");
 
     let fallback_bootfb = is_fallback_bootfb();
     if fallback_bootfb {
-        stem::info!("CAMBIUM: booted with fallback bootfb; skipping alternate display drivers");
+        stem::debug!(
+            "Fallback boot framebuffer is active; alternate display drivers will be skipped"
+        );
     }
 
     let mut drivers: BTreeMap<String, ManagedDriver> = BTreeMap::new();
@@ -216,7 +215,7 @@ fn run_daemon_mode() -> ! {
 
     match scan_devices() {
         Ok(devices) => reconcile_devices(&mut drivers, &catalog, devices, fallback_bootfb),
-        Err(err) => warn!("CAMBIUM: initial scan of /sys/devices failed: {:?}", err),
+        Err(err) => warn!("Initial scan of /sys/devices failed: {:?}", err),
     }
     register_observers_for_running(&mut drivers, &mut observed_pids);
 
@@ -228,7 +227,7 @@ fn run_daemon_mode() -> ! {
         Ok(s) => s,
         Err(err) => {
             warn!(
-                "CAMBIUM: failed to construct ServiceLoop ({:?}); running degraded monitor-only loop",
+                "Failed to construct ServiceLoop ({:?}); running degraded monitor-only loop",
                 err
             );
             run_degraded_monitor_loop(&mut drivers);
@@ -248,7 +247,7 @@ fn run_daemon_mode() -> ! {
 
         match svc.next_event(timeout) {
             Ok(ServiceEvent::Message { kind, payload, .. }) => {
-                stem::debug!("CAMBIUM: ServiceLoop wake — inbox message");
+                stem::trace!("ServiceLoop woke for inbox message");
                 if kind.0 == KIND_ID_THINGOS_SHUTDOWN_REQUEST {
                     handle_shutdown_request_and_exit(&mut drivers, payload);
                 } else {
@@ -258,12 +257,12 @@ fn run_daemon_mode() -> ! {
             }
             Ok(ServiceEvent::Ready { token, event }) => {
                 if event.is_error() || event.is_hangup() {
-                    warn!("CAMBIUM: ServiceLoop secondary source error/hangup (token={:?})", token);
+                    warn!("ServiceLoop secondary source error or hangup: token={:?}", token);
                     reconcile_due = true;
                 }
                 if let Some((dev_token, dev_fd)) = devices_watch_token {
                     if token == dev_token {
-                        stem::debug!("CAMBIUM: ServiceLoop wake — /sys/devices watch readable");
+                        stem::trace!("ServiceLoop woke for readable /sys/devices watch");
                         if event.is_readable() {
                             drain_watch_fd(dev_fd);
                         }
@@ -272,7 +271,7 @@ fn run_daemon_mode() -> ! {
                 }
                 if let Some((catalog_token, catalog_fd)) = drivers_watch_token {
                     if token == catalog_token {
-                        stem::info!("CAMBIUM: /drivers changed; rescanning driver catalog");
+                        stem::debug!("/drivers changed; rescanning driver catalog...");
                         if event.is_readable() {
                             drain_watch_fd(catalog_fd);
                         }
@@ -282,7 +281,7 @@ fn run_daemon_mode() -> ! {
                 }
                 if let Some((mounts_token, mounts_fd)) = mounts_watch_token {
                     if token == mounts_token {
-                        stem::info!("CAMBIUM: mount table changed; rescanning driver catalog");
+                        stem::debug!("Mount table changed; rescanning driver catalog...");
                         if event.is_readable() {
                             drain_watch_fd(mounts_fd);
                         }
@@ -292,15 +291,15 @@ fn run_daemon_mode() -> ! {
                 }
             }
             Ok(ServiceEvent::Timeout) => {
-                stem::debug!("CAMBIUM: ServiceLoop wake — reconcile tick");
+                stem::trace!("ServiceLoop woke for reconcile tick");
                 reconcile_due = true;
             }
             Ok(ServiceEvent::InboxClosed) => {
-                warn!("CAMBIUM: inbox closed; falling back to degraded monitor-only loop");
+                warn!("Inbox closed; falling back to degraded monitor-only loop");
                 run_degraded_monitor_loop(&mut drivers);
             }
             Err(err) => {
-                warn!("CAMBIUM: ServiceLoop next_event error: {:?}", err);
+                warn!("ServiceLoop next_event error: {:?}", err);
                 reconcile_due = true;
             }
         }
@@ -329,7 +328,7 @@ fn run_daemon_mode() -> ! {
                     reconcile_devices(&mut drivers, &catalog, devices, fallback_bootfb);
                     register_observers_for_running(&mut drivers, &mut observed_pids);
                 }
-                Err(err) => warn!("CAMBIUM: scan of /sys/devices failed: {:?}", err),
+                Err(err) => warn!("Scan of /sys/devices failed: {:?}", err),
             }
         }
     }
@@ -348,17 +347,17 @@ fn add_watch_path(
     match vfs_watch_path(path, watch_mask::ALL_EVENTS, flags) {
         Ok(fd) => match svc.add_vfs_watch(fd) {
             Ok(token) => {
-                stem::info!("CAMBIUM: watching {} for {} updates", path, purpose);
+                stem::debug!("Watching {} for {} updates", path, purpose);
                 Some((token, fd))
             }
             Err(err) => {
-                warn!("CAMBIUM: failed to register {} watch with ServiceLoop: {:?}", path, err);
+                warn!("Failed to register {} watch with ServiceLoop: {:?}", path, err);
                 let _ = vfs_close(fd);
                 None
             }
         },
         Err(err) => {
-            warn!("CAMBIUM: failed to watch {}: {:?}", path, err);
+            warn!("Failed to watch {}: {:?}", path, err);
             None
         }
     }
@@ -376,7 +375,7 @@ fn run_degraded_monitor_loop(drivers: &mut BTreeMap<String, ManagedDriver>) -> !
                 handle_shutdown_request_and_exit(drivers, &payload[..len]);
             }
             Ok(_) | Err(Errno::EAGAIN) => {}
-            Err(err) => warn!("CAMBIUM: degraded loop inbox receive failed: {:?}", err),
+            Err(err) => warn!("Degraded loop inbox receive failed: {:?}", err),
         }
         for managed in drivers.values_mut() {
             managed.monitor();
@@ -399,7 +398,7 @@ fn register_observers_for_running(
                     observed_pids.insert(pid, ());
                 }
                 Err(err) => {
-                    warn!("CAMBIUM: failed to register job observer for pid {}: {:?}", pid, err);
+                    warn!("Failed to register job observer for pid {}: {:?}", pid, err);
                 }
             }
         }
@@ -422,7 +421,7 @@ fn drain_watch_fd(fd: u32) {
             Ok(_) => {}
             Err(Errno::EAGAIN) => break,
             Err(err) => {
-                warn!("CAMBIUM: failed reading /sys/devices watch events: {:?}", err);
+                warn!("Failed reading /sys/devices watch events: {:?}", err);
                 break;
             }
         }
@@ -458,7 +457,7 @@ fn handle_shutdown_request_and_exit(
         Some(request) => request.requester_pid,
         None => {
             warn!(
-                "CAMBIUM: malformed shutdown request payload ({} bytes); replying to parent",
+                "Malformed shutdown request payload ({} bytes); replying to parent",
                 payload.len()
             );
             stem::syscall::getppid()
@@ -466,7 +465,7 @@ fn handle_shutdown_request_and_exit(
     };
 
     stem::info!(
-        "CAMBIUM: shutdown requested by PID {}; quiescing {} managed drivers",
+        "Shutdown requested by PID {}; quiescing {} managed driver(s)",
         requester_pid,
         drivers.len()
     );
@@ -476,7 +475,7 @@ fn handle_shutdown_request_and_exit(
     }
     let mut remaining = wait_for_driver_shutdown(drivers, SHUTDOWN_TERM_GRACE_MS);
     if remaining > 0 {
-        warn!("CAMBIUM: {} drivers still running after SIGTERM grace; forcing shutdown", remaining);
+        warn!("{} drivers still running after SIGTERM grace; forcing shutdown", remaining);
         for managed in drivers.values() {
             managed.force_shutdown();
         }
@@ -486,14 +485,14 @@ fn handle_shutdown_request_and_exit(
     let status = if remaining == 0 { 0 } else { 1 };
     let ready = ShutdownReadyV1::new(stem::syscall::getpid(), status, remaining);
     match msg_send(requester_pid, KindId(KIND_ID_THINGOS_SHUTDOWN_READY), ready.as_bytes()) {
-        Ok(()) => stem::info!(
-            "CAMBIUM: sent shutdown-ready to PID {} status={} active_children={}",
+        Ok(()) => stem::debug!(
+            "Sent shutdown-ready to PID {} status={} active_children={}",
             requester_pid,
             status,
             remaining
         ),
         Err(err) => {
-            warn!("CAMBIUM: failed to send shutdown-ready to PID {}: {:?}", requester_pid, err)
+            warn!("Failed to send shutdown-ready to PID {}: {:?}", requester_pid, err)
         }
     }
 
@@ -554,8 +553,8 @@ fn reconcile_devices(
                 continue;
             }
 
-            stem::debug!(
-                "CAMBIUM: discovered device slot={} kind={} vendor=0x{:04x} device=0x{:04x} class=0x{:06x} present={}",
+            stem::trace!(
+                "Discovered device: slot={} kind={} vendor=0x{:04x} device=0x{:04x} class=0x{:06x} present={}",
                 device.slot,
                 device.kind,
                 device.vendor_id,
@@ -566,7 +565,7 @@ fn reconcile_devices(
             let is_xhci_pci = device.slot.starts_with("pci-") && device.class_code == 0x0c0330;
             if is_xhci_pci {
                 stem::debug!(
-                    "Discovered xHCI PCI device: slot={} vendor=0x{:04x} device=0x{:04x} class=0x{:06x} present={}.",
+                    "Discovered xHCI PCI device: slot={} vendor=0x{:04x} device=0x{:04x} class=0x{:06x} present={}",
                     device.slot,
                     device.vendor_id,
                     device.device_id,
@@ -598,15 +597,15 @@ fn reconcile_devices(
                 )
             }) {
                 if is_xhci_pci {
-                    stem::info!(
-                        "Starting xHCI driver '{}' for PCI device {}.",
+                    stem::debug!(
+                        "Starting xHCI driver '{}' for PCI device {}...",
                         entry.path,
                         device.slot
                     );
                 }
                 if should_skip_for_display_input_isolation(entry.driver_class, &entry.path) {
-                    stem::debug!(
-                        "CAMBIUM: isolation mode skipping driver '{}' class={:?} for {}",
+                    stem::trace!(
+                        "Isolation mode skipped driver '{}' class={:?} for {}",
                         entry.path,
                         entry.driver_class,
                         device.slot
@@ -617,8 +616,8 @@ fn reconcile_devices(
                     && entry.driver_class == DriverClass::Display
                     && !entry.path.ends_with("/display_bootfb")
                 {
-                    stem::info!(
-                        "CAMBIUM: fallback bootfb mode skipping display driver '{}' for {}",
+                    stem::debug!(
+                        "Fallback boot framebuffer mode skipped display driver '{}' for {}",
                         entry.path,
                         device.slot
                     );
@@ -627,8 +626,8 @@ fn reconcile_devices(
                 if entry.driver_class == DriverClass::Audio
                     && path_exists(SPROUT_EARLY_AUDIO_MARKER)
                 {
-                    stem::debug!(
-                        "CAMBIUM: skipping audio driver '{}' for {}; Sprout owns early audio",
+                    stem::trace!(
+                        "Skipped audio driver '{}' for {}; Sprout owns early audio",
                         entry.path,
                         device.slot
                     );
@@ -652,7 +651,7 @@ fn reconcile_devices(
             let Some(binding) = match_binding(device) else {
                 if is_xhci_pci {
                     stem::warn!(
-                        "CAMBIUM: no driver matched xHCI PCI device {} vendor=0x{:04x} device=0x{:04x} class=0x{:06x}",
+                        "No driver matched xHCI PCI device {} vendor=0x{:04x} device=0x{:04x} class=0x{:06x}",
                         device.slot,
                         device.vendor_id,
                         device.device_id,
@@ -674,7 +673,7 @@ fn reconcile_devices(
 
     for slot in stale_slots {
         if let Some(mut managed) = drivers.remove(&slot) {
-            warn!("CAMBIUM: device {} disappeared", slot);
+            warn!("Device {} disappeared", slot);
             managed.mark_removed();
         }
     }

@@ -103,8 +103,8 @@ pub fn sys_device_claim(path_ptr: usize, path_len: usize) -> SysResult<usize> {
 
     match res {
         Ok(claim_handle) => {
-            crate::kdebug!(
-                "DEVICE: task {} claimed device '{}' (handle {})",
+            crate::ktrace!(
+                "Task {} claimed device '{}' with handle {}",
                 task_id,
                 slot,
                 claim_handle
@@ -112,11 +112,11 @@ pub fn sys_device_claim(path_ptr: usize, path_len: usize) -> SysResult<usize> {
             Ok(claim_handle)
         }
         Err(Errno::EBUSY) => {
-            crate::kwarn!("DEVICE: claim failed - device '{}' is already claimed", slot);
+            crate::kwarn!("Device claim failed: '{}' is already claimed", slot);
             Err(Errno::EBUSY)
         }
         Err(e) => {
-            crate::kwarn!("DEVICE: device '{}' not found in registry", slot);
+            crate::kwarn!("Device '{}' was not found in the registry", slot);
             Err(e)
         }
     }
@@ -144,7 +144,7 @@ pub fn sys_device_map_mmio(claim_handle: usize, bar_index: usize) -> SysResult<u
         Ok(info) => info,
         Err(Errno::EPERM) => {
             crate::kwarn!(
-                "DEVICE: map_mmio failed - claim {} not owned by task {}",
+                "MMIO mapping failed: claim {} is not owned by task {}",
                 claim_handle,
                 task_id
             );
@@ -152,7 +152,7 @@ pub fn sys_device_map_mmio(claim_handle: usize, bar_index: usize) -> SysResult<u
         }
         Err(e) => {
             crate::kwarn!(
-                "DEVICE: map_mmio failed - BAR{} info not found for claim {}",
+                "MMIO mapping failed: BAR{} info was not found for claim {}",
                 bar_index,
                 claim_handle
             );
@@ -161,25 +161,22 @@ pub fn sys_device_map_mmio(claim_handle: usize, bar_index: usize) -> SysResult<u
     };
 
     if phys_addr == 0 || size == 0 {
-        crate::kwarn!("DEVICE: map_mmio failed - BAR{} phys/size is 0", bar_index);
+        crate::kwarn!("MMIO mapping failed: BAR{} phys/size is 0", bar_index);
         return Err(Errno::ENODEV);
     }
 
     // Safety check: don't allow mapping more than 1GB in one go to prevent DOS/hangs
     if size > 1024 * 1024 * 1024 {
-        crate::kdebug!(
-            "DEVICE: map_mmio failed - requested size 0x{:x} exceeds 1GB safety limit",
-            size
-        );
+        crate::ktrace!("MMIO mapping failed: requested size 0x{:x} exceeds 1GB safety limit", size);
         return Err(Errno::EINVAL);
     }
 
-    crate::kdebug!(
-        "DEVICE: mapping BAR{} (phys=0x{:x}, size=0x{:x}) for task {}",
+    crate::ktrace!(
+        "Mapping BAR{} for task {}: phys=0x{:x} size=0x{:x}",
         bar_index,
+        task_id,
         phys_addr,
-        size,
-        task_id
+        size
     );
 
     let page_count = (size + 4095) / 4096;
@@ -210,8 +207,8 @@ pub fn sys_device_map_mmio(claim_handle: usize, bar_index: usize) -> SysResult<u
         reg.set_bar_mapping(claim_handle, bar_index, user_va);
     }
 
-    crate::kdebug!(
-        "DEVICE: Mapped BAR{} phys=0x{:x} size=0x{:x} -> virt=0x{:x}",
+    crate::ktrace!(
+        "Mapped BAR{}: phys=0x{:x} size=0x{:x} -> virt=0x{:x}",
         bar_index,
         phys_addr,
         size,
@@ -250,8 +247,8 @@ pub fn sys_device_irq_subscribe(arg0: usize, arg1: usize, mode: usize) -> SysRes
                 reg.get_irq_vector(claim_handle, irq_index).ok_or(Errno::ENODEV)?
             };
             crate::irq::subscribe(vector).map_err(|_| Errno::EBUSY)?;
-            crate::kdebug!(
-                "DEVICE: task subscribed to device irq {} (mode={:?}, vector=0x{:x})",
+            crate::ktrace!(
+                "Task subscribed to device irq {}: mode={:?} vector=0x{:x}",
                 irq_index,
                 irq_mode,
                 vector
@@ -265,7 +262,7 @@ pub fn sys_device_irq_subscribe(arg0: usize, arg1: usize, mode: usize) -> SysRes
                 return Err(Errno::EINVAL);
             }
             crate::irq::subscribe(vector as u8).map_err(|_| Errno::EBUSY)?;
-            crate::kdebug!("DEVICE: task subscribed to vector 0x{:x}", vector);
+            crate::ktrace!("Task subscribed to vector 0x{:x}", vector);
             Ok(0)
         }
     }
@@ -375,7 +372,7 @@ pub fn sys_device_alloc_dma(claim_handle: usize, page_count: usize) -> SysResult
     let phys_base = match crate::memory::alloc_contiguous_frames(page_count) {
         Some(phys) => phys,
         None => {
-            crate::kinfo!("DEVICE: DMA alloc failed ({} pages) - no contiguous memory", page_count);
+            crate::kinfo!("DMA allocation failed for {} pages: no contiguous memory", page_count);
             return Err(Errno::ENOMEM);
         }
     };
@@ -409,12 +406,12 @@ pub fn sys_device_alloc_dma(claim_handle: usize, page_count: usize) -> SysResult
     };
 
     if let Err(e) = slot_res {
-        crate::kerror!("DEVICE: DMA alloc failed (no slots) for task {}", task_id);
+        crate::kerror!("DMA allocation failed: no slots for task {}", task_id);
         return Err(e);
     }
 
-    crate::kdebug!(
-        "DEVICE: DMA alloc {} pages phys=0x{:x} -> user_va=0x{:x}",
+    crate::ktrace!(
+        "DMA allocated {} pages: phys=0x{:x} -> user_va=0x{:x}",
         page_count,
         phys_base,
         user_va

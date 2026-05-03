@@ -109,8 +109,8 @@ impl VirtioGpu {
         let notify_multiplier =
             read_sys_u32(&alloc::format!("{}/virtio/notify_multiplier", sysfs_path)).unwrap_or(4);
 
-        stem::info!(
-            "virtio_gpu: caps from sysfs - common BAR{} off=0x{:x}, notify BAR{} off=0x{:x} mult={}",
+        stem::debug!(
+            "VirtIO GPU capabilities: common BAR{} off=0x{:x}, notify BAR{} off=0x{:x} mult={}",
             common_bar,
             common_offset,
             notify_bar,
@@ -194,8 +194,8 @@ impl VirtioGpu {
 
         // Check for virgl 3D support
         self.virgl_supported = (device_features & (1 << virtio::VIRTIO_GPU_F_VIRGL)) != 0;
-        stem::info!(
-            "virtio_gpu: device features=0x{:08x} virgl={}",
+        stem::debug!(
+            "VirtIO GPU features=0x{:08x} virgl={}",
             device_features,
             self.virgl_supported
         );
@@ -958,7 +958,7 @@ impl VirtioGpu {
         self.write_common_u16(virtio::VIRTIO_COMMON_QUEUE_ENABLE, 1);
 
         self.cursorq = Some(vq);
-        stem::info!("virtio_gpu: cursor queue (queue 1) configured");
+        stem::debug!("VirtIO GPU cursor queue configured");
         Ok(())
     }
 
@@ -1226,10 +1226,9 @@ impl VirtioGpu {
     /// [`attach_backing_3d`].
     pub fn alloc_dma(&mut self, pages: usize) -> Result<(u64, u64), &'static str> {
         use stem::syscall::{device_alloc_dma, device_dma_phys};
-        let virt = device_alloc_dma(self.claim_handle, pages)
-            .map_err(|_| "device_alloc_dma failed")?;
-        let phys =
-            device_dma_phys(virt).map_err(|_| "device_dma_phys failed")?;
+        let virt =
+            device_alloc_dma(self.claim_handle, pages).map_err(|_| "device_alloc_dma failed")?;
+        let phys = device_dma_phys(virt).map_err(|_| "device_dma_phys failed")?;
         Ok((virt, phys))
     }
 }

@@ -32,8 +32,8 @@ pub fn anchor_system_clock(unix_secs: u64, mono_ns: u64) {
     let offset = unix_ns.saturating_sub(mono_ns);
     set_system_time_offset(offset);
     IS_ANCHORED.store(true, Ordering::Relaxed);
-    crate::kinfo!(
-        "System clock anchored: unix_secs={}, mono_ns={}, offset={}ns",
+    crate::kdebug!(
+        "System clock anchored: unix_secs={} mono_ns={} offset={}ns",
         unix_secs,
         mono_ns,
         offset
@@ -104,7 +104,7 @@ pub fn maybe_log_system_clock_tick(mono_ns: u64) {
     let nanos = realtime_ns % NANOS_PER_SEC;
     let utc = unix_to_utc_datetime(secs);
     crate::kdebug!(
-        "System clock sample: utc={:04}-{:02}-{:02} {:02}:{:02}:{:02}.{:09} unix_secs={}.{:09}.",
+        "System clock sample: utc={:04}-{:02}-{:02} {:02}:{:02}:{:02}.{:09} unix_secs={}.{:09}",
         utc.year,
         utc.month,
         utc.day,

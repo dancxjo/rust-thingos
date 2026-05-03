@@ -1029,8 +1029,8 @@ fn log_scheduler_entry_step<R: BootRuntime>(
     let total_elapsed = now.wrapping_sub(scheduler_entry_window_start);
     let step_elapsed_us = boot_timing_us_from_hz(step_elapsed, boot_timing_hz);
     let total_elapsed_us = boot_timing_us_from_hz(total_elapsed, boot_timing_hz);
-    crate::kdebug!(
-        "[kernel:start] scheduler-entry step='{}' elapsed_ticks={} elapsed_us={} total_ticks={} total_us={}",
+    crate::ktrace!(
+        "Boot scheduler-entry timing: step='{}' elapsed_ticks={} elapsed_us={} total_ticks={} total_us={}",
         step,
         step_elapsed,
         step_elapsed_us,
@@ -1063,7 +1063,7 @@ pub fn start<R: BootRuntime>(runtime: &'static R) -> ! {
             crate::boot_progress::init(fb);
             crate::boot_progress::push(
                 crate::boot_progress::BootPhase::Framebuffer,
-                "Framebuffer Initialized",
+                "Framebuffer initialized",
             );
         }
     }
@@ -1093,7 +1093,7 @@ pub fn start<R: BootRuntime>(runtime: &'static R) -> ! {
     boot_trace(runtime, b"[kernel:start] memory::init\r\n");
     memory::init(runtime);
     boot_trace(runtime, b"[kernel:start] memory::init ok\r\n");
-    crate::boot_progress::push(crate::boot_progress::BootPhase::Memory, "Memory Map OK");
+    crate::boot_progress::push(crate::boot_progress::BootPhase::Memory, "Memory map ready");
     boot_trace(runtime, b"[kernel:start] after memory::init marker\r\n");
     boot_trace(runtime, b"[kernel:start] kinfo(global_alloc) begin\r\n");
     kinfo!("Initializing global allocator...");
@@ -1101,7 +1101,10 @@ pub fn start<R: BootRuntime>(runtime: &'static R) -> ! {
     boot_trace(runtime, b"[kernel:start] global_alloc::init\r\n");
     memory::global_alloc::init(runtime);
     boot_trace(runtime, b"[kernel:start] global_alloc::init ok\r\n");
-    crate::boot_progress::push(crate::boot_progress::BootPhase::Allocator, "Global Allocator");
+    crate::boot_progress::push(
+        crate::boot_progress::BootPhase::Allocator,
+        "Global allocator ready",
+    );
     boot_trace(runtime, b"[kernel:start] after global_alloc marker\r\n");
     let boot_timing_hz = runtime.mono_freq_hz();
     let boot_timing_us = |ticks: u64| -> u64 { boot_timing_us_from_hz(ticks, boot_timing_hz) };
@@ -1142,8 +1145,8 @@ pub fn start<R: BootRuntime>(runtime: &'static R) -> ! {
         let set_boot_fb_start = runtime.mono_ticks();
         crate::vfs::devfs::set_boot_fb_physical(fb, fb_resource_id, phys_addr);
         let set_boot_fb_elapsed = runtime.mono_ticks().wrapping_sub(set_boot_fb_start);
-        crate::kdebug!(
-            "[kernel:start] framebuffer/devfs set_boot_fb elapsed_ticks={} elapsed_us={}",
+        crate::ktrace!(
+            "Boot framebuffer devfs set_boot_fb timing: elapsed_ticks={} elapsed_us={}",
             set_boot_fb_elapsed,
             boot_timing_us(set_boot_fb_elapsed)
         );
@@ -1156,8 +1159,8 @@ pub fn start<R: BootRuntime>(runtime: &'static R) -> ! {
             phys_addr,
         ));
         let fb0_node_new_elapsed = runtime.mono_ticks().wrapping_sub(fb0_node_new_start);
-        crate::kdebug!(
-            "[kernel:start] framebuffer/devfs FbNode::new elapsed_ticks={} elapsed_us={}",
+        crate::ktrace!(
+            "Boot framebuffer devfs FbNode::new timing: elapsed_ticks={} elapsed_us={}",
             fb0_node_new_elapsed,
             boot_timing_us(fb0_node_new_elapsed)
         );
@@ -1166,8 +1169,8 @@ pub fn start<R: BootRuntime>(runtime: &'static R) -> ! {
         let register_fb0_start = runtime.mono_ticks();
         crate::vfs::devfs::register("fb0", fb0_node);
         let register_fb0_elapsed = runtime.mono_ticks().wrapping_sub(register_fb0_start);
-        crate::kdebug!(
-            "[kernel:start] framebuffer/devfs register fb0 elapsed_ticks={} elapsed_us={}",
+        crate::ktrace!(
+            "Boot framebuffer devfs register fb0 timing: elapsed_ticks={} elapsed_us={}",
             register_fb0_elapsed,
             boot_timing_us(register_fb0_elapsed)
         );
@@ -1176,14 +1179,14 @@ pub fn start<R: BootRuntime>(runtime: &'static R) -> ! {
         boot_trace(runtime, b"[kernel:start] framebuffer/devfs no fb\r\n");
     }
     boot_trace(runtime, b"[kernel:start] framebuffer/devfs ok\r\n");
-    crate::boot_progress::push(crate::boot_progress::BootPhase::Devices, "Display Registry");
+    crate::boot_progress::push(crate::boot_progress::BootPhase::Devices, "Display registry ready");
 
     boot_trace(runtime, b"[kernel:start] kinfo(simd) begin\r\n");
     kinfo!("Initializing SIMD...");
     boot_trace(runtime, b"[kernel:start] kinfo(simd) ok\r\n");
     runtime.simd_init_cpu();
     boot_trace(runtime, b"[kernel:start] simd init ok\r\n");
-    crate::boot_progress::push(crate::boot_progress::BootPhase::Compute, "SIMD Ready");
+    crate::boot_progress::push(crate::boot_progress::BootPhase::Compute, "SIMD ready");
 
     boot_trace(runtime, b"[kernel:start] kdebug(entropy) begin\r\n");
     kdebug!("Seeding entropy pool...");
@@ -1191,20 +1194,20 @@ pub fn start<R: BootRuntime>(runtime: &'static R) -> ! {
     let entropy_seed_start = runtime.mono_ticks();
     crate::entropy::seed_from_hardware();
     let entropy_seed_elapsed = runtime.mono_ticks().wrapping_sub(entropy_seed_start);
-    crate::kdebug!(
-        "[kernel:start] entropy::seed_from_hardware elapsed_ticks={} elapsed_us={}",
+    crate::ktrace!(
+        "Entropy hardware seed timing: elapsed_ticks={} elapsed_us={}",
         entropy_seed_elapsed,
         boot_timing_us(entropy_seed_elapsed)
     );
     boot_trace(runtime, b"[kernel:start] entropy seeded\r\n");
-    crate::boot_progress::push(crate::boot_progress::BootPhase::Compute, "SIMD Ready");
+    crate::boot_progress::push(crate::boot_progress::BootPhase::Compute, "Entropy ready");
 
     boot_trace(runtime, b"[kernel:start] kinfo(task) begin\r\n");
     kinfo!("Initializing tasking...");
     boot_trace(runtime, b"[kernel:start] kinfo(task) ok\r\n");
     crate::task::init::<R>();
     boot_trace(runtime, b"[kernel:start] task init ok\r\n");
-    crate::boot_progress::push(crate::boot_progress::BootPhase::Cpu, "Tasking Initialized");
+    crate::boot_progress::push(crate::boot_progress::BootPhase::Cpu, "Tasking initialized");
     let scheduler_entry_window_start = runtime.mono_ticks();
 
     boot_trace(runtime, b"[kernel:start] kdebug(vfs) begin\r\n");
@@ -1230,7 +1233,7 @@ pub fn start<R: BootRuntime>(runtime: &'static R) -> ! {
         vfs_init_start,
     );
     boot_trace(runtime, b"[kernel:start] vfs init ok\r\n");
-    crate::boot_progress::push(crate::boot_progress::BootPhase::Vfs, "VFS Root Ready");
+    crate::boot_progress::push(crate::boot_progress::BootPhase::Vfs, "VFS root ready");
 
     boot_trace(runtime, b"[kernel:start] kdebug(pci) begin\r\n");
     kdebug!("Scanning PCI bus...");
@@ -1245,7 +1248,7 @@ pub fn start<R: BootRuntime>(runtime: &'static R) -> ! {
         pci_scan_start,
     );
     boot_trace(runtime, b"[kernel:start] pci scan ok\r\n");
-    crate::boot_progress::push(crate::boot_progress::BootPhase::Pci, "PCI Bus Scanned");
+    crate::boot_progress::push(crate::boot_progress::BootPhase::Pci, "PCI bus scanned");
 
     // Register legacy ISA devices
     boot_trace(runtime, b"[kernel:start] legacy device register begin\r\n");
@@ -1289,7 +1292,10 @@ pub fn start<R: BootRuntime>(runtime: &'static R) -> ! {
         register_legacy_devices_start,
     );
     boot_trace(runtime, b"[kernel:start] legacy device register ok\r\n");
-    crate::boot_progress::push(crate::boot_progress::BootPhase::Devices, "Legacy Devices");
+    crate::boot_progress::push(
+        crate::boot_progress::BootPhase::Devices,
+        "Legacy devices registered",
+    );
 
     // CRITICAL: Calibrate the BSP preemption timer BEFORE starting secondary CPUs.
     // Secondary CPUs read timer_vector/timer_init_cnt in init_secondary_cpu().
@@ -1309,7 +1315,7 @@ pub fn start<R: BootRuntime>(runtime: &'static R) -> ! {
         setup_preemption_timer_start,
     );
     boot_trace(runtime, b"[kernel:start] preemption timer ok\r\n");
-    crate::boot_progress::push(crate::boot_progress::BootPhase::Cpu, "BSP Timer OK");
+    crate::boot_progress::push(crate::boot_progress::BootPhase::Cpu, "BSP timer ready");
 
     // Bring up all secondary CPUs during early boot.
     boot_trace(runtime, b"[kernel:start] cpu_total_count begin\r\n");
@@ -1318,18 +1324,14 @@ pub fn start<R: BootRuntime>(runtime: &'static R) -> ! {
     let smp_bringup_start = runtime.mono_ticks();
     if cpu_total > 1 {
         boot_trace(runtime, b"[kernel:start] smp start_secondary begin\r\n");
-        crate::kdebug!(
-            "Kernel: Detected {} CPUs. Starting {} secondaries...",
-            cpu_total,
-            cpu_total - 1
-        );
+        crate::kdebug!("Detected {} CPUs; starting {} secondaries...", cpu_total, cpu_total - 1);
         match runtime.start_secondary_cpus(kernel_secondary_entry::<R>) {
-            Ok(()) => crate::kdebug!("Kernel: Secondary CPU bring-up complete."),
-            Err(err) => crate::kerror!("Kernel: Secondary CPU bring-up failed: {:?}", err),
+            Ok(()) => crate::kdebug!("Secondary CPU bring-up complete"),
+            Err(err) => crate::kerror!("Secondary CPU bring-up failed: {:?}", err),
         }
         boot_trace(runtime, b"[kernel:start] smp start_secondary ok\r\n");
     } else {
-        crate::kdebug!("Kernel: Detected {} CPU.", cpu_total);
+        crate::kdebug!("Detected {} CPU", cpu_total);
     }
     log_scheduler_entry_step(
         runtime,
@@ -1339,7 +1341,7 @@ pub fn start<R: BootRuntime>(runtime: &'static R) -> ! {
         smp_bringup_start,
     );
     boot_trace(runtime, b"[kernel:start] smp bring-up stage done\r\n");
-    crate::boot_progress::push(crate::boot_progress::BootPhase::Cpu, "SMP Bring-up");
+    crate::boot_progress::push(crate::boot_progress::BootPhase::Cpu, "SMP ready");
 
     // Store global boot info for syscalls
     crate::boot_info::set(crate::boot_info::BootSyscallInfo {
@@ -1351,12 +1353,12 @@ pub fn start<R: BootRuntime>(runtime: &'static R) -> ! {
         dtb_ptr: runtime.dtb_ptr(),
     });
     boot_trace(runtime, b"[kernel:start] boot_info set\r\n");
-    crate::boot_progress::push(crate::boot_progress::BootPhase::Modules, "Boot Info OK");
+    crate::boot_progress::push(crate::boot_progress::BootPhase::Modules, "Boot info ready");
 
     boot_trace(runtime, b"[kernel:start] modules enumerate begin\r\n");
     let modules = runtime.modules();
     boot_trace(runtime, b"[kernel:start] runtime.modules enumerate ok\r\n");
-    kdebug!("Kernel: Enumerating {} boot modules...", modules.len());
+    kdebug!("Enumerating {} boot modules...", modules.len());
     // Only iterate and format individual module entries when trace logging is
     // actually enabled; skipping this loop at debug level avoids ~108 function
     // calls and atomic reads that add measurable overhead during boot.
@@ -1372,7 +1374,7 @@ pub fn start<R: BootRuntime>(runtime: &'static R) -> ! {
         }
     }
     boot_trace(runtime, b"[kernel:start] modules enumerate loop ok\r\n");
-    crate::boot_progress::push(crate::boot_progress::BootPhase::Modules, "Modules Scanned");
+    crate::boot_progress::push(crate::boot_progress::BootPhase::Modules, "Modules scanned");
 
     // Find unifont.hex and pass it to boot_progress
     if let Some(unifont_mod) = modules.iter().find(|m| m.name.contains("unifont.hex")) {
@@ -1389,7 +1391,7 @@ pub fn start<R: BootRuntime>(runtime: &'static R) -> ! {
     if let Some(mod_desc) = init_module {
         boot_trace(runtime, b"[kernel:start] init module found\r\n");
         kdebug!(
-            "Found init module: {} (cmdline: '{}'), loading...",
+            "Found init module {} with cmdline '{}'; loading...",
             mod_desc.name,
             mod_desc.cmdline
         );
@@ -1505,7 +1507,7 @@ pub fn start<R: BootRuntime>(runtime: &'static R) -> ! {
             activate_aspace_start,
         );
 
-        kdebug!("Spawning sprout with registry at 0x600000...");
+        kdebug!("Spawning Sprout with registry at 0x600000...");
         let spawn_init_start = runtime.mono_ticks();
         unsafe {
             kdebug!("Spawning init process...");
@@ -1604,11 +1606,11 @@ pub fn start<R: BootRuntime>(runtime: &'static R) -> ! {
         end_bringup_start,
     );
     boot_trace(runtime, b"[kernel:start] end_bringup\r\n");
-    crate::boot_progress::push(crate::boot_progress::BootPhase::Scheduler, "Entering Scheduler");
+    crate::boot_progress::push(crate::boot_progress::BootPhase::Scheduler, "Entering scheduler");
     crate::boot_progress::finish();
     let scheduler_entry_total = runtime.mono_ticks().wrapping_sub(scheduler_entry_window_start);
-    crate::kinfo!(
-        "[kernel:start] scheduler-entry total elapsed_ticks={} elapsed_us={}",
+    crate::ktrace!(
+        "Boot scheduler-entry total timing: elapsed_ticks={} elapsed_us={}",
         scheduler_entry_total,
         boot_timing_us(scheduler_entry_total)
     );
@@ -1645,7 +1647,7 @@ pub fn start<R: BootRuntime>(runtime: &'static R) -> ! {
                 } else {
                     0
                 };
-                kdebug!("deferred_bootfb_gradient elapsed_ticks={}", elapsed);
+                ktrace!("Deferred bootfb gradient timing: elapsed_ticks={}", elapsed);
             }
 
             // No runnable work on this CPU — halt until the next interrupt
@@ -1703,14 +1705,14 @@ extern "C" fn kernel_secondary_entry<R: BootRuntime>(cpu_index: usize) -> ! {
     // This must happen before ANY kernel code that might fault or use logging (which uses GS).
     let base = unsafe { RAW_RUNTIME_BASE.expect("RAW_RUNTIME_BASE not initialized") };
     base.init_secondary_cpu(cpu_index);
-    crate::kdebug!(
-        "SMP: kernel_secondary_entry arg_cpu={} runtime_cpu={}",
+    crate::ktrace!(
+        "Secondary CPU entry: arg_cpu={} runtime_cpu={}",
         cpu_index,
         base.current_cpu_index()
     );
     // Verification done via base properties later if needed
 
-    crate::kdebug!("SMP: Entering kernel_secondary_entry for CPU {}", cpu_index);
+    crate::ktrace!("Entering secondary kernel entry for CPU {}", cpu_index);
 
     // Per-CPU init
     base.mono_ticks(); // ok for logging
@@ -1915,8 +1917,8 @@ pub fn scan_pci() {
                 };
 
                 if let Some(idx) = reg.register(entry) {
-                    crate::kdebug!(
-                        "PCI: Discovered 0x{:04x}:0x{:04x} at {:02x}:{:02x}.{} class={:02x}{:02x}{:02x} id={}",
+                    crate::ktrace!(
+                        "PCI device discovered: vendor=0x{:04x} device=0x{:04x} bus={:02x}:{:02x}.{} class={:02x}{:02x}{:02x} id={}",
                         vendor_id,
                         device_id,
                         bus,

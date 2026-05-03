@@ -19,7 +19,7 @@ use abi::sound::{
     AudioMappedRingInfo, AudioMappedRingSetup, AudioParams, AudioSampleFormat, AudioState,
     AudioStatus, AudioStreamInfo,
 };
-use stem::info;
+use stem::{debug, info};
 
 struct MappedProducer {
     control_fd: u32,
@@ -272,7 +272,7 @@ fn main(_arg: usize) -> ! {
     let tone_freq: Option<f64> = None;
     let seconds: f64 = 1.0;
 
-    info!("chime: Waiting for /dev/audio/card0/out0 ...");
+    info!("Waiting for audio output...");
 
     // Wait for the audio driver to mount its VFS tree.
     let mut open_attempts: u32 = 0;
@@ -284,13 +284,10 @@ fn main(_arg: usize) -> ! {
             Err(err) => {
                 open_attempts = open_attempts.saturating_add(1);
                 if open_attempts == 1 || open_attempts % 20 == 0 {
-                    info!(
-                        "chime: open /dev/audio/card0/out0 attempt {} failed: {:?}",
-                        open_attempts, err
-                    );
+                    debug!("Audio output not ready yet: attempt={} err={:?}", open_attempts, err);
                 }
                 if interrupted_while_waiting_for_audio() {
-                    info!("chime: interrupted while waiting for /dev/audio/card0/out0");
+                    info!("Audio startup was interrupted");
                     stem::syscall::exit(130);
                 }
                 stem::time::sleep_ms(100);
@@ -298,7 +295,7 @@ fn main(_arg: usize) -> ! {
         }
     };
 
-    info!("chime: Opened /dev/audio/card0/out0 (fd={})", out_fd);
+    debug!("Audio output opened with fd={}", out_fd);
 
     // Query capabilities.
     let mut info_buf = AudioStreamInfo::default();
@@ -337,8 +334,8 @@ fn main(_arg: usize) -> ! {
     }
 
     let sample_rate = accepted.rate;
-    info!(
-        "chime: Configured stream (rate={}Hz, fmt={}, ch={})",
+    debug!(
+        "Audio stream configured: rate={}Hz format={} channels={}",
         sample_rate, accepted.sample_format, accepted.ports
     );
 
@@ -357,10 +354,10 @@ fn main(_arg: usize) -> ! {
 
     // Consume piped PCM when stdin is connected, otherwise generate samples.
     let samples: Vec<u8> = if let Some(stdin_pcm) = read_piped_stdin() {
-        info!("chime: Streaming piped PCM from stdin ({} bytes)", stdin_pcm.len());
+        debug!("Streaming piped PCM from stdin: {} bytes", stdin_pcm.len());
         stdin_pcm
     } else if let Some(freq) = tone_freq {
-        info!("chime: Generating {}Hz sine wave for {}s", freq, seconds);
+        debug!("Generating {}Hz sine wave for {}s...", freq, seconds);
         let mut gen = tone::ToneGenerator::new(freq, sample_rate as f64);
         let count = (seconds * sample_rate as f64) as usize;
         let mut v_i16 = Vec::with_capacity(count * 2);
@@ -372,14 +369,14 @@ fn main(_arg: usize) -> ! {
         }
         v_u8
     } else {
-        info!("chime: Generating classic chime...");
+        debug!("Generating classic chime...");
         chime::generate_chime(sample_rate)
     };
 
-    info!("chime: Playback started ({} bytes)", samples.len());
+    info!("Playing startup chime");
 
     if let Some(mapped) = try_setup_mapped_ring(out_fd) {
-        info!("chime: Using mapped audio ring");
+        debug!("Using mapped audio ring for {} bytes", samples.len());
         let mut mapped = mapped;
         let mut offset = 0usize;
         while offset < samples.len() {
@@ -396,7 +393,7 @@ fn main(_arg: usize) -> ! {
         let _ = stem::syscall::vfs::vfs_close(mapped.ring_fd);
         let _ = stem::syscall::vfs::vfs_close(mapped.control_fd);
         let _ = stem::syscall::vfs::vfs_close(out_fd);
-        info!("chime: Finished (mapped ring).");
+        info!("Startup chime finished");
         stem::syscall::exit(0);
     }
 
@@ -431,6 +428,6 @@ fn main(_arg: usize) -> ! {
     request_audio_drain(out_fd);
     wait_for_playback_completion(out_fd, samples.len(), &accepted);
     let _ = stem::syscall::vfs::vfs_close(out_fd);
-    info!("chime: Finished.");
+    info!("Startup chime finished");
     stem::syscall::exit(0);
 }

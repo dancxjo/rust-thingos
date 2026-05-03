@@ -358,7 +358,7 @@ impl BloomWorld {
             let _ = port_send_all(port, &msg);
         }
         stem::info!(
-            "Display resized from {}x{} to {}x{} @ {}mHz.",
+            "Display resized from {}x{} to {}x{} @ {}mHz",
             old.width,
             old.height,
             next.width,
@@ -650,7 +650,7 @@ impl BloomWorld {
             return false;
         };
         self.damage.mark_rect(rect);
-        stem::info!("bloom: dramatic close started surface={}", surface_id);
+        stem::debug!("Dramatic close started for surface={}", surface_id);
         self.sync_wayland_session_fs(alloc::format!(
             "surface_dramatic_close_started id={}\n",
             surface_id
@@ -672,7 +672,7 @@ impl BloomWorld {
                 surface.surface_id,
                 alloc::format!("surface_destroyed id={}\n", surface.surface_id),
             );
-            stem::info!("bloom: dramatic close finished surface={}", surface.surface_id);
+            stem::debug!("Dramatic close finished for surface={}", surface.surface_id);
         }
         (self.scene.has_dramatic_closes(), closed)
     }
@@ -705,7 +705,7 @@ impl BloomWorld {
         self.busy_spinner_handoff_armed = true;
         self.busy_spinner_stable_frames = 0;
         self.busy_spinner_stable_logged = false;
-        stem::info!("bloom: busy spinner waiting for stable scene");
+        stem::debug!("Busy spinner waiting for a stable scene...");
     }
 
     pub fn note_presented_frame(&mut self) {
@@ -722,8 +722,8 @@ impl BloomWorld {
             && !self.busy_spinner_stable_logged
         {
             self.busy_spinner_stable_logged = true;
-            stem::info!(
-                "bloom: busy spinner scene stable after {} frame(s)",
+            stem::debug!(
+                "Busy spinner scene stable after {} frame(s)",
                 self.busy_spinner_stable_frames
             );
         }

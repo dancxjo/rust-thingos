@@ -39,11 +39,7 @@ pub fn init<R: crate::BootRuntime>(rt: &R) {
     unsafe { FRAME_ALLOCATOR.init(alloc) };
 
     rt.tasking().init(offset);
-    crate::kdebug!(
-        "[kernel:mem:init] initialized frame allocator free_frames={} hhdm=0x{:x}",
-        free_frames,
-        offset
-    );
+    crate::ktrace!("Frame allocator initialized: free_frames={} hhdm=0x{:x}", free_frames, offset);
 }
 
 pub fn is_frame_allocator_ready() -> bool {

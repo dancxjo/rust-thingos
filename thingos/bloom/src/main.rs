@@ -51,14 +51,14 @@ const THEME_PATH: &str = DEFAULT_THEME_CONFIG_PATH;
 
 #[stem::main]
 fn main(_arg: usize) -> ! {
-    info!("Starting desktop compositor.");
+    info!("Starting desktop compositor...");
 
     // ── Check for minimal boot mode ───────────────────────────────────────────
     let minimal_mode = read_minimal_boot_mode();
     stem::debug!("bloom: startup minimal_mode={}", minimal_mode);
 
     // ── Connect to the display ────────────────────────────────────────────────
-    info!("Connecting to display service.");
+    info!("Connecting to display service...");
     stem::debug!("bloom.phase=open_display");
     let mut display_opt = None;
     for i in 0..50 {
@@ -88,7 +88,7 @@ fn main(_arg: usize) -> ! {
         }
     }
     let primary = outputs[0];
-    info!("Display ready at {}x{}.", primary.width, primary.height);
+    info!("Display ready at {}x{}", primary.width, primary.height);
     stem::debug!(
         "bloom: display details path={} refresh_mhz={} vblank={} dmabuf={} gpu_blit={} direct_scanout={} partial_flush={} resource_cache={} gpu_alpha={} gpu_scale={} rounded_clip={} fences={} accel2d_gpu={}",
         display_path,
@@ -262,7 +262,7 @@ fn main(_arg: usize) -> ! {
                     let arg_ptr = alloc::boxed::Box::into_raw(args) as usize;
                     match stem::thread::spawn_with_arg(wayland::wayland_thread_entry, arg_ptr) {
                         Ok(_) => {
-                            info!("Wayland server thread spawned.");
+                            stem::debug!("Wayland server thread spawned");
                             bloom_loop.add_service(alloc::boxed::Box::new(
                                 WaylandCommandService::new(
                                     cmd_read_fd,

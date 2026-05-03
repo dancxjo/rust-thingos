@@ -70,8 +70,8 @@ pub fn load_module_at<R: BootRuntime>(
     module: &BootModuleDesc,
     load_base: u64,
 ) -> Option<(UserEntry, StackInfo, alloc::vec::Vec<VmRegionInfo>, LoaderAuxInfo)> {
-    crate::kdebug!(
-        "LOADER: Loading module '{}' (len={}, base=0x{:x})",
+    crate::ktrace!(
+        "Loading module '{}': len={} base=0x{:x}",
         module.name,
         module.bytes.len(),
         load_base,
@@ -112,8 +112,8 @@ pub fn load_module_at<R: BootRuntime>(
                     && sym != 0
                 {
                     entry_pc = sym.saturating_add(load_bias);
-                    crate::kdebug!(
-                        "LOADER: ELF entry fallback via symbol '{}' -> {:x}",
+                    crate::ktrace!(
+                        "ELF entry fallback via symbol '{}' -> {:x}",
                         candidate,
                         entry_pc
                     );
@@ -123,8 +123,8 @@ pub fn load_module_at<R: BootRuntime>(
 
             if entry_pc == 0 {
                 entry_pc = elf.min_vaddr.saturating_add(load_bias);
-                crate::kdebug!(
-                    "LOADER: ELF entry fallback to min_vaddr -> {:x} (original entry was 0)",
+                crate::ktrace!(
+                    "ELF entry fallback to min_vaddr -> {:x} (original entry was 0)",
                     entry_pc
                 );
             }
@@ -144,7 +144,7 @@ pub fn load_module_at<R: BootRuntime>(
             )
         {
             user_sp = user_sp.saturating_sub(core::mem::size_of::<usize>());
-            crate::kdebug!("LOADER: adjusted initial user SP for rustc _start ABI: {:x}", user_sp);
+            crate::ktrace!("Adjusted initial user SP for rustc _start ABI: {:x}", user_sp);
         }
 
         // Build auxv metadata from ELF header fields.
@@ -156,8 +156,8 @@ pub fn load_module_at<R: BootRuntime>(
             ..Default::default()
         };
 
-        crate::kdebug!(
-            "LOADER: ELF info: entry={:x}, min_vaddr={:x}, bias={:x}, entry_pc={:x}",
+        crate::ktrace!(
+            "ELF info: entry={:x} min_vaddr={:x} bias={:x} entry_pc={:x}",
             elf.entry,
             elf.min_vaddr,
             load_bias,
@@ -321,15 +321,15 @@ pub fn load_module_at<R: BootRuntime>(
                 aux_info.tls_memsz = tls.memsz;
                 aux_info.tls_align = tls.align;
                 aux_info.tls_tp = tp;
-                crate::kdebug!(
-                    "LOADER: TLS block: tp={:#x} filesz={} memsz={} align={}",
+                crate::ktrace!(
+                    "TLS block: tp={:#x} filesz={} memsz={} align={}",
                     tp,
                     tls.filesz,
                     tls.memsz,
                     tls.align
                 );
             } else {
-                crate::kerror!("LOADER: Failed to set up TLS block for module '{}'", module.name);
+                crate::kerror!("Failed to set up TLS block for module '{}'", module.name);
                 return None;
             }
         }

@@ -36,7 +36,7 @@ use stem::syscall::vfs::{
 };
 use stem::syscall::{port_close, port_create, port_send_all, trace_mark_input};
 use stem::wait_set::WaitToken;
-use stem::{debug, info, trace, warn};
+use stem::{debug, trace, warn};
 
 const INPUT_TRACE_INITIAL: u64 = 24;
 const INPUT_TRACE_INTERVAL: u64 = 128;
@@ -94,7 +94,7 @@ fn publish_pid() {
 
         let _ = vfs_write(fd, &buf[idx..]);
         let _ = vfs_close(fd);
-        stem::info!("bristle: published pid {} to /run/bristle/pid", pid);
+        stem::debug!("Published PID {} to /run/bristle/pid", pid);
     }
 }
 
@@ -163,8 +163,8 @@ fn main(_arg: usize) -> ! {
     publish_device_handle("/run/bristle/kbd_in", kbd_write);
     publish_device_handle("/run/bristle/mouse_in", mouse_write);
     publish_device_handle("/run/bristle/control", control_write);
-    info!(
-        "bristle: published device handles kbd_in={} mouse_in={} control={}",
+    debug!(
+        "Published input device handles: kbd_in={} mouse_in={} control={}",
         kbd_write, mouse_write, control_write
     );
 
@@ -222,8 +222,8 @@ fn main(_arg: usize) -> ! {
     };
     let control_tok: Option<WaitToken> = control_fd.and_then(|fd| svc.add_fd_readable(fd).ok());
 
-    info!(
-        "bristle: online (kbd_tok={:?}, mouse_tok={:?}, control_tok={:?})",
+    debug!(
+        "Input broker online: kbd_tok={:?} mouse_tok={:?} control_tok={:?}",
         kbd_tok, mouse_tok, control_tok
     );
 
@@ -323,7 +323,7 @@ fn main(_arg: usize) -> ! {
                                 let h = u32::from_le_bytes(h_bytes) as i32;
                                 screen_w = w;
                                 screen_h = h;
-                                stem::info!("bristle: updated screen resolution to {}x{}", w, h);
+                                stem::debug!("Updated screen resolution to {}x{}", w, h);
                             }
                         } else {
                             let (event_accum, accum_len) = if is_mouse {

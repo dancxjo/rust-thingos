@@ -7,7 +7,7 @@ use stem::kinds::{DriverReadyV1, KIND_ID_THINGOS_DRIVER_READY};
 use stem::syscall::message::{KindId, msg_send};
 use stem::syscall::{kill, vfs_umount};
 use stem::time::monotonic_ns;
-use stem::{debug, info, warn};
+use stem::{debug, trace, warn};
 
 use crate::binding::Binding;
 use crate::sysfs::{SysDevice, device_present};
@@ -142,7 +142,7 @@ impl ManagedDriver {
         match spawn_res {
             Ok(resp) => {
                 debug!(
-                    "CAMBIUM: launched driver {} for {} (legacy, boot_fd={}, pid={})",
+                    "Launched driver {} for {}: legacy boot_fd={} pid={}",
                     driver, self.slot, boot_fd, resp.child_tid
                 );
                 self.pid = Some(resp.child_tid);
@@ -150,7 +150,7 @@ impl ManagedDriver {
                 send_driver_ready(resp.child_tid);
             }
             Err(err) => {
-                warn!("CAMBIUM: failed to launch {} for {}: {:?}", driver, self.slot, err);
+                warn!("Failed to launch {} for {}: {:?}", driver, self.slot, err);
                 self.schedule_restart();
                 if boot_fd != 0 {
                     let _ = stem::syscall::vfs::vfs_close(boot_fd);
@@ -195,7 +195,7 @@ impl ManagedDriver {
         match spawn_res {
             Ok(resp) => {
                 debug!(
-                    "CAMBIUM: launched driver {} for {} (entry='{}', pid={})",
+                    "Launched driver {} for {}: entry='{}' pid={}",
                     driver_path, self.slot, entry_symbol, resp.child_tid
                 );
                 self.pid = Some(resp.child_tid);
@@ -204,7 +204,7 @@ impl ManagedDriver {
             }
             Err(err) => {
                 warn!(
-                    "CAMBIUM: failed to launch {} for {} via '{}': {:?}",
+                    "Failed to launch {} for {} via '{}': {:?}",
                     driver_path, self.slot, entry_symbol, err
                 );
                 self.schedule_restart();
@@ -237,11 +237,10 @@ impl ManagedDriver {
         }
 
         match stem::thread::set_priority(pid, AUDIO_REALTIME_PRIORITY) {
-            Ok(()) => info!("CAMBIUM: audio driver PID {} priority set to realtime", pid),
-            Err(err) => warn!(
-                "CAMBIUM: failed to set audio driver PID {} realtime priority: {:?}",
-                pid, err
-            ),
+            Ok(()) => debug!("Audio driver PID {} priority set to realtime", pid),
+            Err(err) => {
+                warn!("Failed to set audio driver PID {} realtime priority: {:?}", pid, err)
+            }
         }
     }
 
@@ -258,7 +257,7 @@ impl ManagedDriver {
             }
             Ok(_) => {}
             Err(err) => {
-                warn!("CAMBIUM: lost pid {} for {}: {:?}", pid, self.slot, err);
+                warn!("Lost pid {} for {}: {:?}", pid, self.slot, err);
                 self.pid = None;
                 self.cleanup_mount();
                 if device_present(&self.slot) {
@@ -270,7 +269,7 @@ impl ManagedDriver {
     }
 
     pub fn handle_exit(&mut self, code: i32) {
-        warn!("CAMBIUM: driver for {} exited with code {}", self.slot, code);
+        warn!("Driver for {} exited with code {}", self.slot, code);
         self.pid = None;
         self.cleanup_mount();
         if device_present(&self.slot) {
@@ -282,9 +281,9 @@ impl ManagedDriver {
     pub fn request_shutdown(&self) {
         if let Some(pid) = self.pid {
             match kill(pid as i32, SIGTERM) {
-                Ok(()) => debug!("CAMBIUM: sent SIGTERM to driver pid {} for {}", pid, self.slot),
+                Ok(()) => debug!("Sent SIGTERM to driver pid {} for {}", pid, self.slot),
                 Err(err) => warn!(
-                    "CAMBIUM: failed to send SIGTERM to driver pid {} for {}: {:?}",
+                    "Failed to send SIGTERM to driver pid {} for {}: {:?}",
                     pid, self.slot, err
                 ),
             }
@@ -294,9 +293,9 @@ impl ManagedDriver {
     pub fn force_shutdown(&self) {
         if let Some(pid) = self.pid {
             match kill(pid as i32, SIGKILL) {
-                Ok(()) => debug!("CAMBIUM: sent SIGKILL to driver pid {} for {}", pid, self.slot),
+                Ok(()) => debug!("Sent SIGKILL to driver pid {} for {}", pid, self.slot),
                 Err(err) => warn!(
-                    "CAMBIUM: failed to send SIGKILL to driver pid {} for {}: {:?}",
+                    "Failed to send SIGKILL to driver pid {} for {}: {:?}",
                     pid, self.slot, err
                 ),
             }
@@ -311,10 +310,7 @@ impl ManagedDriver {
         match stem::syscall::waitpid(pid as i64, abi::types::system::waitpid_flags::WNOHANG) {
             Ok((child_pid, status)) if child_pid > 0 => {
                 let code = abi::signal::w_exit_status(status as u8);
-                warn!(
-                    "CAMBIUM: driver for {} exited during shutdown with code {}",
-                    self.slot, code
-                );
+                warn!("Driver for {} exited during shutdown with code {}", self.slot, code);
                 self.pid = None;
                 self.cleanup_mount();
                 true
@@ -322,7 +318,7 @@ impl ManagedDriver {
             Ok(_) => false,
             Err(err) => {
                 warn!(
-                    "CAMBIUM: treating driver pid {} for {} as gone during shutdown: {:?}",
+                    "Treating driver pid {} for {} as gone during shutdown: {:?}",
                     pid, self.slot, err
                 );
                 self.pid = None;
@@ -365,21 +361,18 @@ impl ManagedDriver {
 fn send_driver_ready(driver_pid: u64) {
     let sprout_pid = stem::syscall::getppid();
     if sprout_pid == 0 {
-        warn!("CAMBIUM: send_driver_ready: getppid() returned 0, cannot notify supervisor");
+        warn!("Cannot notify supervisor that driver is ready: getppid() returned 0");
         return;
     }
     let msg = DriverReadyV1::new_ok(driver_pid as u32);
     let kind = KindId(KIND_ID_THINGOS_DRIVER_READY);
     match msg_send(sprout_pid, kind, msg.as_bytes()) {
         Ok(()) => {
-            debug!(
-                "CAMBIUM: sent DRIVER_READY to Sprout (pid={}) for driver pid={}",
-                sprout_pid, driver_pid
-            );
+            trace!("Sent DRIVER_READY to Sprout pid={} for driver pid={}", sprout_pid, driver_pid);
         }
         Err(err) => {
             warn!(
-                "CAMBIUM: failed to send DRIVER_READY to Sprout (pid={}) for driver pid={}: {:?}",
+                "Failed to send DRIVER_READY to Sprout pid={} for driver pid={}: {:?}",
                 sprout_pid, driver_pid, err
             );
         }

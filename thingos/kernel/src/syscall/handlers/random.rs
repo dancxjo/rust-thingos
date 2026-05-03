@@ -49,6 +49,6 @@ pub fn sys_entropy_seed(buf_ptr: usize, buf_len: usize) -> SysResult<usize> {
 
     crate::entropy::add_sample(&kbuf[..len]);
     crate::entropy::mark_seeded();
-    crate::kdebug!("ENTROPY: seeded {} bytes from userspace driver", len);
+    crate::kdebug!("Seeded {} entropy bytes from userspace driver", len);
     Ok(0)
 }

@@ -338,7 +338,7 @@ impl BloomLoop {
                 false
             }
             LoopAction::Shutdown => {
-                stem::info!("Shutdown requested by service.");
+                stem::info!("Shutdown requested by service");
                 loop {
                     stem::sleep_ms(1000);
                 }
@@ -358,7 +358,7 @@ impl BloomLoop {
     ///   5. Presents a frame when the frame clock is due and damage is dirty.
     pub fn run(mut self, world: &mut BloomWorld) -> ! {
         stem::info!(
-            "Service loop started for output 0 at {}x{} @ {}mHz.",
+            "Service loop started for output 0 at {}x{} @ {}mHz",
             world.primary.width,
             world.primary.height,
             world.primary.refresh_mhz
@@ -445,7 +445,7 @@ impl BloomLoop {
                         self.frame_clock.request_repaint();
                     }
                     if !first_frame_rendered {
-                        stem::info!("First frame rendered.");
+                        stem::info!("First frame rendered");
                         stem::debug!("bloom.phase=first_commit_done desktop_ready=1");
                         first_frame_rendered = true;
                     }

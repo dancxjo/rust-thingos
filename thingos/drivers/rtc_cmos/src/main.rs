@@ -256,7 +256,7 @@ fn rtc_to_unix(year: u16, month: u8, day: u8, hour: u8, minute: u8, second: u8) 
 
 fn anchor_from_rtc() -> bool {
     let Some(sample) = read_rtc() else {
-        warn!("RTC: failed to read a stable CMOS timestamp; system clock remains unanchored");
+        warn!("Failed to read a stable CMOS timestamp; system clock remains unanchored");
         return false;
     };
     let unix_secs = rtc_to_unix(
@@ -268,13 +268,13 @@ fn anchor_from_rtc() -> bool {
         sample.second,
     );
 
-    info!(
-        "RTC: {:04}-{:02}-{:02} {:02}:{:02}:{:02} = {} unix_secs",
+    debug!(
+        "RTC sample: {:04}-{:02}-{:02} {:02}:{:02}:{:02} unix_secs={}",
         sample.year, sample.month, sample.day, sample.hour, sample.minute, sample.second, unix_secs
     );
 
     stem::syscall::time_anchor(unix_secs);
-    info!("RTC: System clock anchored to {} unix_secs", unix_secs);
+    info!("System clock anchored from RTC");
     true
 }
 
@@ -310,17 +310,17 @@ fn device_path_from_ctx_memfd(boot_fd: usize) -> Option<String> {
 
 fn claim_device_from_boot_arg(boot_arg: usize) -> Option<usize> {
     let Some(path) = device_path_from_ctx_memfd(boot_arg) else {
-        debug!("RTC: starting without a DriverEntryCtx device path");
+        debug!("Starting without a DriverEntryCtx device path");
         return None;
     };
 
     match device_claim(&path) {
         Ok(claim) => {
-            info!("RTC: claimed {} (handle={})", path, claim);
+            debug!("Device claimed at {} with handle={}", path, claim);
             Some(claim)
         }
         Err(err) => {
-            warn!("RTC: failed to claim {}: {:?}", path, err);
+            warn!("Failed to claim {}: {:?}", path, err);
             None
         }
     }
@@ -334,18 +334,18 @@ fn main(arg: usize) -> ! {
         cpu.cs, cpu.ss, cpu.cpl, cpu.rsp, cpu.rip, cpu.rflags
     );
 
-    debug!("Starting... arg={:x}", arg);
+    debug!("Starting with arg={:x}...", arg);
     let _claim = claim_device_from_boot_arg(arg);
 
     for attempt in 1..=20 {
         if anchor_from_rtc() {
             break;
         }
-        warn!("RTC: anchor attempt {} failed; retrying", attempt);
+        warn!("Clock anchor attempt {} failed; retrying", attempt);
         stem::sleep_ms(100);
     }
 
-    debug!("RTC: Entering maintenance loop.");
+    debug!("Entering RTC maintenance loop");
 
     loop {
         stem::sleep(core::time::Duration::from_secs(3600)); // Update once per hour

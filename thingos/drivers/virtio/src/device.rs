@@ -14,7 +14,6 @@ use core::ptr::{read_volatile, write_volatile};
 
 use abi::errors::Errno;
 use abi::schema::keys;
-use stem::info;
 use stem::syscall::{device_alloc_dma, device_claim, device_dma_phys, device_map_mmio};
 
 use crate::constants::*;
@@ -49,12 +48,12 @@ pub struct VirtioDevice {
 impl VirtioDevice {
     /// Create a new VirtioDevice by claiming and mapping a device node
     pub fn new(sys_path: &str) -> Result<Self, Errno> {
-        stem::debug!("VirtIO: device::new({})", sys_path);
+        stem::trace!("Creating VirtIO device for {}", sys_path);
 
         // Claim the device using its sysfs path as the primary key.
-        stem::debug!("VirtIO: claiming '{}'...", sys_path);
+        stem::trace!("Claiming VirtIO device '{}'...", sys_path);
         let claim_handle = device_claim(sys_path)?;
-        stem::debug!("VirtIO: claimed, handle={}", claim_handle);
+        stem::trace!("VirtIO device claimed with handle={}", claim_handle);
 
         // Read VirtIO capability offsets from sysfs
         let common_bar = read_sys_u32(&alloc::format!("{}/virtio/common_bar", sys_path))? as usize;
@@ -66,8 +65,8 @@ impl VirtioDevice {
         let notify_multiplier =
             read_sys_u32(&alloc::format!("{}/virtio/notify_multiplier", sys_path))?;
 
-        stem::debug!(
-            "VirtIO: common_bar={} common_off=0x{:x} notify_bar={} notify_off=0x{:x} mult={}",
+        stem::trace!(
+            "VirtIO capability offsets: common_bar={} common_off=0x{:x} notify_bar={} notify_off=0x{:x} mult={}",
             common_bar,
             common_offset,
             notify_bar,
@@ -82,20 +81,20 @@ impl VirtioDevice {
             read_sys_u32(&alloc::format!("{}/virtio/device_offset", sys_path)).unwrap_or(0);
 
         // Map the BAR containing common config
-        stem::debug!("VirtIO: mapping common BAR{}...", common_bar);
+        stem::trace!("Mapping VirtIO common BAR{}...", common_bar);
         let common_bar_base = device_map_mmio(claim_handle, common_bar)?;
         let common_cfg = common_bar_base + common_offset;
-        stem::debug!("VirtIO: common_cfg at 0x{:x}", common_cfg);
+        stem::trace!("VirtIO common_cfg at 0x{:x}", common_cfg);
 
         // Map notify BAR (may be same as common BAR)
         let notify_cfg = if notify_bar == common_bar {
             common_bar_base + notify_offset
         } else {
-            stem::info!("VirtIO: mapping notify BAR{}...", notify_bar);
+            stem::trace!("Mapping VirtIO notify BAR{}...", notify_bar);
             let notify_bar_base = device_map_mmio(claim_handle, notify_bar)?;
             notify_bar_base + notify_offset
         };
-        stem::debug!("VirtIO: notify_cfg at 0x{:x}", notify_cfg);
+        stem::trace!("VirtIO notify_cfg at 0x{:x}", notify_cfg);
 
         // Map device config BAR if available
         let device_cfg = if device_bar != 0xFF {
@@ -111,15 +110,15 @@ impl VirtioDevice {
         } else {
             None
         };
-        stem::debug!("VirtIO: device_cfg = {:?}", device_cfg);
+        stem::trace!("VirtIO device_cfg={:?}", device_cfg);
 
         // Allocate command buffer (1 page for commands + responses)
-        stem::debug!("VirtIO: allocating DMA command buffer...");
+        stem::trace!("Allocating VirtIO DMA command buffer...");
         let cmd_buf = device_alloc_dma(claim_handle, 1).map_err(|_| Errno::ENOMEM)?;
         let cmd_buf_phys = device_dma_phys(cmd_buf).map_err(|_| Errno::EFAULT)?;
-        stem::debug!("VirtIO: cmd_buf virt=0x{:x} phys=0x{:x}", cmd_buf, cmd_buf_phys);
+        stem::trace!("VirtIO command buffer: virt=0x{:x} phys=0x{:x}", cmd_buf, cmd_buf_phys);
 
-        stem::debug!("VirtIO: device::new complete");
+        stem::trace!("VirtIO device creation complete");
         Ok(Self {
             claim_handle,
             common_cfg,
@@ -143,14 +142,14 @@ fn read_sys_u32(path: &str) -> Result<u32, Errno> {
     let fd = vfs_open(path, O_RDONLY)?;
     let mut buf = [0u8; 32];
     let n = vfs_read(fd, &mut buf).map_err(|e| {
-        stem::info!("READ_SYS: {} read failed: {:?}", path, e);
+        stem::warn!("Sysfs read failed for {}: {:?}", path, e);
         e
     })?;
     let _ = vfs_close(fd);
 
     let s = core::str::from_utf8(&buf[..n]).map_err(|_| Errno::EIO)?;
     let trimmed = s.trim();
-    stem::debug!("READ_SYS: {} -> '{}' (n={})", path, trimmed, n);
+    stem::trace!("Sysfs read: {} -> '{}' (n={})", path, trimmed, n);
     if trimmed.starts_with("0x") {
         u32::from_str_radix(&trimmed[2..], 16).map_err(|_| Errno::EIO)
     } else {

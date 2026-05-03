@@ -138,10 +138,10 @@ fn read_u32_file(path: &str) -> Option<u32> {
 
 #[stem::main]
 fn main(_raw_arg: usize) -> ! {
-    stem::debug!("ps2_kbd: online — waiting for bristle pid");
+    stem::debug!("PS/2 keyboard service online; waiting for bristle pid");
 
     if let Err(e) = stem::fs::wait_until_exists(BRISTLE_PID_PATH) {
-        stem::error!("ps2_kbd: failed waiting for {}: {:?}", BRISTLE_PID_PATH, e);
+        stem::error!("Failed waiting for {}: {:?}", BRISTLE_PID_PATH, e);
         loop {
             stem::time::sleep_ms(1000);
         }
@@ -150,7 +150,7 @@ fn main(_raw_arg: usize) -> ! {
     let bristle_pid = match read_u32_file(BRISTLE_PID_PATH) {
         Some(pid) if pid != 0 => pid,
         _ => {
-            stem::error!("ps2_kbd: failed to read bristle pid from {}", BRISTLE_PID_PATH);
+            stem::error!("Failed to read bristle pid from {}", BRISTLE_PID_PATH);
             loop {
                 stem::time::sleep_ms(1000);
             }
@@ -162,11 +162,11 @@ fn main(_raw_arg: usize) -> ! {
     // Subscribe to keyboard interrupt
     match irq_subscribe(KBD_VECTOR) {
         Ok(()) => {
-            stem::debug!("ps2_kbd: subscribed to IRQ1 (vector 0x{:02x})", KBD_VECTOR);
+            stem::debug!("Subscribed to PS/2 keyboard IRQ1: vector=0x{:02x}", KBD_VECTOR);
             interrupt_loop(bristle_pid);
         }
         Err(e) => {
-            debug!("ps2_kbd: IRQ subscribe failed ({:?}), falling back to polling", e);
+            debug!("PS/2 keyboard IRQ subscribe failed ({:?}); falling back to polling", e);
             polling_loop(bristle_pid);
         }
     }
@@ -216,20 +216,20 @@ fn drain_keyboard_data(
             let byte_no = PS2_KBD_BYTE_COUNT.fetch_add(1, Ordering::Relaxed) + 1;
             if should_log_input(byte_no) {
                 stem::trace!(
-                    "ps2_kbd: take_scancode scancode=0x{:02x} status=0x{:02x} drain_depth={}",
+                    "PS/2 keyboard take_scancode: scancode=0x{:02x} status=0x{:02x} drain_depth={}",
                     scancode,
                     status,
                     bytes_read
                 );
             }
             if let Some(edge) = state.process_ps2(scancode) {
-                stem::trace!("ps2_kbd: edge detected: {:?}", edge);
+                stem::trace!("PS/2 keyboard edge detected: {:?}", edge);
                 send_key_event(bristle_pid, edge, drop_counter);
                 events_sent += 1;
             }
         } else {
             // If aux data (mouse), stop draining - let ps2_mouse handle it
-            stem::trace!("ps2_kbd: yield on AUX data (mouse packet)");
+            stem::trace!("PS/2 keyboard yielded on AUX data");
             break;
         }
     }
@@ -238,7 +238,7 @@ fn drain_keyboard_data(
         let drain_no = PS2_KBD_DRAIN_COUNT.load(Ordering::Relaxed);
         if should_log_input(drain_no) {
             stem::trace!(
-                "ps2_kbd: drain exit bytes={} events={} elapsed_ns={} dropped={}",
+                "PS/2 keyboard drain exit: bytes={} events={} elapsed_ns={} dropped={}",
                 bytes_read,
                 events_sent,
                 elapsed_ns,
@@ -274,14 +274,11 @@ fn send_key_event(bristle_pid: u32, edge: KeyEdge, drop_counter: &mut u32) {
 
     let send_ok = msg_send(bristle_pid, abi::KindId(KIND_BRISTLE_DEVICE_EVENT), &buf[..24]).is_ok();
     if send_ok {
-        stem::trace!("ps2_kbd: sent {:?} to bristle (pid={})", key, bristle_pid);
+        stem::trace!("Sent PS/2 key {:?} to bristle pid={}", key, bristle_pid);
     } else {
         *drop_counter = drop_counter.wrapping_add(1);
         if *drop_counter <= 4 || *drop_counter % 100 == 0 {
-            warn!(
-                "ps2_kbd: dropped {} key events (send pid={} failed)",
-                *drop_counter, bristle_pid
-            );
+            warn!("Dropped {} key events: send to pid={} failed", *drop_counter, bristle_pid);
         }
     }
 }
@@ -294,7 +291,7 @@ fn send_key_event(bristle_pid: u32, edge: KeyEdge, drop_counter: &mut u32) {
 /// the pending count but deliberately skips the blocking wake.
 fn interrupt_loop(bristle_pid: u32) -> ! {
     stem::debug!(
-        "ps2_kbd: using IRQ-assisted loop (IRQ vector 0x{:02x}, poll={}ms)",
+        "Using PS/2 keyboard IRQ-assisted loop: vector=0x{:02x} poll={}ms",
         KBD_VECTOR,
         IRQ_ASSIST_POLL_MS
     );
@@ -302,7 +299,7 @@ fn interrupt_loop(bristle_pid: u32) -> ! {
     let irq_token = match waitset.add_irq(KBD_VECTOR as u64) {
         Ok(token) => token,
         Err(e) => {
-            warn!("ps2_kbd: failed to add IRQ wait source ({:?}), switching to polling", e);
+            warn!("Failed to add PS/2 keyboard IRQ wait source ({:?}); switching to polling", e);
             polling_loop(bristle_pid);
         }
     };
@@ -349,7 +346,7 @@ fn interrupt_loop(bristle_pid: u32) -> ! {
                 }
                 if saw_irq && should_log_input(irq_wake_count) {
                     stem::trace!(
-                        "ps2_kbd: irq_wait exit vector=0x{:02x} wakes={} timeouts={} pending={}",
+                        "PS/2 keyboard irq_wait exit: vector=0x{:02x} wakes={} timeouts={} pending={}",
                         KBD_VECTOR,
                         irq_wake_count,
                         timeout_count,
@@ -375,7 +372,7 @@ fn interrupt_loop(bristle_pid: u32) -> ! {
             }
             Err(e) => {
                 warn!(
-                    "ps2_kbd: IRQ wait error ({:?}) after {} wakes, switching to polling fallback",
+                    "PS/2 keyboard IRQ wait error ({:?}) after {} wakes; switching to polling fallback",
                     e, irq_wake_count
                 );
                 break;
@@ -391,7 +388,7 @@ fn should_log_input(count: u64) -> bool {
 
 /// Fallback polling loop – used only when IRQ subscription is unavailable.
 fn polling_loop(bristle_pid: u32) -> ! {
-    stem::debug!("ps2_kbd: using fallback polling loop ({}ms interval)", POLLING_INTERVAL_MS);
+    stem::debug!("Using PS/2 keyboard fallback polling loop: interval={}ms", POLLING_INTERVAL_MS);
     let mut state = KeyboardState::new();
     let mut drop_counter = 0u32;
     loop {

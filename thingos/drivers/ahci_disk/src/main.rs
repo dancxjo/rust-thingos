@@ -25,7 +25,7 @@ use stem::syscall::vfs::{vfs_mkdir, vfs_mount, vfs_symlink};
 use stem::syscall::{
     device_alloc_dma, device_claim, device_dma_phys, device_map_mmio, port_create,
 };
-use stem::{error, info, trace, warn, yield_now};
+use stem::{debug, error, info, trace, warn, yield_now};
 
 const THINGOS_DRIVER_NAME: &[u8] = b"ahci_disk";
 
@@ -485,7 +485,7 @@ fn resolve_device_path(boot_fd: usize) -> String {
 
 #[stem::main]
 fn main(boot_fd: usize) -> ! {
-    info!("AHCI: Starting AHCI VFS driver");
+    info!("Starting AHCI storage driver...");
     let device_path = resolve_device_path(boot_fd);
     let claim = match device_claim(&device_path) {
         Ok(c) => c,
@@ -495,7 +495,7 @@ fn main(boot_fd: usize) -> ! {
         }
     };
 
-    info!("AHCI: Claimed device {}", device_path);
+    debug!("AHCI device claimed at {}", device_path);
     let mmio = match device_map_mmio(claim, 5) {
         Ok(m) => m,
         Err(_) => {
@@ -562,17 +562,17 @@ fn main(boot_fd: usize) -> ! {
         let path = format!("/dev/storage/{}", name);
         let (v_w, v_r) = port_create(65536).unwrap();
         vfs_mount(v_w, &path).unwrap();
-        info!("AHCI: Mounted {} at {}", name, path);
+        info!("Storage device {} mounted at {}", name, path);
 
         let _ = vfs_mkdir("/dev/disk");
         let disk_path = format!("/dev/disk/{}", name);
         match vfs_symlink(&path, &disk_path) {
-            Ok(()) => info!("AHCI: Created {} -> {}", disk_path, path),
+            Ok(()) => debug!("AHCI disk alias created: {} -> {}", disk_path, path),
             Err(Errno::EEXIST) => {}
             Err(e) => warn!("AHCI: failed to create {}: {:?}", disk_path, e),
         }
 
-        info!("AHCI: Provider loop online at {}", path);
+        debug!("AHCI provider loop online at {}", path);
         let mut ploop = ProviderLoop::new(v_r);
         loop {
             let req = match ploop.next_request() {

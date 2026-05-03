@@ -65,7 +65,7 @@ pub fn sys_console_disable() -> SysResult<usize> {
     if !ptr.is_null() {
         let f: fn() = unsafe { core::mem::transmute(ptr) };
         f();
-        crate::kinfo!("kernel: boot framebuffer console disabled");
+        crate::kinfo!("Boot framebuffer console disabled");
     }
     Ok(0)
 }

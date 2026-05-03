@@ -19,6 +19,17 @@ This file is a quick map of the repository so agents (and humans) can orient fas
 - When fixing a bug, add or update scenarios in the appropriate existing `.feature` file for that behavior.
 - For bug fixes, follow fail-first workflow: make the scenario fail first, then fix the bug, then run the BDD suite again and confirm it passes.
 
+## Logging policy
+- Default boot logging should be level 3.
+- Errors and warnings should be obvious, direct, and actionable. Use `warn`/`error` only when a human should notice a problem.
+- `info` is for a curious ordinary user. Write it like status-bar text: human-readable, sparse, and focused on what the system is doing now, such as `Scanning storage devices...` or `Display ready at 640x480`. Do not put minute technical state at `info`.
+- `debug` is for first-order debugging: one meaningful state transition or slow diagnostic point at a time. Do not emit clumps of adjacent debug messages. If a diagnostic needs several related fields, prefer one longer debug message; if the fields are mechanical details, use `trace`.
+- `trace` is for minute detail: syscall plumbing, per-field descriptors, register values, DMA allocations, handles, request/response pairs, loader phases, scheduler micro-steps, and other high-volume internals.
+- Never repeat the module/subsystem name inside the message body. The log header already identifies the source, so avoid manual heads like `bloom:`, `chime:`, `SPROUT:`, `DEVICE:`, `CAMBIUM:`, `SND:`, `VirtIO:`, `LOADER:`, or `VFS_RPC:`.
+- Avoid clumps of consecutive messages at the same level. Summarize, combine, or demote details to `trace` instead.
+- Use standard capitalization. Start messages with a capital letter unless they intentionally begin with a path, command, or code identifier.
+- Message endings are open-ended by default: no period. Use `...` only when the message describes work that is starting, waiting, or in progress.
+
 ## Top-level layout (what's what)
 - `abi/`: shared ABI types and syscalls between kernel/userspace.
 - `bran/`: core kernel runtime (boot/runtime abstraction).

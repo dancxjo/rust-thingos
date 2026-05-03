@@ -53,14 +53,14 @@ static PORTS: Mutex<Vec<Option<Arc<Port>>>> = Mutex::new(Vec::new());
 pub fn create_port(capacity: usize) -> PortId {
     let port = Arc::new(Port::new(capacity));
     let mut ports = PORTS.lock();
-    crate::kdebug!("CREATE_PORT: capacity={}", capacity);
+    crate::ktrace!("Creating port with capacity={}", capacity);
 
     // Find a free slot or append
     for (i, slot) in ports.iter_mut().enumerate() {
         if slot.is_none() {
             *slot = Some(port);
             let id = PortId(i as u32);
-            crate::kdebug!("CREATE_PORT: slot={} id={:?}", i, id);
+            crate::ktrace!("Created port in slot {} with id={:?}", i, id);
             return id;
         }
     }
@@ -68,7 +68,7 @@ pub fn create_port(capacity: usize) -> PortId {
     // No free slot, append
     let id = PortId(ports.len() as u32);
     ports.push(Some(port));
-    crate::kdebug!("CREATE_PORT: appended id={:?}", id);
+    crate::ktrace!("Created port at new slot with id={:?}", id);
     id
 }
 

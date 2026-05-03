@@ -188,7 +188,7 @@ pub unsafe fn parse_madt(rsdp_virt: u64, hhdm_offset: u64) -> Option<MadtInfo> {
     let madt_length = unsafe {
         ptr::read_unaligned(ptr::addr_of!((*(madt_virt as *const AcpiSdtHeader)).length))
     };
-    kernel::kdebug!("MADT: total length {}", madt_length);
+    kernel::ktrace!("MADT total length {}", madt_length);
     map_phys_range(madt_phys, madt_length as u64, hhdm_offset);
     unsafe { parse_madt_table(madt_virt) }
 }

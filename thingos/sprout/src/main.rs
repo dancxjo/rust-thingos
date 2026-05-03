@@ -7,7 +7,7 @@ mod supervisor;
 
 #[stem::main]
 fn main(arg0: usize) -> ! {
-    stem::info!("SPROUT: starting minimal session supervisor (arg0={})", arg0);
+    stem::debug!("Starting minimal session supervisor with arg0={}", arg0);
     let mut supervisor = supervisor::Supervisor::new();
     supervisor.run_forever()
 }

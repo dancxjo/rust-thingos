@@ -1811,13 +1811,13 @@ pub(crate) fn apply_deferred_registry_inserts<R: BootRuntime>(
         return;
     }
     debug_assert_scheduler_not_held_by_this_cpu::<R>("apply_deferred_registry_inserts");
-    crate::kdebug!("REGISTRY: Applying {} deferred inserts", deferred_inserts.len());
+    crate::ktrace!("Applying {} deferred registry insert(s)", deferred_inserts.len());
     let mut registry = crate::task::registry::get_registry::<R>();
     for task in deferred_inserts {
-        crate::kdebug!("REGISTRY: Inserting TID={}", task.id);
+        crate::ktrace!("Inserting TID={} into registry", task.id);
         registry.insert(task);
     }
-    crate::kdebug!("REGISTRY: Inserts applied");
+    crate::ktrace!("Deferred registry inserts applied");
 }
 
 pub(crate) fn resolve_switch_params<R: BootRuntime>(
@@ -2214,12 +2214,12 @@ fn init_boot_task<R: BootRuntime>(sched: &mut types::Scheduler<R>) {
     // state.
     for cpu_id in 0..cpu_total {
         let cpu_sched = crate::sched::state::CpuScheduler::new_for_cpu(cpu_id);
-        crate::kdebug!("SCHED: allocating CpuScheduler for cpu{} (total={})", cpu_id, cpu_total);
+        crate::ktrace!("Allocating CpuScheduler for cpu{}: total={}", cpu_id, cpu_total);
         sched.state.per_cpu.push(cpu_sched);
     }
-    crate::kinfo!("SCHED: {} per-CPU scheduler(s) allocated", cpu_total);
-    crate::kinfo!(
-        "SCHED: per-CPU preemption initialized ({} independent preemption domains, no global preemption lock)",
+    crate::kdebug!("{} per-CPU scheduler(s) allocated", cpu_total);
+    crate::kdebug!(
+        "Per-CPU preemption initialized: {} independent preemption domains, no global preemption lock",
         cpu_total
     );
 
@@ -3879,7 +3879,7 @@ impl<R: BootRuntime> types::Scheduler<R> {
 
     /// Mark a secondary CPU as online and initialize its idle task.
     pub fn cpu_online(&mut self, cpu_index: usize) {
-        crate::kdebug!("SMP: CPU {} online (triggered by scheduler spawn)", cpu_index);
+        crate::kdebug!("CPU {} online from scheduler spawn", cpu_index);
         while self.state.per_cpu.len() <= cpu_index {
             self.state.per_cpu.push(crate::sched::state::PerCpu::new());
         }

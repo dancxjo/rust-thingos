@@ -68,7 +68,7 @@ pub fn read_wallpaper_target(config_path: &str) -> Option<String> {
     let path = read_wallpaper_config_raw(config_path)?;
     let normalized = normalize_wallpaper_path(&path);
     if normalized != path && write_wallpaper_target(config_path, &normalized) {
-        stem::info!("bloom: migrated wallpaper path {} -> {}", path, normalized);
+        stem::debug!("Migrated wallpaper path {} -> {}", path, normalized);
     }
     Some(normalized)
 }
@@ -152,7 +152,7 @@ impl WallpaperService {
         self.initial_loaded = true;
         self.last_stamp = wallpaper_config_stamp(self.config_path);
         let wallpaper_path = wallpaper_target_or_default(self.config_path);
-        stem::info!("bloom: reacting to wallpaper change: {}", wallpaper_path);
+        stem::info!("Reloading wallpaper {}", wallpaper_path);
         world.visuals.start_background_load(&world.display, &wallpaper_path);
         world.damage.mark_full(world.primary.width, world.primary.height);
     }
@@ -164,7 +164,7 @@ impl WallpaperService {
         self.initial_loaded = true;
         self.last_stamp = wallpaper_config_stamp(self.config_path);
         let wallpaper_path = wallpaper_target_or_default(self.config_path);
-        stem::info!("bloom: preparing background {}", wallpaper_path);
+        stem::info!("Preparing wallpaper {}", wallpaper_path);
         world.visuals.start_background_load(&world.display, &wallpaper_path);
         world.damage.mark_full(world.primary.width, world.primary.height);
     }
