@@ -801,6 +801,7 @@ pub fn build_iso_with_config(
         cwd.join(format!("targets/{arch}-unknown-thingos.json"))
     };
     let target = target_json.to_str().unwrap();
+    let target_name = target_json.file_stem().and_then(|s| s.to_str()).unwrap();
 
     // Phase 1: build all userspace programs concurrently (one vine per batch).
     build_programs_parallel(programs, target, "release")?;
@@ -839,15 +840,13 @@ pub fn build_iso_with_config(
 
     // Stage libstd.so from bootstrap artifacts.
     // Note: rustc-thingos/bootstrap build puts artifacts under build/
-    if arch == "x86_64" {
-        let std_src = cwd.join(
-            "build/x86_64-unknown-linux-gnu/stage1-std/x86_64-unknown-thingos/release/libstd.so",
-        );
-        if std_src.exists() {
-            let std_dst = iso_root.join("lib/libstd.so");
-            sh.create_dir(std_dst.parent().unwrap())?;
-            sh.copy_file(&std_src, &std_dst)?;
-        }
+    let std_src = cwd.join(format!(
+        "build/x86_64-unknown-linux-gnu/stage1-std/{target_name}/release/libstd.so"
+    ));
+    if std_src.exists() {
+        let std_dst = iso_root.join("lib/libstd.so");
+        sh.create_dir(std_dst.parent().unwrap())?;
+        sh.copy_file(&std_src, &std_dst)?;
     }
 
     stage_rustc_for_iso(sh, iso_root)?;

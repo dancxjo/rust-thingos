@@ -14,7 +14,9 @@
     "panic-strategy": "abort",
     "position-independent-executables": false,
     "static-position-independent-executables": false,
-    "relocation-model": "static",
+    "relocation-model": "pic",
+    "dynamic-linking": true,
+    "tls-model": "initial-exec",
     "llvm-abiname": "lp64d",
     "executables": true,
     "has-thread-local": true

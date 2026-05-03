@@ -424,29 +424,37 @@ unsafe fn allocate_stack(reserve_bytes: usize) -> crate::io::Result<(usize, Stac
 
 /// Allocate a per-thread TLS block from the process TLS template.
 ///
-/// Returns the Thread Pointer (TP = FS_BASE value) on success, or `0` when:
+/// Returns the Thread Pointer (TP = FS_BASE value on x86_64, TP register on others)
+/// on success, or `0` when:
 /// - the process has no `PT_TLS` segment (no thread-local variables), or
 /// - memory allocation fails.
 ///
-/// The block layout follows the ELF Variant II model used on x86_64:
-/// ```text
-/// [ TLS data area (memsz bytes, negative offsets from TP) ][ TCB (16 bytes) ]
-///  ^block_addr                                              ^TP = thread pointer
-/// ```
-/// The mandatory ELF Variant II self-pointer `*TP = TP` is written before
-/// passing `TP` to `SYS_SPAWN_THREAD`.
+/// The block layout depends on the architecture's ELF TLS variant:
+/// - x86_64: Variant II (data area before TCB, negative offsets from TP)
+/// - aarch64, riscv64, loongarch64: Variant I (TCB before data area, positive offsets from TP)
 pub(crate) fn allocate_tls_block() -> usize {
     let info = match read_tls_info() {
         Some(i) if i.memsz > 0 => i,
         _ => return 0,
     };
 
-    // Match ELF TLS offsets with a conservative 16-byte minimum alignment.
-    let tls_align = info.align.max(16);
-    // Keep TP-relative layout identical to the ELF PT_TLS definition.
-    let data_size = info.memsz;
-    let tcb_size = 16usize; // Variant II TCB: self-pointer (u64) + DTV slot (u64)
-    let total = data_size + tcb_size;
+    let tcb_size = 16usize; // Minimal TCB: self-pointer + DTV/reserved slot
+
+    #[cfg(target_arch = "x86_64")]
+    let (total, tp_offset, data_offset) = {
+        // Variant II: [ data area ][ TCB ]
+        // The data area is at negative offsets from TP.
+        let data_size = align_up(info.memsz, info.align.max(16));
+        (data_size + tcb_size, data_size, 0)
+    };
+
+    #[cfg(any(target_arch = "aarch64", target_arch = "riscv64", target_arch = "loongarch64"))]
+    let (total, tp_offset, data_offset) = {
+        // Variant I: [ TCB ][ data area ]
+        // The data area is at positive offsets from TP.
+        let data_offset = align_up(tcb_size, info.align.max(16));
+        (data_offset + info.memsz, 0, data_offset)
+    };
 
     // Allocate zeroed R+W anonymous memory for the TLS block.
     let mut req = VmMapReqAnon {
@@ -475,9 +483,8 @@ pub(crate) fn allocate_tls_block() -> usize {
         return 0;
     }
     let block_addr = resp.addr;
-
-    // Thread Pointer = start of TCB, immediately after the TLS data area.
-    let tp = block_addr + data_size;
+    let tp = block_addr + tp_offset;
+    let data_addr = block_addr + data_offset;
 
     // Copy the TLS initialization image (only filesz bytes; remainder stays 0).
     if info.filesz > 0 && info.template_va != 0 {
@@ -485,13 +492,13 @@ pub(crate) fn allocate_tls_block() -> usize {
         unsafe {
             core::ptr::copy_nonoverlapping(
                 crate::ptr::with_exposed_provenance::<u8>(info.template_va),
-                crate::ptr::with_exposed_provenance_mut::<u8>(block_addr),
+                crate::ptr::with_exposed_provenance_mut::<u8>(data_addr),
                 copy_len,
             );
         }
     }
 
-    // Initialize Variant II TCB anchor words.
+    // Initialize TCB anchor words.
     // Word 0 is the required self-pointer; word 1 is the initial DTV slot.
     unsafe {
         core::ptr::write(crate::ptr::with_exposed_provenance_mut::<usize>(tp), tp);

@@ -16,6 +16,7 @@
     "static-position-independent-executables": false,
     "relocation-model": "pic",
     "dynamic-linking": true,
+    "tls-model": "initial-exec",
     "features": "+strict-align,+v8a",
     "executables": true,
     "has-thread-local": true
