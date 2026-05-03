@@ -218,11 +218,18 @@ fn default_stylable_for(descriptions: &[Description]) -> Stylable {
                 | Description::ApplicationGrid
                 | Description::ApplicationRow
                 | Description::ApplicationTile
+                | Description::WindowChrome
+                | Description::WindowFrame
+                | Description::Titlebar
+                | Description::WindowContent
+                | Description::ResizeEdge
         )
     }) {
         stylable.properties.push(StyleProperty::BackgroundColor);
     }
-    if descriptions.contains(&Description::Textual) || descriptions.contains(&Description::Logogram)
+    if descriptions.contains(&Description::Textual)
+        || descriptions.contains(&Description::Logogram)
+        || descriptions.contains(&Description::Title)
     {
         stylable.properties.extend_from_slice(&[
             StyleProperty::Color,

@@ -90,6 +90,10 @@ pub fn set_cmdline(cmdline: String) {
     *KERNEL_CMDLINE.lock() = Some(cmdline);
 }
 
+pub fn cmdline() -> Option<String> {
+    KERNEL_CMDLINE.lock().clone()
+}
+
 // ── DevFs driver ─────────────────────────────────────────────────────────────
 
 /// The device filesystem driver.  Mounted at `/dev` by `vfs::init`.

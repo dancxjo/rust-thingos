@@ -7,7 +7,7 @@ use pistil_types::Texture;
 
 use crate::display::DisplayBackend;
 use crate::scene::{ChromeButton, CompositionEntry, CursorKind, SurfaceChrome};
-use crate::theme::{UiTheme, default_theme, theme_by_name};
+use crate::theme::{ChromeStyle, UiTheme, default_theme, theme_by_name};
 
 const PISTIL_PATH: &str = "/lib/libpistil.so";
 const PREPARE_BACKGROUND_SYMBOL: &[u8] = b"pistil_prepare_background";
@@ -379,7 +379,7 @@ impl CompositorVisuals {
             return false;
         }
 
-        let mut clear_fade = false;
+        let mut empty_fade = false;
         let mut complete = false;
         {
             let Some(background) = self.background.as_mut() else {
@@ -390,12 +390,13 @@ impl CompositorVisuals {
                 return false;
             };
             let dst = background._texture.as_slice_mut();
-            if dst.len() != fade.pixels.len() {
-                clear_fade = true;
+            let len = dst.len().min(fade.pixels.len());
+            if len == 0 {
+                empty_fade = true;
             } else {
                 let alpha = (u32::from(fade.frame).saturating_mul(255)
                     / u32::from(WALLPAPER_FADE_FRAMES)) as u8;
-                write_wallpaper_fade_frame(dst, &fade.pixels, alpha);
+                write_wallpaper_fade_frame(&mut dst[..len], &fade.pixels[..len], alpha);
                 if fade.frame >= WALLPAPER_FADE_FRAMES {
                     complete = true;
                 } else {
@@ -404,7 +405,7 @@ impl CompositorVisuals {
             }
         }
 
-        if clear_fade {
+        if empty_fade {
             self.background_fade = None;
             return false;
         }
@@ -1563,16 +1564,30 @@ fn draw_chrome_overlay(
             if entry.active { theme.control_icon } else { theme.control_icon_inactive };
         let titlebar_height = chrome.titlebar_height.min(theme.titlebar_height).min(h);
 
-        draw_facet_window_frame(
-            dst,
-            stride,
-            height,
-            rect,
-            frame,
-            titlebar_height,
-            entry.active,
-            theme,
-        );
+        let window_hovered = rect_contains(rect, pointer_x, pointer_y);
+        match theme.chrome_style {
+            ChromeStyle::Facet => draw_facet_window_frame(
+                dst,
+                stride,
+                height,
+                rect,
+                frame,
+                titlebar_height,
+                entry.active,
+                theme,
+            ),
+            ChromeStyle::Ghost => draw_ghost_window_frame(
+                dst,
+                stride,
+                height,
+                rect,
+                frame,
+                titlebar_height,
+                entry.active,
+                window_hovered,
+                theme,
+            ),
+        }
 
         if titlebar_height > 0 {
             draw_chrome_buttons(
@@ -1859,6 +1874,83 @@ fn draw_facet_window_frame(
             2,
             2,
             theme.focus_accent,
+        );
+    }
+}
+
+fn draw_ghost_window_frame(
+    dst: &mut [u32],
+    stride: u32,
+    height: u32,
+    rect: abi::display_protocol::Rect,
+    frame: u32,
+    titlebar_height: u32,
+    active: bool,
+    hovered: bool,
+    theme: UiTheme,
+) {
+    let x = rect.x as i32;
+    let y = rect.y as i32;
+    let w = rect.w;
+    let h = rect.h;
+    if w == 0 || h == 0 || frame == 0 {
+        return;
+    }
+
+    let state = if active { theme.active } else { theme.inactive };
+    let show_frame = hovered;
+    let show_title_surface = active || hovered;
+
+    if titlebar_height > 0 && show_title_surface {
+        fill_vertical_gradient(
+            dst,
+            stride,
+            height,
+            x,
+            y,
+            w,
+            titlebar_height,
+            state.title_top,
+            state.title_bottom,
+        );
+        let sep_y = y.saturating_add(titlebar_height as i32).saturating_sub(1);
+        let rule = if active { theme.title_rule_active } else { theme.title_rule_inactive };
+        fill_rect_i32(dst, stride, height, x, sep_y, w as i32, 1, rule);
+    }
+
+    if active {
+        draw_top_glow_strip(dst, stride, height, x + 2, y, w.saturating_sub(4), theme);
+    }
+
+    if !show_frame {
+        return;
+    }
+
+    draw_rect_stroke(dst, stride, height, x, y, w, h, 1, theme.outer_stroke);
+    if w > frame.saturating_mul(2) && h > titlebar_height.saturating_add(frame) {
+        let inner = if active { theme.inner_stroke } else { theme.inner_stroke_inactive };
+        let body_y = y.saturating_add(titlebar_height as i32);
+        let bottom_y = y + h.saturating_sub(frame) as i32;
+        fill_rect_i32(dst, stride, height, x + frame as i32 - 1, body_y, 1, h as i32, inner);
+        fill_rect_i32(
+            dst,
+            stride,
+            height,
+            x + w.saturating_sub(frame) as i32,
+            body_y,
+            1,
+            h as i32,
+            inner,
+        );
+        fill_rect_i32(
+            dst,
+            stride,
+            height,
+            x + frame as i32,
+            bottom_y,
+            w.saturating_sub(frame * 2) as i32,
+            1,
+            inner,
         );
     }
 }

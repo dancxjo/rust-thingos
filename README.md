@@ -262,6 +262,25 @@ echo /share/wallpapers/flower.png > /session/desktop/wallpaper
 echo Solarized Warm > /session/desktop/theme
 ```
 
+Bloom watches `/session/desktop/theme`, so window chrome themes can be changed
+from the in-guest shell without restarting the compositor:
+
+```sh
+echo "Ghost Flower" > /session/desktop/theme
+echo "Solar Warm Spine" > /session/desktop/theme
+echo "Leather Grain" > /session/desktop/theme
+echo "Linen Light" > /session/desktop/theme
+```
+
+The bundled wallpaper aliases select matching chrome:
+
+```sh
+echo flower.png > /session/desktop/theme
+echo flower.bmp > /session/desktop/theme
+echo leather.bmp > /session/desktop/theme
+echo linen.bmp > /session/desktop/theme
+```
+
 ## Testing Philosophy
 
 Behavior tests are part of the design process, not a reporting afterthought.

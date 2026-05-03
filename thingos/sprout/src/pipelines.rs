@@ -35,6 +35,10 @@ fn read_trimmed_text(path: &str) -> Option<String> {
     if s.is_empty() { None } else { Some(s.to_string()) }
 }
 
+fn read_boot_cmdline() -> Option<String> {
+    read_trimmed_text("/sys/boot/cmdline").or_else(|| read_trimmed_text("/dev/cmdline"))
+}
+
 pub fn select_shell() -> String {
     for cfg in ["/run/sprout/shell", "/etc/default/shell"] {
         if let Some(candidate) = read_trimmed_text(cfg) {
@@ -113,13 +117,19 @@ pub fn spawn_shell() -> Option<u64> {
     spawn_shell_path(&shell_path, "/dev/console")
 }
 
+pub fn spawn_kernel_terminal_shell() -> Option<u64> {
+    let shell_path = select_shell();
+    info!("Kernel terminal requested; launching shell on /dev/tty0");
+    spawn_shell_path(&shell_path, "/dev/tty0")
+}
+
 pub fn spawn_safe_shell() -> Option<u64> {
     info!("Safe shell requested; launching /bin/sh on /dev/tty0");
     spawn_shell_path("/bin/sh", "/dev/tty0")
 }
 
 pub fn safe_shell_requested() -> bool {
-    let Some(cmdline) = read_trimmed_text("/sys/boot/cmdline") else {
+    let Some(cmdline) = read_boot_cmdline() else {
         return false;
     };
 
@@ -152,7 +162,7 @@ pub fn safe_shell_requested() -> bool {
 }
 
 pub fn kernel_terminal_requested() -> bool {
-    let Some(cmdline) = read_trimmed_text("/sys/boot/cmdline") else {
+    let Some(cmdline) = read_boot_cmdline() else {
         return false;
     };
 

@@ -91,7 +91,14 @@ impl ThemeService {
     }
 
     fn arm_change_detection(&self) -> LoopAction {
-        if self.fd.is_some() { LoopAction::None } else { Self::arm_fallback_poll_timer() }
+        Self::arm_fallback_poll_timer()
+    }
+
+    fn repaint_and_arm_change_detection(&self) -> LoopAction {
+        LoopAction::RequestRepaintAndArmTimer {
+            delay: Duration::from_millis(THEME_FALLBACK_POLL_MS),
+            id: THEME_FALLBACK_POLL_TIMER,
+        }
     }
 
     fn apply_theme(&mut self, world: &mut BloomWorld) {
@@ -102,10 +109,13 @@ impl ThemeService {
         world.damage.mark_full(world.primary.width, world.primary.height);
     }
 
-    fn poll_config(&mut self, world: &mut BloomWorld) {
+    fn poll_config(&mut self, world: &mut BloomWorld) -> bool {
         let stamp = theme_config_stamp(self.config_path);
         if stamp.is_some() && stamp != self.last_stamp {
             self.apply_theme(world);
+            true
+        } else {
+            false
         }
     }
 }
@@ -134,8 +144,11 @@ impl BloomService for ThemeService {
                 LoopAction::RequestRepaint
             }
             LoopEvent::Timer(THEME_FALLBACK_POLL_TIMER) => {
-                self.poll_config(world);
-                self.arm_change_detection()
+                if self.poll_config(world) {
+                    self.repaint_and_arm_change_detection()
+                } else {
+                    self.arm_change_detection()
+                }
             }
             _ => self.arm_change_detection(),
         }

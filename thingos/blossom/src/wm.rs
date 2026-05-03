@@ -279,6 +279,10 @@ pub fn chrome_button_rects(rect: Rect, chrome: SurfaceChrome) -> Option<[(Chrome
 
     let left = right - total_w;
     let mut tree = UiTree::new().ok()?;
+    let root = tree.root();
+    if let Some(root) = tree.node_mut(root) {
+        root.descriptions.push(Description::Titlebar);
+    }
     let shade = tree.add_node(&[Description::Pressable, Description::ChromeButton]).ok()?;
     let fullscreen = tree.add_node(&[Description::Pressable, Description::ChromeButton]).ok()?;
     let close = tree.add_node(&[Description::Pressable, Description::ChromeButton]).ok()?;

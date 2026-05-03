@@ -18,3 +18,12 @@ Feature: Low-level keyboard hotkeys
     And I press f12
     And I wait for the system to boot
     Then the serial output should not contain "allocation error"
+
+  @smoke
+  @bootfb
+  @timeout-180s
+  Scenario: BootFB kernel terminal launches a framebuffer shell
+    Given the machine is started
+    When I wait for the system to boot
+    Then the serial output should contain "Kernel terminal requested; launching shell on /dev/tty0"
+    And the serial output should contain "Kernel terminal requested; skipping desktop handoff"

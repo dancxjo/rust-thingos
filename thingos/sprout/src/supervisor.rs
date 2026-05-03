@@ -12,7 +12,7 @@ use stem::{debug, info, warn};
 
 use crate::pipelines::{
     kernel_terminal_requested, safe_shell_requested, spawn_bloom, spawn_blossom, spawn_bristle,
-    spawn_chime, spawn_safe_shell, spawn_shell,
+    spawn_chime, spawn_kernel_terminal_shell, spawn_safe_shell, spawn_shell,
 };
 
 const SHELL_HEADSTART_MS: u64 = 50;
@@ -36,7 +36,7 @@ impl Supervisor {
         }
 
         let kernel_terminal = kernel_terminal_requested();
-        let shell_pid = spawn_shell();
+        let shell_pid = if kernel_terminal { spawn_kernel_terminal_shell() } else { spawn_shell() };
         let _chime_pid = spawn_chime();
         stem::sleep_ms(SHELL_HEADSTART_MS);
         info!("Continuing supervisor startup");

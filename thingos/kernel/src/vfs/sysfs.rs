@@ -31,9 +31,19 @@ impl VfsDriver for SysFs {
     fn lookup(&self, path: &str) -> SysResult<Arc<dyn VfsNode>> {
         crate::ktrace!("Looking up sysfs path '{}'", path);
         match SysPath::parse(path)? {
-            SysPath::Root => {
-                Ok(Arc::new(StaticDirNode::new(300, &["devices", "device_snapshot", "firmware"])))
+            SysPath::Root => Ok(Arc::new(StaticDirNode::new(
+                300,
+                &["boot", "devices", "device_snapshot", "firmware"],
+            ))),
+            SysPath::Boot => Ok(Arc::new(StaticDirNode::new(308, &["cmdline"]))),
+            SysPath::BootFile("cmdline") => {
+                let mut text = crate::vfs::devfs::cmdline().unwrap_or_default().into_bytes();
+                if !text.ends_with(b"\n") {
+                    text.push(b'\n');
+                }
+                Ok(Arc::new(StaticTextNode::new(text, 309)))
             }
+            SysPath::BootFile(_) => Err(Errno::ENOENT),
             SysPath::Devices => Ok(Arc::new(DevicesDirNode)),
             SysPath::DeviceSnapshot => {
                 Ok(Arc::new(StaticTextNode::new(device_snapshot_text(), 307)))
@@ -109,6 +119,8 @@ impl VfsDriver for SysFs {
 
 enum SysPath<'a> {
     Root,
+    Boot,
+    BootFile(&'a str),
     Devices,
     DeviceSnapshot,
     DeviceDir(&'a str),
@@ -127,6 +139,8 @@ impl<'a> SysPath<'a> {
 
         let mut parts = path.split('/').filter(|part| !part.is_empty());
         match (parts.next(), parts.next(), parts.next(), parts.next()) {
+            (Some("boot"), None, None, None) => Ok(Self::Boot),
+            (Some("boot"), Some(file), None, None) => Ok(Self::BootFile(file)),
             (Some("devices"), None, None, None) => Ok(Self::Devices),
             (Some("device_snapshot"), None, None, None) => Ok(Self::DeviceSnapshot),
             (Some("devices"), Some(dev), None, None) => Ok(Self::DeviceDir(dev)),

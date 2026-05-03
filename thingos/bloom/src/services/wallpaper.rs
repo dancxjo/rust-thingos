@@ -148,6 +148,17 @@ impl WallpaperService {
         if self.fd.is_some() { LoopAction::None } else { Self::arm_fallback_poll_timer() }
     }
 
+    fn repaint_and_arm_change_detection(&self) -> LoopAction {
+        if self.fd.is_some() {
+            LoopAction::RequestRepaint
+        } else {
+            LoopAction::RequestRepaintAndArmTimer {
+                delay: Duration::from_millis(WALLPAPER_FALLBACK_POLL_MS),
+                id: WALLPAPER_FALLBACK_POLL_TIMER,
+            }
+        }
+    }
+
     fn reload_background(&mut self, world: &mut BloomWorld) {
         self.initial_loaded = true;
         self.last_stamp = wallpaper_config_stamp(self.config_path);
@@ -169,10 +180,13 @@ impl WallpaperService {
         world.damage.mark_full(world.primary.width, world.primary.height);
     }
 
-    fn poll_config(&mut self, world: &mut BloomWorld) {
+    fn poll_config(&mut self, world: &mut BloomWorld) -> bool {
         let stamp = wallpaper_config_stamp(self.config_path);
         if stamp.is_some() && stamp != self.last_stamp {
             self.reload_background(world);
+            true
+        } else {
+            false
         }
     }
 }
@@ -203,12 +217,15 @@ impl BloomService for WallpaperService {
                 LoopAction::RequestRepaint
             }
             LoopEvent::Timer(WALLPAPER_FALLBACK_POLL_TIMER) => {
-                self.poll_config(world);
-                self.arm_change_detection()
+                if self.poll_config(world) {
+                    self.repaint_and_arm_change_detection()
+                } else {
+                    self.arm_change_detection()
+                }
             }
             LoopEvent::Timer(WALLPAPER_INITIAL_LOAD_TIMER) => {
                 self.load_initial_background(world);
-                self.arm_change_detection()
+                self.repaint_and_arm_change_detection()
             }
             _ => self.arm_change_detection(),
         }

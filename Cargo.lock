@@ -717,6 +717,7 @@ dependencies = [
  "pistil-types",
  "spin",
  "stem",
+ "stile",
 ]
 
 [[package]]
