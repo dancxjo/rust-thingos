@@ -201,6 +201,8 @@ pub struct WCmdSetLayerSurface {
     pub bloom_surface_id: u32,
     /// `blossom::LayerShellLayer` discriminant (0..=3).
     pub layer: u32,
+    /// `blossom::LayerKeyboardInteractivity` discriminant (0..=2).
+    pub keyboard_interactivity: u32,
     /// `zwlr_layer_surface_v1.anchor` bitfield.
     pub anchor: u32,
     pub exclusive_zone: i32,
@@ -559,6 +561,7 @@ pub fn encode_set_subsurface(
 pub fn encode_set_layer_surface(
     bloom_surface_id: u32,
     layer: u32,
+    keyboard_interactivity: u32,
     anchor: u32,
     exclusive_zone: i32,
     margin_top: i32,
@@ -568,13 +571,14 @@ pub fn encode_set_layer_surface(
     width: u32,
     height: u32,
     active: u8,
-) -> [u8; 44] {
+) -> [u8; 48] {
     let msg = WCmdSetLayerSurface {
         msg_type: WCMD_SET_LAYER_SURFACE,
         active,
         _pad: [0; 2],
         bloom_surface_id,
         layer,
+        keyboard_interactivity,
         anchor,
         exclusive_zone,
         margin_top,
@@ -584,7 +588,7 @@ pub fn encode_set_layer_surface(
         width,
         height,
     };
-    let mut out = [0u8; 44];
+    let mut out = [0u8; 48];
     out.copy_from_slice(as_bytes!(msg, WCmdSetLayerSurface));
     out
 }

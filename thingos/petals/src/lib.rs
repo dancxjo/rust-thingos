@@ -7,7 +7,9 @@ extern crate alloc;
 pub mod calc;
 pub mod clock;
 pub mod description;
+pub mod launcher;
 pub mod layout;
+pub mod logogram;
 pub mod node;
 pub mod pressable;
 pub mod service_loop;
@@ -19,7 +21,12 @@ pub use calc::{
 };
 pub use clock::{Clock, ClockNodes, ClockState};
 pub use description::Description;
+pub use launcher::{
+    ApplicationEntry, ApplicationLauncher, ApplicationLauncherNodes, ApplicationTileNode,
+    display_name_from_path, glyph_for_application,
+};
 pub use layout::{AvailableSpace, LayoutBox, Size, UiTree, apply_style_to_taffy};
+pub use logogram::{Logogram, node_glyph, node_icon_path};
 pub use node::{AttrValue, Attrs, Node, NodeId};
 pub use pressable::{InputEvent, KeyCode, PressConfig, PressEvent, PressState, Pressable, Vec2};
 pub use service_loop::{PetalsEvent, PetalsService, ServiceAction};

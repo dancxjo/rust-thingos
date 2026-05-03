@@ -2731,8 +2731,20 @@ fn dispatch_layer_surface(
             // sending a zero-everything update).  This keeps stacking sane
             // if the underlying wl_surface is later reused.
             if bloom_surface_id != 0 {
-                let cmd =
-                    ipc::encode_set_layer_surface(bloom_surface_id, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0);
+                let cmd = ipc::encode_set_layer_surface(
+                    bloom_surface_id,
+                    0,
+                    0,
+                    0,
+                    0,
+                    0,
+                    0,
+                    0,
+                    0,
+                    0,
+                    0,
+                    0,
+                );
                 let _ = stem::syscall::port_send_all(cmd_write, &cmd);
             }
             client.destroy(obj_id);
@@ -2808,6 +2820,7 @@ fn on_layer_surface_commit(
         ipc::encode_set_layer_surface(
             bloom_surface_id,
             config.layer as u32,
+            config.keyboard_interactivity as u32,
             config.anchor,
             config.exclusive_zone,
             config.margin_top,

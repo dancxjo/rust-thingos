@@ -23,6 +23,13 @@ Feature: Serial Shell Boot
     Then the command output should strictly be "relative-path-ok"
     And the command output should not contain "spawn failed"
 
+  @path
+  Scenario: Default shell path includes applications
+    Given the machine is booted
+    When I wait for the shell prompt
+    And I type "export" on the serial console
+    Then the command output should contain "PATH=/bin:/applications:/drivers"
+
   @completion
   Scenario: Tab completes a command name before execution
     Given the machine is booted

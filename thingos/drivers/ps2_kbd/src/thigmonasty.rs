@@ -210,4 +210,40 @@ mod tests {
         state.process_ps2(0xB8);
         assert_eq!(state.mods().0, 0);
     }
+
+    #[test]
+    fn test_meta_modifier_from_extended_windows_key() {
+        let mut state = KeyboardState::new();
+
+        assert!(state.process_ps2(0xE0).is_none());
+        let edge = state.process_ps2(0x5B).expect("Expected left meta down");
+        match edge {
+            KeyEdge::Down { key, mods, repeat } => {
+                assert_eq!(key, Key::LeftMeta);
+                assert!(mods.has_meta());
+                assert!(!repeat);
+            }
+            _ => panic!("Expected left meta down"),
+        }
+
+        let edge = state.process_ps2(0x13).expect("Expected R down");
+        match edge {
+            KeyEdge::Down { key, mods, repeat } => {
+                assert_eq!(key, Key::R);
+                assert!(mods.has_meta());
+                assert!(!repeat);
+            }
+            _ => panic!("Expected R down"),
+        }
+
+        assert!(state.process_ps2(0xE0).is_none());
+        let edge = state.process_ps2(0xDB).expect("Expected left meta up");
+        match edge {
+            KeyEdge::Up { key, mods } => {
+                assert_eq!(key, Key::LeftMeta);
+                assert!(!mods.has_meta());
+            }
+            _ => panic!("Expected left meta up"),
+        }
+    }
 }

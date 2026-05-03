@@ -612,6 +612,14 @@ impl InputState {
                 }
                 let wm_action =
                     blossom::input::handle_hotkey(key.key(), key.mods(), key.is_repeat());
+                if matches!(
+                    wm_action,
+                    blossom::input::WmAction::ToggleRunBox
+                        | blossom::input::WmAction::ToggleLauncher
+                ) && self.forward_shell_shortcut(scene, wayland_evt_write, key, timestamp_ns)
+                {
+                    return true;
+                }
                 if matches!(wm_action, blossom::input::WmAction::ToggleRunBox) {
                     let visible = self.runbox.toggle();
                     self.runbox_keyboard_modal = true;
@@ -690,6 +698,10 @@ impl InputState {
                         return true;
                     }
                     blossom::input::WmAction::ToggleRunBox => {}
+                    blossom::input::WmAction::ToggleLauncher => {
+                        stem::warn!("No shell surface registered for launcher shortcut");
+                        return true;
+                    }
                     blossom::input::WmAction::None => {}
                 }
                 if let Some(surface_id) = scene.keyboard_focus {
@@ -759,6 +771,43 @@ impl InputState {
             _ => {}
         }
         immediate_repaint
+    }
+
+    fn forward_shell_shortcut(
+        &self,
+        scene: &Scene,
+        wayland_evt_write: Option<u32>,
+        key: KeyEventPayload,
+        timestamp_ns: u64,
+    ) -> bool {
+        let Some(surface_id) = scene.global_shortcut_surface() else {
+            return false;
+        };
+        let Some(client_id) = scene.surface_client(surface_id) else {
+            return false;
+        };
+        let ev = KeyboardKeyEvent {
+            header: msg_header(EVT_KEYBOARD_KEY),
+            surface_id,
+            key: key.key,
+            pressed: pressed_flag(true),
+            modifiers: key.mods,
+            repeat: if key.is_repeat() { 1 } else { 0 },
+            _pad: [0; 3],
+            timestamp_ns,
+        };
+        send_client_event(scene, client_id, KIND_KEYBOARD_KEY, &to_vec(&ev));
+        send_wayland_keyboard_key(
+            wayland_evt_write,
+            surface_id,
+            key.key,
+            true,
+            key.mods,
+            key.is_repeat(),
+            timestamp_ns,
+        );
+        stem::debug!("Forwarded shell shortcut to surface {}", surface_id);
+        true
     }
 
     fn update_pointer_focus(&mut self, scene: &mut Scene, wayland_evt_write: Option<u32>) {

@@ -11,8 +11,8 @@ use stem::syscall::message::{KindId, msg_send};
 use stem::{debug, info, warn};
 
 use crate::pipelines::{
-    kernel_terminal_requested, safe_shell_requested, spawn_bloom, spawn_bristle, spawn_chime,
-    spawn_safe_shell, spawn_shell,
+    kernel_terminal_requested, safe_shell_requested, spawn_bloom, spawn_blossom, spawn_bristle,
+    spawn_chime, spawn_safe_shell, spawn_shell,
 };
 
 const SHELL_HEADSTART_MS: u64 = 50;
@@ -57,8 +57,10 @@ impl Supervisor {
         self.activate_boot_roots();
         if !kernel_terminal {
             // Now that the root filesystem is populated (display drivers, fonts, etc),
-            // we can launch the bloom compositor.
+            // we can launch the bloom compositor and the Blossom shell that
+            // owns window-management UI over Wayland.
             let _bloom_pid = spawn_bloom();
+            let _blossom_pid = spawn_blossom();
         }
 
         self.wait_for_shell(shell_pid);

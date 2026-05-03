@@ -348,20 +348,21 @@ impl WaylandCommandService {
     /// renders without a titlebar/frame regardless of the default applied at
     /// `WCMD_CREATE_SURFACE` time.
     fn handle_set_layer_surface(&mut self, data: &[u8], world: &mut BloomWorld) -> bool {
-        if data.len() < 44 {
+        if data.len() < 48 {
             return false;
         }
         let active = data[1] != 0;
         let bloom_surface_id = u32::from_ne_bytes(data[4..8].try_into().unwrap_or([0; 4]));
         let layer = u32::from_ne_bytes(data[8..12].try_into().unwrap_or([0; 4]));
-        let anchor = u32::from_ne_bytes(data[12..16].try_into().unwrap_or([0; 4]));
-        let exclusive_zone = i32::from_ne_bytes(data[16..20].try_into().unwrap_or([0; 4]));
-        let margin_top = i32::from_ne_bytes(data[20..24].try_into().unwrap_or([0; 4]));
-        let margin_right = i32::from_ne_bytes(data[24..28].try_into().unwrap_or([0; 4]));
-        let margin_bottom = i32::from_ne_bytes(data[28..32].try_into().unwrap_or([0; 4]));
-        let margin_left = i32::from_ne_bytes(data[32..36].try_into().unwrap_or([0; 4]));
-        let width = u32::from_ne_bytes(data[36..40].try_into().unwrap_or([0; 4]));
-        let height = u32::from_ne_bytes(data[40..44].try_into().unwrap_or([0; 4]));
+        let keyboard_interactivity = u32::from_ne_bytes(data[12..16].try_into().unwrap_or([0; 4]));
+        let anchor = u32::from_ne_bytes(data[16..20].try_into().unwrap_or([0; 4]));
+        let exclusive_zone = i32::from_ne_bytes(data[20..24].try_into().unwrap_or([0; 4]));
+        let margin_top = i32::from_ne_bytes(data[24..28].try_into().unwrap_or([0; 4]));
+        let margin_right = i32::from_ne_bytes(data[28..32].try_into().unwrap_or([0; 4]));
+        let margin_bottom = i32::from_ne_bytes(data[32..36].try_into().unwrap_or([0; 4]));
+        let margin_left = i32::from_ne_bytes(data[36..40].try_into().unwrap_or([0; 4]));
+        let width = u32::from_ne_bytes(data[40..44].try_into().unwrap_or([0; 4]));
+        let height = u32::from_ne_bytes(data[44..48].try_into().unwrap_or([0; 4]));
 
         if bloom_surface_id == 0 {
             return false;
@@ -371,6 +372,11 @@ impl WaylandCommandService {
             // Surface is no longer a layer surface — clear its layer-shell
             // placement contribution.  We deliberately do not destroy the
             // scene surface (the underlying wl_surface remains live).
+            let _ = world.scene.set_surface_keyboard_interactivity(
+                self.wayland_client_id,
+                bloom_surface_id,
+                blossom::LayerKeyboardInteractivity::None,
+            );
             debug!("wayland-cmd: layer-surface deactivated id={}", bloom_surface_id);
             return false;
         }
@@ -385,12 +391,24 @@ impl WaylandCommandService {
                 return false;
             }
         };
+        let keyboard_interactivity = match blossom::LayerKeyboardInteractivity::from_wire(
+            keyboard_interactivity,
+        ) {
+            Some(mode) => mode,
+            None => {
+                warn!(
+                    "wayland-cmd: invalid layer-shell keyboard interactivity value={} (surface={})",
+                    keyboard_interactivity, bloom_surface_id
+                );
+                return false;
+            }
+        };
         let cfg = blossom::LayerSurfaceConfig {
             layer: layer_enum,
             anchor,
             size: (width, height),
             exclusive_zone,
-            keyboard_interactivity: blossom::layer_shell::LayerKeyboardInteractivity::None,
+            keyboard_interactivity,
             margin_top,
             margin_right,
             margin_bottom,
@@ -405,6 +423,11 @@ impl WaylandCommandService {
             self.wayland_client_id,
             bloom_surface_id,
             SurfaceChrome { titlebar_height: 0, frame_thickness: 0 },
+        );
+        let _ = world.scene.set_surface_keyboard_interactivity(
+            self.wayland_client_id,
+            bloom_surface_id,
+            keyboard_interactivity,
         );
 
         if p.x < 0 || p.y < 0 {
@@ -595,7 +618,7 @@ fn wayland_command_len(data: &[u8]) -> Option<usize> {
         ipc::WCMD_SET_CHROME => 16,
         ipc::WCMD_SET_TITLE => 8 + ipc::MAX_TITLE_BYTES,
         ipc::WCMD_SET_SUBSURFACE => 24,
-        ipc::WCMD_SET_LAYER_SURFACE => 44,
+        ipc::WCMD_SET_LAYER_SURFACE => 48,
         ipc::WCMD_SET_OPAQUE_REGION => 24,
         ipc::WCMD_SET_INPUT_REGION => 24,
         ipc::WCMD_DRAMATIC_CLOSE_SURFACE => 8,

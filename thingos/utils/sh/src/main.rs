@@ -20,6 +20,7 @@ use stem::syscall;
 use stem::syscall::{signal, vfs};
 
 const TTY_FD: u32 = 0;
+const DEFAULT_PATH: &str = "/bin:/applications:/drivers";
 
 #[derive(Clone, Copy, PartialEq, Eq)]
 enum ProcessState {
@@ -224,13 +225,16 @@ impl Shell {
         // The shell remains usable for BDD command execution even if session
         // leadership is not established immediately.
         let shell_pgid = signal::getpgrp().unwrap_or(shell_pid as i32) as u32;
+        let mut env = BTreeMap::new();
+        env.insert(String::from("PATH"), String::from(DEFAULT_PATH));
+
         Self {
             shell_pgid,
             jobs: Vec::new(),
             next_job_id: 1,
             last_foreground_status: None,
             aliases: BTreeMap::new(),
-            env: BTreeMap::new(),
+            env,
             history: Vec::new(),
         }
     }
@@ -1119,7 +1123,7 @@ fn spawn_job(
     let bg_in = if background { Some(open_read("/dev/null")?) } else { None };
     let bg_out = if background { Some(open_write("/dev/null", false)?) } else { None };
 
-    let path_env = env_map.get("PATH").map(|s| s.as_str()).unwrap_or("/bin:/applications:/drivers");
+    let path_env = env_map.get("PATH").map(|s| s.as_str()).unwrap_or(DEFAULT_PATH);
     let path_prefixes: Vec<&str> = path_env.split(':').collect();
 
     let mut spawned = Vec::new();

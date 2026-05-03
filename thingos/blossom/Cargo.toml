@@ -8,6 +8,13 @@ license = "MIT OR Apache-2.0"
 [lib]
 path = "src/lib.rs"
 
+[[bin]]
+name = "blossom"
+path = "src/main.rs"
+test = false
+doctest = false
+
 [dependencies]
 petals = { path = "../petals" }
 abi = { path = "../abi" }
+stem = { path = "../stem", features = ["rt", "global-alloc"] }

@@ -34,4 +34,12 @@ pub enum Description {
     RunLabel,
     TextField,
     SubmitButton,
+    Logogram,
+    ApplicationLauncher,
+    ApplicationGrid,
+    ApplicationRow,
+    ApplicationTile,
+    ApplicationName,
+    ApplicationPath,
+    ApplicationStatus,
 }

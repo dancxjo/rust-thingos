@@ -29,6 +29,8 @@ pub fn ps2_to_key(scancode: u8, extended: bool) -> Key {
             0x53 => Key::Delete,
             0x1D => Key::RightCtrl,
             0x38 => Key::RightAlt,
+            0x5B => Key::LeftMeta,
+            0x5C => Key::RightMeta,
             _ => Key::Unknown,
         }
     } else {

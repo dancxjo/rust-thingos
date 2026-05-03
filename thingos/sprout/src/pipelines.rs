@@ -10,6 +10,7 @@ use stem::{debug, info, warn};
 
 const BLOOM_SPAWN_ATTEMPTS: usize = 3;
 const BLOOM_SPAWN_RETRY_MS: u64 = 250;
+const DEFAULT_PATH: &[u8] = b"/bin:/applications:/drivers";
 
 fn file_exists(path: &str) -> bool {
     match vfs_open(path, O_RDONLY) {
@@ -78,6 +79,7 @@ fn spawn_shell_path(shell_path: &str, stdio_path: &str) -> Option<u64> {
 
     let mut env = BTreeMap::new();
     env.insert(b"SHELL".to_vec(), shell_path.as_bytes().to_vec());
+    env.insert(b"PATH".to_vec(), DEFAULT_PATH.to_vec());
 
     let result = stem::syscall::spawn_process_ex(
         shell_path,
@@ -259,4 +261,24 @@ pub fn spawn_bloom() -> Option<u64> {
     }
 
     None
+}
+
+pub fn spawn_blossom() -> Option<u64> {
+    let path = "/services/blossom";
+    let argv: [&[u8]; 1] = [path.as_bytes()];
+    let env = BTreeMap::new();
+    let inherit = abi::types::stdio_mode::INHERIT;
+    let null = abi::types::stdio_mode::NULL;
+
+    match stem::syscall::spawn_process_ex(path, &argv, &env, null, inherit, inherit, 0, &[]) {
+        Ok(resp) => {
+            let pid = resp.child_tid;
+            debug!("Spawned blossom with PID {}", pid);
+            Some(pid)
+        }
+        Err(err) => {
+            warn!("SPROUT: failed to spawn blossom: {:?}", err);
+            None
+        }
+    }
 }

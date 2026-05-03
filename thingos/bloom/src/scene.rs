@@ -101,6 +101,7 @@ pub struct Surface {
     pub mapped: bool,
     pub visible: bool,
     pub focus_eligible: bool,
+    pub keyboard_interactivity: blossom::LayerKeyboardInteractivity,
     pub chrome: SurfaceChrome,
     pub title: Option<String>,
     pub frame_serial: u64,
@@ -232,6 +233,7 @@ impl Scene {
                 mapped: false,
                 visible: true,
                 focus_eligible: true,
+                keyboard_interactivity: blossom::LayerKeyboardInteractivity::None,
                 chrome: SurfaceChrome::default(),
                 title: None,
                 frame_serial: 0,
@@ -899,6 +901,50 @@ impl Scene {
             }
         }
         Some(surface.current.dest_rect)
+    }
+
+    pub fn set_surface_keyboard_interactivity(
+        &mut self,
+        client_id: u32,
+        surface_id: u32,
+        mode: blossom::LayerKeyboardInteractivity,
+    ) -> bool {
+        let Some(surface) = self.surfaces.get_mut(&surface_id) else {
+            return false;
+        };
+        if surface.client_id != client_id {
+            return false;
+        }
+        surface.keyboard_interactivity = mode;
+        match mode {
+            blossom::LayerKeyboardInteractivity::Exclusive => {
+                self.keyboard_focus = Some(surface_id);
+            }
+            blossom::LayerKeyboardInteractivity::None
+                if self.keyboard_focus == Some(surface_id) =>
+            {
+                self.keyboard_focus = None;
+            }
+            blossom::LayerKeyboardInteractivity::None
+            | blossom::LayerKeyboardInteractivity::OnDemand => {}
+        }
+        true
+    }
+
+    pub fn global_shortcut_surface(&self) -> Option<u32> {
+        self.surfaces
+            .values()
+            .filter(|surface| {
+                surface.visible
+                    && surface.mapped
+                    && surface.dramatic_close.is_none()
+                    && !matches!(
+                        surface.keyboard_interactivity,
+                        blossom::LayerKeyboardInteractivity::None
+                    )
+            })
+            .max_by_key(|surface| surface.current.z_order)
+            .map(|surface| surface.id)
     }
 
     pub fn surface_snapshots(&self) -> Vec<SurfaceSnapshot> {

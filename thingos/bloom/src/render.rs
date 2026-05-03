@@ -446,6 +446,9 @@ impl CompositorVisuals {
         if let Some(old) = self.pointer_overlay.take() {
             display.release_buffer(old.buffer_id);
         }
+        if let Some(old) = self.runbox_overlay.take() {
+            display.release_buffer(old.buffer_id);
+        }
     }
 
     pub fn fallback_buffer_id(&self) -> Option<u32> {

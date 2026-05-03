@@ -214,11 +214,16 @@ fn default_stylable_for(descriptions: &[Description]) -> Stylable {
                 | Description::ModeToggle
                 | Description::RunBox
                 | Description::TextField
+                | Description::ApplicationLauncher
+                | Description::ApplicationGrid
+                | Description::ApplicationRow
+                | Description::ApplicationTile
         )
     }) {
         stylable.properties.push(StyleProperty::BackgroundColor);
     }
-    if descriptions.contains(&Description::Textual) {
+    if descriptions.contains(&Description::Textual) || descriptions.contains(&Description::Logogram)
+    {
         stylable.properties.extend_from_slice(&[
             StyleProperty::Color,
             StyleProperty::FontFamily,
