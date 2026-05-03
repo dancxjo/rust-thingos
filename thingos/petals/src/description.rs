@@ -48,4 +48,9 @@ pub enum Description {
     ApplicationName,
     ApplicationPath,
     ApplicationStatus,
+    Showcase,
+    ShowcasePanel,
+    ShowcaseHeader,
+    ShowcaseSwatch,
+    ShowcaseStateStrip,
 }

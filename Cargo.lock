@@ -2170,6 +2170,16 @@ dependencies = [
 ]
 
 [[package]]
+name = "display_amd_gpu"
+version = "0.1.0"
+dependencies = [
+ "abi",
+ "display_bootfb",
+ "ipc_helpers",
+ "stem",
+]
+
+[[package]]
 name = "display_bootfb"
 version = "0.1.0"
 dependencies = [
@@ -10545,6 +10555,7 @@ name = "wayland_hello"
 version = "0.1.0"
 dependencies = [
  "libdl",
+ "petals",
  "pistil-types",
  "stem",
 ]

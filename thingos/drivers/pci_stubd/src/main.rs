@@ -109,7 +109,7 @@ struct PciRule {
     prog_if: Option<u8>,
 }
 
-const RULES: [PciRule; 6] = [
+const RULES: [PciRule; 5] = [
     // Discrete NVIDIA mobile GPUs (exact GA107M id + class fallback for this vendor/class)
     PciRule {
         name: "nvidia-ga107m-gpu",
@@ -123,15 +123,6 @@ const RULES: [PciRule; 6] = [
         name: "nvidia-display-fallback",
         vendor_id: 0x10de,
         device_id: None,
-        class_code: CLASS_DISPLAY,
-        subclass: None,
-        prog_if: None,
-    },
-    // AMD iGPU (Rembrandt class)
-    PciRule {
-        name: "amd-rembrandt-igpu",
-        vendor_id: 0x1002,
-        device_id: Some(0x1681),
         class_code: CLASS_DISPLAY,
         subclass: None,
         prog_if: None,

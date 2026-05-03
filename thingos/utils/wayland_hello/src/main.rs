@@ -3,16 +3,23 @@
 use core::default::Default;
 extern crate alloc;
 
+use alloc::string::String;
 use alloc::vec::Vec;
 use core::sync::atomic::{AtomicU32, Ordering};
 
 use libdl::{RTLD_NOW, dlerror, dlopen_str, dlsym_bytes};
+use petals::{
+    AlignItems, AttrValue, Description, JustifyContent, NodeId, PetalsEvent, PetalsShowcase,
+    ShowcaseComponent, ShowcaseServices, State, UiTree,
+};
 use pistil_types::Texture;
 use stem::info;
+use stem::service_loop::{ServiceEvent, ServiceLoop};
 use stem::syscall::socket::{connect, sendmsg, socket};
 use stem::syscall::socket_domain::AF_UNIX;
 use stem::syscall::socket_type::SOCK_STREAM;
 use stem::syscall::{exit, sleep_ms, vfs_close, vfs_read, vfs_write};
+use stem::time::Duration;
 
 const REGISTRY_ID: u32 = 2;
 const COMPOSITOR_ID: u32 = 3;
@@ -46,6 +53,7 @@ const DEFAULT_FONT_PATH: &str = "/public/fonts/Inter-Regular.ttf";
 type DrawTextFn = extern "C" fn(*const u8, *mut u32, u32, u32, u32, i32, i32, f32, u32) -> i32;
 
 static POINTER_MOTION_LOGS: AtomicU32 = AtomicU32::new(0);
+static SHOWCASE_RENDER_LOGS: AtomicU32 = AtomicU32::new(0);
 
 struct TextRenderer {
     _handle: *mut core::ffi::c_void,
@@ -57,7 +65,6 @@ struct BufferState {
     texture: Texture,
     width: u32,
     height: u32,
-    stride: u32,
 }
 
 #[derive(Clone, Copy, Default)]
@@ -77,6 +84,24 @@ struct PendingSurface {
 fn main(_arg: usize) -> ! {
     let fd = connect_wayland();
     let text_renderer = load_text_renderer();
+    let mut app_loop = match ServiceLoop::new(4096) {
+        Ok(loop_) => loop_,
+        Err(e) => {
+            stem::error!("wayland_hello: ServiceLoop::new failed: {:?}", e);
+            idle_forever();
+        }
+    };
+    app_loop.set_name("wayland_hello");
+    let wayland_token = match app_loop.add_fd_readable(fd) {
+        Ok(token) => token,
+        Err(e) => {
+            stem::error!("wayland_hello: failed to register Wayland fd: {:?}", e);
+            idle_forever();
+        }
+    };
+    info!("wayland_hello: service loop started");
+    let showcase = PetalsShowcase::default();
+    let mut showcase_services = ShowcaseServices::default();
 
     send_get_registry(fd, REGISTRY_ID);
     let globals = read_initial_globals(fd);
@@ -132,8 +157,8 @@ fn main(_arg: usize) -> ! {
     set_toplevel_app_id(fd, TOPLEVEL_ID, "thingos.wayland_hello");
     commit_surface(fd, TOP_SURFACE_ID);
 
-    let mut top_pending = PendingSurface { serial: None, width: 480, height: 320, dirty: false };
-    let mut popup_pending = PendingSurface { serial: None, width: 160, height: 96, dirty: false };
+    let mut top_pending = PendingSurface { serial: None, width: 760, height: 560, dirty: false };
+    let mut popup_pending = PendingSurface { serial: None, width: 260, height: 150, dirty: false };
     let mut top_buffer: Option<BufferState> = None;
     let mut popup_buffer: Option<BufferState> = None;
     let mut popup_created = false;
@@ -142,13 +167,27 @@ fn main(_arg: usize) -> ! {
     let mut pending_presentation_feedbacks: Vec<u32> = Vec::new();
 
     loop {
+        let wayland_ready = match app_loop.next_event(Some(Duration::from_millis(16))) {
+            Ok(ServiceEvent::Ready { token, .. }) if token == wayland_token => true,
+            Ok(ServiceEvent::InboxClosed) => {
+                info!("wayland_hello: inbox closed; exiting");
+                exit(0);
+            }
+            Ok(ServiceEvent::Message { .. }) | Ok(ServiceEvent::Timeout) => false,
+            Ok(ServiceEvent::Ready { .. }) => false,
+            Err(e) => {
+                stem::warn!("wayland_hello: service loop wait failed: {:?}", e);
+                false
+            }
+        };
+        if !wayland_ready {
+            continue;
+        }
+
         let mut in_buf = [0u8; 4096];
         let len = match vfs_read(fd, &mut in_buf) {
             Ok(n) if n > 0 => n,
-            _ => {
-                sleep_ms(16);
-                continue;
-            }
+            _ => continue,
         };
 
         let mut offset = 0usize;
@@ -289,7 +328,7 @@ fn main(_arg: usize) -> ! {
                 top_pending.width,
                 top_pending.height,
             );
-            render_window(buffer, title, text_renderer.as_ref());
+            render_window(buffer, title, &showcase, &mut showcase_services, text_renderer.as_ref());
             ack_configure(fd, TOP_XDG_SURFACE_ID, top_pending.serial.unwrap_or(0));
             attach_buffer(fd, TOP_SURFACE_ID, buffer.buffer_id);
             damage_surface(fd, TOP_SURFACE_ID, 0, 0, top_pending.width, top_pending.height);
@@ -309,7 +348,7 @@ fn main(_arg: usize) -> ! {
                 create_surface(fd, COMPOSITOR_ID, POPUP_SURFACE_ID);
                 get_xdg_surface(fd, WM_BASE_ID, POPUP_XDG_SURFACE_ID, POPUP_SURFACE_ID);
                 create_positioner(fd, WM_BASE_ID, POSITIONER_ID);
-                positioner_set_size(fd, POSITIONER_ID, 160, 96);
+                positioner_set_size(fd, POSITIONER_ID, 260, 150);
                 positioner_set_anchor_rect(fd, POSITIONER_ID, 24, 24, 100, 24);
                 positioner_set_offset(fd, POSITIONER_ID, 0, 6);
                 get_popup(fd, TOP_XDG_SURFACE_ID, POPUP_XDG_SURFACE_ID, POPUP_ID, POSITIONER_ID);
@@ -327,7 +366,13 @@ fn main(_arg: usize) -> ! {
                 popup_pending.width,
                 popup_pending.height,
             );
-            render_popup(buffer, "Fresh pixels", text_renderer.as_ref());
+            render_popup(
+                buffer,
+                "Petals services",
+                &showcase,
+                &mut showcase_services,
+                text_renderer.as_ref(),
+            );
             ack_configure(fd, POPUP_XDG_SURFACE_ID, popup_pending.serial.unwrap_or(0));
             attach_buffer(fd, POPUP_SURFACE_ID, buffer.buffer_id);
             damage_surface(fd, POPUP_SURFACE_ID, 0, 0, popup_pending.width, popup_pending.height);
@@ -453,84 +498,438 @@ fn ensure_buffer(
         create_buffer(fd, pool_id, buffer_id, width, height, texture.stride);
     }
 
-    *current = Some(BufferState { buffer_id, width, height, stride: texture.stride, texture });
+    *current = Some(BufferState { buffer_id, width, height, texture });
     current.as_mut().unwrap()
 }
 
-fn render_window(buffer: &mut BufferState, title: &str, text_renderer: Option<&TextRenderer>) {
+fn render_window(
+    buffer: &mut BufferState,
+    title: &str,
+    showcase: &PetalsShowcase,
+    services: &mut ShowcaseServices,
+    text_renderer: Option<&TextRenderer>,
+) {
     let width = buffer.width;
     let height = buffer.height;
     let pixels = buffer.texture.as_slice_mut();
-    paint_vertical_gradient(pixels, width, height, 0xFFFFF9EC, 0xFFFDF1D2);
-    draw_text(text_renderer, pixels, width, height, 10, 23, 13.0, title, 0xFF3F3A2F);
+    pixels.fill(showcase.theme.body_top);
+
+    if SHOWCASE_RENDER_LOGS.fetch_add(1, Ordering::Relaxed) == 0 {
+        info!("wayland_hello: petals and stile showcase rendering");
+    }
+
     draw_text(
         text_renderer,
         pixels,
         width,
         height,
-        10,
-        48,
-        13.0,
-        "Resize the frame; the buffer follows.",
-        0xFF3F3A2F,
+        16,
+        28,
+        20.0,
+        title,
+        showcase.theme.chrome_text,
     );
     draw_text(
         text_renderer,
         pixels,
         width,
         height,
-        10,
-        72,
-        13.0,
-        "Compositor round-trip: shm, xdg, paint.",
-        0xFF3F3A2F,
+        16,
+        50,
+        12.0,
+        "Clock, calculator, launcher, chrome, logograms, and Stile state selectors",
+        showcase.theme.chrome_text_inactive,
+    );
+
+    let margin = 16i32;
+    let gap = 12i32;
+    let top_y = 70i32;
+    let top_h = 132u32.min(height.saturating_sub(top_y as u32 + margin as u32));
+    let left_w = 250u32.min(width.saturating_sub((margin * 2) as u32));
+    let right_x = margin + left_w as i32 + gap;
+    let right_w = width.saturating_sub(right_x.max(0) as u32 + margin as u32);
+
+    render_clock_demo(
+        pixels,
+        width,
+        height,
+        margin,
+        top_y,
+        left_w,
+        top_h,
+        showcase,
+        services,
+        text_renderer,
+    );
+    render_chrome_demo(
+        pixels,
+        width,
+        height,
+        right_x,
+        top_y,
+        right_w,
+        top_h,
+        showcase,
+        services,
+        text_renderer,
+    );
+
+    let lower_y = top_y + top_h as i32 + gap;
+    let lower_h = height.saturating_sub(lower_y.max(0) as u32 + margin as u32);
+    let calc_h = lower_h;
+    render_calculator_demo(
+        pixels,
+        width,
+        height,
+        margin,
+        lower_y,
+        left_w,
+        calc_h,
+        showcase,
+        services,
+        text_renderer,
+    );
+
+    let state_h = 112u32.min(lower_h / 3);
+    let launcher_h = lower_h.saturating_sub(state_h + gap as u32);
+    render_launcher_demo(
+        pixels,
+        width,
+        height,
+        right_x,
+        lower_y,
+        right_w,
+        launcher_h,
+        showcase,
+        services,
+        text_renderer,
+    );
+    render_stile_demo(
+        pixels,
+        width,
+        height,
+        right_x,
+        lower_y + launcher_h as i32 + gap,
+        right_w,
+        state_h,
+        showcase,
+        services,
+        text_renderer,
     );
 }
 
-fn render_popup(buffer: &mut BufferState, label: &str, text_renderer: Option<&TextRenderer>) {
+fn render_popup(
+    buffer: &mut BufferState,
+    label: &str,
+    showcase: &PetalsShowcase,
+    services: &mut ShowcaseServices,
+    text_renderer: Option<&TextRenderer>,
+) {
     let width = buffer.width;
     let height = buffer.height;
     let pixels = buffer.texture.as_slice_mut();
-    for y in 0..height as usize {
-        for x in 0..width as usize {
-            let border = x < 2 || y < 2 || x + 2 >= width as usize || y + 2 >= height as usize;
-            let accent = x >= 8
-                && y >= 8
-                && x < 34usize.min(width as usize)
-                && y < 34usize.min(height as usize);
-            let stripe = ((x + y) / 10) % 2 == 0;
-            pixels[y * width as usize + x] = if border {
-                0xFFB58900
-            } else if accent {
-                if stripe { 0xFFFFD166 } else { 0xFF06D6A0 }
-            } else if stripe {
-                0xFFFDF4D6
-            } else {
-                0xFFEFF9F4
-            };
+    pixels.fill(showcase.theme.frame_fill);
+    draw_rect_stroke(pixels, width, height, 0, 0, width, height, 1, showcase.theme.focus_accent);
+    draw_text(
+        text_renderer,
+        pixels,
+        width,
+        height,
+        14,
+        30,
+        16.0,
+        label,
+        showcase.theme.chrome_text,
+    );
+    draw_text(
+        text_renderer,
+        pixels,
+        width,
+        height,
+        14,
+        50,
+        11.0,
+        "Each demo dispatches through a PetalsService",
+        showcase.theme.chrome_text_inactive,
+    );
+    render_stile_demo(
+        pixels,
+        width,
+        height,
+        12,
+        68,
+        width.saturating_sub(24),
+        height.saturating_sub(80),
+        showcase,
+        services,
+        text_renderer,
+    );
+}
+
+fn render_clock_demo(
+    pixels: &mut [u32],
+    stride: u32,
+    height: u32,
+    x: i32,
+    y: i32,
+    w: u32,
+    h: u32,
+    showcase: &PetalsShowcase,
+    services: &mut ShowcaseServices,
+    text_renderer: Option<&TextRenderer>,
+) {
+    let Ok((mut tree, _)) = showcase.clock_tree() else {
+        return;
+    };
+    services.dispatch(ShowcaseComponent::Clock, &mut tree, PetalsEvent::Layout);
+    if showcase
+        .prepare_component(&mut tree, w, h, JustifyContent::Center, AlignItems::Center)
+        .is_ok()
+    {
+        paint_tree(&tree, pixels, stride, height, x, y, text_renderer, showcase.theme.chrome_text);
+    }
+}
+
+fn render_calculator_demo(
+    pixels: &mut [u32],
+    stride: u32,
+    height: u32,
+    x: i32,
+    y: i32,
+    w: u32,
+    h: u32,
+    showcase: &PetalsShowcase,
+    services: &mut ShowcaseServices,
+    text_renderer: Option<&TextRenderer>,
+) {
+    let Ok((mut tree, nodes)) = showcase.calculator_tree() else {
+        return;
+    };
+    if let Some(key) = nodes.keys.get(14) {
+        services.dispatch(
+            ShowcaseComponent::Calculator,
+            &mut tree,
+            PetalsEvent::SetState { node: key.node, state: State::Active, enabled: true },
+        );
+    }
+    let _ = tree.restyle(&petals::Calculator::new().rules_for_theme(showcase.theme));
+    if showcase
+        .prepare_component(&mut tree, w, h, JustifyContent::Start, AlignItems::Stretch)
+        .is_ok()
+    {
+        paint_tree(&tree, pixels, stride, height, x, y, text_renderer, showcase.theme.chrome_text);
+    }
+}
+
+fn render_launcher_demo(
+    pixels: &mut [u32],
+    stride: u32,
+    height: u32,
+    x: i32,
+    y: i32,
+    w: u32,
+    h: u32,
+    showcase: &PetalsShowcase,
+    services: &mut ShowcaseServices,
+    text_renderer: Option<&TextRenderer>,
+) {
+    let Ok((mut tree, nodes)) = showcase.launcher_tree() else {
+        return;
+    };
+    if let Some(tile) = nodes.tiles.get(1) {
+        services.dispatch(
+            ShowcaseComponent::Launcher,
+            &mut tree,
+            PetalsEvent::SetState { node: tile.node, state: State::Focus, enabled: true },
+        );
+    }
+    let _ = tree.restyle(&petals::ApplicationLauncher::new(alloc::vec![]).rules());
+    if showcase
+        .prepare_component(&mut tree, w, h, JustifyContent::Start, AlignItems::Stretch)
+        .is_ok()
+    {
+        paint_tree(&tree, pixels, stride, height, x, y, text_renderer, showcase.theme.chrome_text);
+    }
+}
+
+fn render_chrome_demo(
+    pixels: &mut [u32],
+    stride: u32,
+    height: u32,
+    x: i32,
+    y: i32,
+    w: u32,
+    h: u32,
+    showcase: &PetalsShowcase,
+    services: &mut ShowcaseServices,
+    text_renderer: Option<&TextRenderer>,
+) {
+    let Ok((mut tree, nodes)) = showcase.chrome_tree() else {
+        return;
+    };
+    services.dispatch(
+        ShowcaseComponent::WindowChrome,
+        &mut tree,
+        PetalsEvent::SetState { node: nodes.maximize, state: State::Active, enabled: true },
+    );
+    let _ = tree.restyle(&petals::window_chrome_rules_for_theme(showcase.theme));
+    if showcase
+        .prepare_component(&mut tree, w, h, JustifyContent::Start, AlignItems::Stretch)
+        .is_ok()
+    {
+        paint_tree(&tree, pixels, stride, height, x, y, text_renderer, showcase.theme.chrome_text);
+        draw_text(
+            text_renderer,
+            pixels,
+            stride,
+            height,
+            x + 16,
+            y + 72,
+            12.0,
+            "Chrome, titlebar, controls, content, resize edges",
+            showcase.theme.chrome_text_inactive,
+        );
+    }
+}
+
+fn render_stile_demo(
+    pixels: &mut [u32],
+    stride: u32,
+    height: u32,
+    x: i32,
+    y: i32,
+    w: u32,
+    h: u32,
+    showcase: &PetalsShowcase,
+    services: &mut ShowcaseServices,
+    text_renderer: Option<&TextRenderer>,
+) {
+    let Ok((mut tree, _)) = showcase.stile_state_tree() else {
+        return;
+    };
+    services.dispatch(ShowcaseComponent::StileStates, &mut tree, PetalsEvent::Layout);
+    if showcase
+        .prepare_component(&mut tree, w, h, JustifyContent::Start, AlignItems::Stretch)
+        .is_ok()
+    {
+        paint_tree(&tree, pixels, stride, height, x, y, text_renderer, showcase.theme.chrome_text);
+    }
+}
+
+fn paint_tree(
+    tree: &UiTree,
+    pixels: &mut [u32],
+    stride: u32,
+    height: u32,
+    origin_x: i32,
+    origin_y: i32,
+    text_renderer: Option<&TextRenderer>,
+    fallback_text: u32,
+) {
+    for node in tree.nodes() {
+        let Ok(b) = tree.global_layout_box(node.id) else {
+            continue;
+        };
+        let x = origin_x + b.x as i32;
+        let y = origin_y + b.y as i32;
+        let w = b.width.max(0.0) as u32;
+        let h = b.height.max(0.0) as u32;
+
+        if let Some(color) = node.style.background_color {
+            fill_rect(pixels, stride, height, x, y, w, h, color_argb(color));
+        }
+        if node.style.border_width.unwrap_or(0.0) > 0.0 {
+            draw_rect_stroke(pixels, stride, height, x, y, w, h, 1, 0x66333B48);
+        }
+        if node.style.outline_color.is_some() {
+            draw_rect_stroke(
+                pixels,
+                stride,
+                height,
+                x - 1,
+                y - 1,
+                w.saturating_add(2),
+                h.saturating_add(2),
+                1,
+                color_argb(node.style.outline_color.unwrap()),
+            );
+        }
+
+        if node.descriptions.contains(&Description::Textual)
+            || node.descriptions.contains(&Description::Title)
+            || node.descriptions.contains(&Description::Logogram)
+        {
+            if let Some(text) = node_text(tree, node.id) {
+                let px = node.style.font_size.unwrap_or(
+                    if node.descriptions.contains(&Description::Logogram) { 22.0 } else { 12.0 },
+                );
+                let color = node.style.color.map(color_argb).unwrap_or(fallback_text);
+                let label = ellipsize_ascii(text, text_capacity(w as f32, px));
+                draw_text(
+                    text_renderer,
+                    pixels,
+                    stride,
+                    height,
+                    x,
+                    y + px as i32,
+                    px,
+                    &label,
+                    color,
+                );
+            }
+        } else if node.descriptions.contains(&Description::Pressable) {
+            if let Some(text) = pressable_label(node.id, tree) {
+                let px = node.style.font_size.unwrap_or(12.0);
+                let color = node.style.color.map(color_argb).unwrap_or(fallback_text);
+                let label = ellipsize_ascii(text, text_capacity(w as f32, px));
+                draw_text(
+                    text_renderer,
+                    pixels,
+                    stride,
+                    height,
+                    x + 8,
+                    y + ((h as f32 + px) / 2.0) as i32 - 3,
+                    px,
+                    &label,
+                    color,
+                );
+            }
         }
     }
-    fill_rect(pixels, width, height, 42, 16, width.saturating_sub(56), 8, 0xFF3F3A2F);
-    fill_rect(pixels, width, height, 42, 30, width.saturating_sub(72), 6, 0xFF6C584C);
-    fill_rect(pixels, width, height, 14, height.saturating_sub(18), 30, 6, 0xFF118AB2);
-    fill_rect(pixels, width, height, 50, height.saturating_sub(18), 46, 6, 0xFFEF476F);
-    draw_text(text_renderer, pixels, width, height, 14, 34, 18.0, label, 0xFF3F3A2F);
+}
+
+fn node_text<'a>(tree: &'a UiTree, node_id: NodeId) -> Option<&'a str> {
+    let node = tree.node(node_id)?;
+    match node.attrs.get("text").or_else(|| node.attrs.get("glyph")) {
+        Some(AttrValue::Str(value)) => Some(value.as_str()),
+        _ => None,
+    }
+}
+
+fn pressable_label<'a>(node_id: NodeId, tree: &'a UiTree) -> Option<&'a str> {
+    let node = tree.node(node_id)?;
+    match node.attrs.get("label") {
+        Some(AttrValue::Str(value)) => Some(value.as_str()),
+        _ => None,
+    }
 }
 
 fn fill_rect(
     pixels: &mut [u32],
     width: u32,
     height: u32,
-    x: u32,
-    y: u32,
+    x: i32,
+    y: i32,
     w: u32,
     h: u32,
     color: u32,
 ) {
-    let x0 = x.min(width);
-    let y0 = y.min(height);
-    let x1 = x0.saturating_add(w).min(width);
-    let y1 = y0.saturating_add(h).min(height);
+    let x0 = x.max(0) as u32;
+    let y0 = y.max(0) as u32;
+    let x1 = (x.saturating_add(w as i32)).max(0) as u32;
+    let y1 = (y.saturating_add(h as i32)).max(0) as u32;
+    let x1 = x1.min(width);
+    let y1 = y1.min(height);
     for py in y0..y1 {
         let row = py as usize * width as usize;
         for px in x0..x1 {
@@ -539,24 +938,44 @@ fn fill_rect(
     }
 }
 
-fn paint_vertical_gradient(pixels: &mut [u32], width: u32, height: u32, top: u32, bottom: u32) {
-    let denom = height.saturating_sub(1).max(1);
-    for y in 0..height {
-        let color = lerp_argb(top, bottom, y.saturating_mul(255) / denom);
-        let row = y as usize * width as usize;
-        for x in 0..width as usize {
-            pixels[row + x] = color;
-        }
-    }
+fn draw_rect_stroke(
+    pixels: &mut [u32],
+    stride: u32,
+    height: u32,
+    x: i32,
+    y: i32,
+    w: u32,
+    h: u32,
+    thickness: u32,
+    color: u32,
+) {
+    let t = thickness.max(1);
+    fill_rect(pixels, stride, height, x, y, w, t, color);
+    fill_rect(pixels, stride, height, x, y + h.saturating_sub(t) as i32, w, t, color);
+    fill_rect(pixels, stride, height, x, y, t, h, color);
+    fill_rect(pixels, stride, height, x + w.saturating_sub(t) as i32, y, t, h, color);
 }
 
-fn lerp_argb(a: u32, b: u32, t: u32) -> u32 {
-    let inv = 255u32.saturating_sub(t.min(255));
-    let aa = ((a >> 24) & 0xFF) * inv + ((b >> 24) & 0xFF) * t;
-    let ar = ((a >> 16) & 0xFF) * inv + ((b >> 16) & 0xFF) * t;
-    let ag = ((a >> 8) & 0xFF) * inv + ((b >> 8) & 0xFF) * t;
-    let ab = (a & 0xFF) * inv + (b & 0xFF) * t;
-    ((aa / 255) << 24) | ((ar / 255) << 16) | ((ag / 255) << 8) | (ab / 255)
+fn color_argb(color: petals::Color) -> u32 {
+    ((color.a as u32) << 24) | ((color.r as u32) << 16) | ((color.g as u32) << 8) | color.b as u32
+}
+
+fn text_capacity(width: f32, px_size: f32) -> usize {
+    let advance = (px_size * 0.62).max(6.0);
+    ((width / advance) as usize).max(1)
+}
+
+fn ellipsize_ascii(text: &str, capacity: usize) -> String {
+    if text.chars().count() <= capacity {
+        return String::from(text);
+    }
+    let keep = capacity.saturating_sub(1).max(1);
+    let mut out = String::new();
+    for ch in text.chars().take(keep) {
+        out.push(ch);
+    }
+    out.push('~');
+    out
 }
 
 fn draw_text(
@@ -634,11 +1053,6 @@ fn log_dlerror(prefix: &str) {
             Err(_) => stem::warn!("{}", prefix),
         }
     }
-}
-
-fn panic_forever(msg: &str) -> ! {
-    stem::error!("wayland_hello: {}", msg);
-    idle_forever()
 }
 
 fn idle_forever() -> ! {

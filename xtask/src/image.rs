@@ -324,6 +324,12 @@ pub fn default_programs() -> Vec<ProgramConfig> {
         ProgramConfig { name: "false", is_init: false, boot_module: true, features: vec![] },
         ProgramConfig { name: "ps2_mouse", is_init: false, boot_module: true, features: vec![] },
         ProgramConfig {
+            name: "display_amd_gpu",
+            is_init: false,
+            boot_module: true,
+            features: vec![],
+        },
+        ProgramConfig {
             name: "display_bootfb",
             is_init: false,
             boot_module: true,
@@ -1166,6 +1172,7 @@ fn is_driver(name: &str) -> bool {
     let drivers = [
         "ahci_disk",
         "ata_disk",
+        "display_amd_gpu",
         "display_bootfb",
         "display_fake",
         "display_nvidia_gpu",
@@ -1315,6 +1322,7 @@ mod tests {
         let sh = Shell::new().expect("shell");
         let programs = [
             test_program("display_bootfb"),
+            test_program("display_amd_gpu"),
             test_program("display_nvidia_gpu"),
             test_program("display_virtio_gpu"),
             test_program("display_fake"),
@@ -1327,6 +1335,7 @@ mod tests {
         let bootfb_entry = limine_entry(&conf, "ThingOS (BootFB Fallback)");
 
         assert!(normal_entry.contains("module_path: boot():/drivers/display_bootfb"));
+        assert!(normal_entry.contains("module_path: boot():/drivers/display_amd_gpu"));
         assert!(normal_entry.contains("module_path: boot():/drivers/display_nvidia_gpu"));
         assert!(normal_entry.contains("module_path: boot():/drivers/display_virtio_gpu"));
         assert!(normal_entry.contains("module_path: boot():/drivers/display_fake"));
@@ -1336,6 +1345,7 @@ mod tests {
             bootfb_entry.contains("kernel_cmdline: loglevel=3 display=bootfb kernel.terminal=1")
         );
         assert!(bootfb_entry.contains("module_path: boot():/drivers/display_bootfb"));
+        assert!(!bootfb_entry.contains("module_path: boot():/drivers/display_amd_gpu"));
         assert!(!bootfb_entry.contains("module_path: boot():/drivers/display_nvidia_gpu"));
         assert!(!bootfb_entry.contains("module_path: boot():/drivers/display_virtio_gpu"));
         assert!(!bootfb_entry.contains("module_path: boot():/drivers/display_fake"));
@@ -1365,6 +1375,7 @@ mod tests {
             test_program("ps2_kbd"),
             test_program("ps2_mouse"),
             test_program("display_bootfb"),
+            test_program("display_amd_gpu"),
             test_program("display_nvidia_gpu"),
             test_program("display_virtio_gpu"),
         ];
@@ -1393,6 +1404,7 @@ mod tests {
         assert!(!safe_entry.contains("module_path: boot():/bin/ash"));
         assert!(!safe_entry.contains("module_path: boot():/etc/default/shell"));
         assert!(!safe_entry.contains("module_path: boot():/drivers/display_bootfb"));
+        assert!(!safe_entry.contains("module_path: boot():/drivers/display_amd_gpu"));
         assert!(!safe_entry.contains("module_path: boot():/drivers/display_nvidia_gpu"));
         assert!(!safe_entry.contains("module_path: boot():/drivers/display_virtio_gpu"));
         assert_eq!(safe_entry.matches("module_cmdline: init").count(), 1);

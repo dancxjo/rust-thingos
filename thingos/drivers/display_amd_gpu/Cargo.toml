@@ -1,0 +1,10 @@
+[package]
+name = "display_amd_gpu"
+version = "0.1.0"
+edition = "2021"
+
+[dependencies]
+abi = { path = "../../abi" }
+display_bootfb = { path = "../display_bootfb" }
+ipc_helpers = { path = "../../libs/ipc_helpers" }
+stem = { path = "../../stem", features = ["rt"] }

@@ -12,6 +12,7 @@ members = [
   "thingos/drivers/fatd",
   "thingos/utils/chime",
   "thingos/cambium",
+  "thingos/drivers/display_amd_gpu",
   "thingos/drivers/display_bootfb",
   "thingos/drivers/display_fake",
   "thingos/drivers/display_nvidia_gpu",

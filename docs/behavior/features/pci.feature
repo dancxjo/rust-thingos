@@ -27,3 +27,9 @@ Feature: PCI Bus and Discovery
     Then the latest command output should contain "00:"
     And the latest command output should contain "Host bridge"
     And the latest command output should contain "["
+
+  Scenario: AMD Rembrandt display driver is available in hardware boots
+    Given the machine is booted
+    When I wait for the shell prompt
+    And the shell command "ls /drivers" succeeds
+    Then the latest command output should contain "display_amd_gpu"

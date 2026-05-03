@@ -8,7 +8,8 @@ use taffy::TaffyError;
 
 use crate::{
     AlignItems, AttrValue, Color, Declaration, Description, FlexDirection, FontWeight,
-    JustifyContent, NodeId, Rule, Selector, State, Theme, UiTree, default_theme,
+    JustifyContent, NodeId, PetalsEvent, PetalsService, Rule, Selector, ServiceAction, State,
+    Theme, UiTree, default_theme,
 };
 
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
@@ -385,6 +386,22 @@ const fn color_from_argb(argb: u32) -> Color {
 impl Default for Calculator {
     fn default() -> Self {
         Self::new()
+    }
+}
+
+#[derive(Clone, Copy, Debug, Default, PartialEq, Eq)]
+pub struct CalculatorService;
+
+impl PetalsService for CalculatorService {
+    fn dispatch(&mut self, tree: &mut UiTree, event: PetalsEvent) -> ServiceAction {
+        match event {
+            PetalsEvent::SetState { node, state, enabled } => {
+                tree.set_state(node, state, enabled);
+                ServiceAction::Continue
+            }
+            PetalsEvent::Shutdown => ServiceAction::Shutdown,
+            PetalsEvent::Restyle | PetalsEvent::Layout => ServiceAction::Continue,
+        }
     }
 }
 

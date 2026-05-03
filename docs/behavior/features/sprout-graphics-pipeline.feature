@@ -15,7 +15,9 @@ Feature: Sprout desktop session orchestration
     And the serial output should contain "wayland-server: listening on /run/wayland-0" within 180s
     And the serial output should contain "SPROUT: Spawned wayland_hello" within 180s
     And the serial output should contain "wayland_hello: connected to /run/wayland-0" within 180s
-    And the serial output should contain "wayland_hello: pistil text renderer loaded with default /share/fonts/Inter-Regular.ttf" within 180s
+    And the serial output should contain "wayland_hello: pistil text renderer loaded with default /public/fonts/Inter-Regular.ttf" within 180s
+    And the serial output should contain "wayland_hello: service loop started" within 180s
+    And the serial output should contain "wayland_hello: petals and stile showcase rendering" within 180s
     And the serial output should contain "wayland-server: xdg_surface obj=" within 180s
     And the serial output should contain "wayland-server: xdg_toplevel obj=" within 180s
     And the serial output should contain "wayland-server: surface " within 180s
@@ -26,7 +28,7 @@ Feature: Sprout desktop session orchestration
     Given the machine is booted
     Then the serial output should contain "SPROUT: Spawned clock" within 180s
     And the serial output should contain "clock: connected to /run/wayland-0" within 180s
-    And the serial output should contain "clock: pistil DSEG7 text renderer loaded with /share/fonts/DSEG7Classic-Regular.ttf" within 180s
+    And the serial output should contain "clock: pistil DSEG7 text renderer loaded with /public/fonts/DSEG7Classic-Regular.ttf" within 180s
     And the serial output should contain "clock: petal perspective rendering date+time" within 180s
     And the serial output should contain "RTC: claimed /sys/devices/isa-0070" within 180s
     And the serial output should contain "RTC: System clock anchored" within 180s

@@ -218,6 +218,11 @@ fn default_stylable_for(descriptions: &[Description]) -> Stylable {
                 | Description::ApplicationGrid
                 | Description::ApplicationRow
                 | Description::ApplicationTile
+                | Description::Showcase
+                | Description::ShowcasePanel
+                | Description::ShowcaseHeader
+                | Description::ShowcaseSwatch
+                | Description::ShowcaseStateStrip
                 | Description::WindowChrome
                 | Description::WindowFrame
                 | Description::Titlebar

@@ -6,7 +6,7 @@ use taffy::TaffyError;
 
 use crate::{
     AlignItems, Color, Declaration, Description, FlexDirection, FontWeight, JustifyContent, NodeId,
-    Rule, Selector, Theme, UiTree, default_theme,
+    PetalsEvent, PetalsService, Rule, Selector, ServiceAction, Theme, UiTree, default_theme,
 };
 
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
@@ -206,6 +206,22 @@ const fn color_from_argb(argb: u32) -> Color {
 impl Default for Clock {
     fn default() -> Self {
         Self::new()
+    }
+}
+
+#[derive(Clone, Copy, Debug, Default, PartialEq, Eq)]
+pub struct ClockService;
+
+impl PetalsService for ClockService {
+    fn dispatch(&mut self, tree: &mut UiTree, event: PetalsEvent) -> ServiceAction {
+        match event {
+            PetalsEvent::SetState { node, state, enabled } => {
+                tree.set_state(node, state, enabled);
+                ServiceAction::Continue
+            }
+            PetalsEvent::Shutdown => ServiceAction::Shutdown,
+            PetalsEvent::Restyle | PetalsEvent::Layout => ServiceAction::Continue,
+        }
     }
 }
 

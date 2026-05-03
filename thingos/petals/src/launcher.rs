@@ -5,7 +5,7 @@ use taffy::TaffyError;
 
 use crate::{
     AlignItems, AttrValue, Color, Declaration, Description, FlexDirection, FontWeight,
-    JustifyContent, NodeId, Rule, Selector, UiTree,
+    JustifyContent, NodeId, PetalsEvent, PetalsService, Rule, Selector, ServiceAction, UiTree,
 };
 
 #[derive(Clone, Debug, PartialEq, Eq)]
@@ -247,6 +247,22 @@ pub fn display_name_from_path(path: &str) -> String {
         }
     }
     out
+}
+
+#[derive(Clone, Copy, Debug, Default, PartialEq, Eq)]
+pub struct ApplicationLauncherService;
+
+impl PetalsService for ApplicationLauncherService {
+    fn dispatch(&mut self, tree: &mut UiTree, event: PetalsEvent) -> ServiceAction {
+        match event {
+            PetalsEvent::SetState { node, state, enabled } => {
+                tree.set_state(node, state, enabled);
+                ServiceAction::Continue
+            }
+            PetalsEvent::Shutdown => ServiceAction::Shutdown,
+            PetalsEvent::Restyle | PetalsEvent::Layout => ServiceAction::Continue,
+        }
+    }
 }
 
 #[cfg(test)]
