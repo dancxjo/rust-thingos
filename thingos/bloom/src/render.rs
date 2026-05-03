@@ -843,8 +843,15 @@ impl CompositorVisuals {
             false
         };
         if !success {
-            stem::warn!("bloom: failed to prepare {} via pistil", cursor_path);
-            return None;
+            let stride_pixels = texture.stride / 4;
+            let texture_height = texture.height;
+            hotspot = draw_builtin_cursor_variant(
+                texture.as_slice_mut(),
+                stride_pixels,
+                texture_height,
+                kind,
+            );
+            stem::debug!("Using built-in cursor {:?}", kind);
         }
         let Some(buffer_id) = display.import_buffer(
             texture.fd,
@@ -1282,6 +1289,158 @@ fn draw_builtin_busy_spinner(dst: &mut [u32], stride: u32, height: u32, frame: u
     }
 }
 
+fn draw_builtin_cursor_variant(
+    dst: &mut [u32],
+    stride: u32,
+    height: u32,
+    kind: CursorKind,
+) -> [u32; 2] {
+    dst.fill(0);
+    if stride < CURSOR_SIZE || height < CURSOR_SIZE {
+        return [CURSOR_SIZE / 2, CURSOR_SIZE / 2];
+    }
+
+    let center = (CURSOR_SIZE / 2) as i32;
+    let shadow = 0xE0181B24;
+    let fill = 0xFFFFFFFF;
+    match kind {
+        CursorKind::Move => {
+            draw_cursor_double_arrow(dst, stride, height, 12, center, 36, center, shadow, fill);
+            draw_cursor_double_arrow(dst, stride, height, center, 12, center, 36, shadow, fill);
+        }
+        CursorKind::ResizeNorth | CursorKind::ResizeSouth => {
+            draw_cursor_double_arrow(dst, stride, height, center, 10, center, 38, shadow, fill);
+        }
+        CursorKind::ResizeEast | CursorKind::ResizeWest => {
+            draw_cursor_double_arrow(dst, stride, height, 10, center, 38, center, shadow, fill);
+        }
+        CursorKind::ResizeNorthEast | CursorKind::ResizeSouthWest => {
+            draw_cursor_double_arrow(dst, stride, height, 36, 12, 12, 36, shadow, fill);
+        }
+        CursorKind::ResizeNorthWest | CursorKind::ResizeSouthEast => {
+            draw_cursor_double_arrow(dst, stride, height, 12, 12, 36, 36, shadow, fill);
+        }
+        CursorKind::Default => {}
+    }
+    [CURSOR_SIZE / 2, CURSOR_SIZE / 2]
+}
+
+fn draw_cursor_double_arrow(
+    dst: &mut [u32],
+    stride: u32,
+    height: u32,
+    x0: i32,
+    y0: i32,
+    x1: i32,
+    y1: i32,
+    shadow: u32,
+    fill: u32,
+) {
+    draw_cursor_arrow_layer(dst, stride, height, x0, y0, x1, y1, 2, shadow);
+    draw_cursor_arrow_layer(dst, stride, height, x0, y0, x1, y1, 1, fill);
+}
+
+fn draw_cursor_arrow_layer(
+    dst: &mut [u32],
+    stride: u32,
+    height: u32,
+    x0: i32,
+    y0: i32,
+    x1: i32,
+    y1: i32,
+    radius: i32,
+    color: u32,
+) {
+    draw_cursor_segment(dst, stride, height, x0, y0, x1, y1, radius, color);
+    let dx = (x1 - x0).signum();
+    let dy = (y1 - y0).signum();
+    draw_cursor_arrow_head(dst, stride, height, x1, y1, dx, dy, radius, color);
+    draw_cursor_arrow_head(dst, stride, height, x0, y0, -dx, -dy, radius, color);
+}
+
+fn draw_cursor_arrow_head(
+    dst: &mut [u32],
+    stride: u32,
+    height: u32,
+    tip_x: i32,
+    tip_y: i32,
+    dir_x: i32,
+    dir_y: i32,
+    radius: i32,
+    color: u32,
+) {
+    let len = 7;
+    let spread = 5;
+    let back_x = tip_x - dir_x * len;
+    let back_y = tip_y - dir_y * len;
+    let perp_x = -dir_y;
+    let perp_y = dir_x;
+    draw_cursor_segment(
+        dst,
+        stride,
+        height,
+        tip_x,
+        tip_y,
+        back_x + perp_x * spread,
+        back_y + perp_y * spread,
+        radius,
+        color,
+    );
+    draw_cursor_segment(
+        dst,
+        stride,
+        height,
+        tip_x,
+        tip_y,
+        back_x - perp_x * spread,
+        back_y - perp_y * spread,
+        radius,
+        color,
+    );
+}
+
+fn draw_cursor_segment(
+    dst: &mut [u32],
+    stride: u32,
+    height: u32,
+    x0: i32,
+    y0: i32,
+    x1: i32,
+    y1: i32,
+    radius: i32,
+    color: u32,
+) {
+    let steps = (x1 - x0).abs().max((y1 - y0).abs()).max(1);
+    for step in 0..=steps {
+        let x = x0 + (x1 - x0) * step / steps;
+        let y = y0 + (y1 - y0) * step / steps;
+        draw_cursor_brush(dst, stride, height, x, y, radius, color);
+    }
+}
+
+fn draw_cursor_brush(
+    dst: &mut [u32],
+    stride: u32,
+    height: u32,
+    cx: i32,
+    cy: i32,
+    radius: i32,
+    color: u32,
+) {
+    for y in cy - radius..=cy + radius {
+        if y < 0 || y >= height as i32 || y >= CURSOR_SIZE as i32 {
+            continue;
+        }
+        let row = y as usize * stride as usize;
+        for x in cx - radius..=cx + radius {
+            if x < 0 || x >= CURSOR_SIZE as i32 {
+                continue;
+            }
+            dst[row + x as usize] = color;
+        }
+    }
+}
+
 fn scale_alpha(alpha: u8, opacity: u8) -> u8 {
     ((alpha as u16 * opacity as u16 + 127) / 255) as u8
 }
@@ -1486,7 +1645,7 @@ fn from_blossom_chrome_button(button: blossom::wm::ChromeButton) -> ChromeButton
 }
 
 fn needs_window_overlay(entry: &CompositionEntry) -> bool {
-    !entry.is_fullscreen && (!entry.chrome.is_empty() || entry.handle_height > 0)
+    !entry.is_fullscreen && !entry.chrome.is_empty()
 }
 
 fn local_overlay_entry(
@@ -1537,21 +1696,11 @@ fn draw_chrome_overlay(
             continue;
         }
         let chrome = entry.chrome;
-        if entry.handle_height > 0 {
-            draw_window_handle(
-                dst,
-                stride,
-                height,
-                entry.dest_rect,
-                entry.handle_height,
-                entry.active,
-            );
-        }
         if chrome.is_empty() {
             continue;
         }
         let rect = entry.dest_rect;
-        let window_hovered = rect_contains(rect, pointer_x, pointer_y);
+        let window_hovered = rect_contains(visual_rect_for_entry(entry), pointer_x, pointer_y);
         let plan = blossom::chrome::window_chrome_plan(
             crate::scene::to_blossom_rect(rect),
             to_blossom_chrome(chrome),
@@ -1613,7 +1762,12 @@ fn execute_blossom_chrome_plan(
                     );
                 }
             }
-            blossom::chrome::ChromeDrawCommand::HorizontalGradient { rect, left, center, right } => {
+            blossom::chrome::ChromeDrawCommand::HorizontalGradient {
+                rect,
+                left,
+                center,
+                right,
+            } => {
                 if rect.w > 0 && rect.h > 0 {
                     fill_horizontal_gradient(
                         dst,
@@ -1657,12 +1811,7 @@ fn execute_blossom_chrome_plan(
                     color,
                 );
             }
-            blossom::chrome::ChromeDrawCommand::ControlGlyph {
-                rect,
-                button,
-                icon_path,
-                color,
-            } => {
+            blossom::chrome::ChromeDrawCommand::ControlGlyph { rect, button, icon_path, color } => {
                 if draw_blossom_svg_icon(
                     pistil_draw_svg_icon,
                     dst,
@@ -1721,28 +1870,6 @@ fn draw_blossom_svg_icon(
     ) == 0
 }
 
-fn draw_window_handle(
-    dst: &mut [u32],
-    stride: u32,
-    height: u32,
-    rect: abi::display_protocol::Rect,
-    handle_height: u32,
-    active: bool,
-) {
-    if rect.w < 28 || rect.h == 0 || handle_height == 0 {
-        return;
-    }
-    let handle_w = rect.w.min(64).max(28);
-    let handle_h = handle_height.min(rect.h).min(6).max(3);
-    let x = rect.x as i32 + (rect.w.saturating_sub(handle_w) / 2) as i32;
-    let y =
-        rect.y as i32 + handle_height.min(rect.h).saturating_sub(handle_h).saturating_div(2) as i32;
-    let fill = if active { 0xB07C5CFF } else { 0x66463B5E };
-    let shine = if active { 0xCCF2C94C } else { 0x6682769E };
-    fill_rect_i32(dst, stride, height, x, y, handle_w as i32, handle_h as i32, fill);
-    fill_rect_i32(dst, stride, height, x + 1, y, handle_w.saturating_sub(2) as i32, 1, shine);
-}
-
 fn draw_window_body_overlay(
     dst: &mut [u32],
     stride: u32,
@@ -1762,20 +1889,16 @@ fn draw_window_body_overlay(
 
         let rect = entry.dest_rect;
         let frame = chrome.frame_thickness.min(rect.w / 2).min(rect.h / 2);
-        let titlebar_height = chrome.titlebar_height.min(theme.titlebar_height).min(rect.h);
-        if frame == 0 || titlebar_height >= rect.h {
+        if frame == 0 || rect.w == 0 || rect.h == 0 {
             continue;
         }
 
-        let body_x = rect.x as i32 + frame as i32;
-        let body_y = rect.y as i32 + titlebar_height as i32;
-        let body_w = rect.w.saturating_sub(frame.saturating_mul(2));
-        let body_h = rect.h.saturating_sub(titlebar_height).saturating_sub(frame);
-        if body_w == 0 || body_h == 0 {
-            continue;
-        }
-
-        draw_contact_shadow(dst, stride, height, rect, theme);
+        let body_x = rect.x as i32;
+        let body_y = rect.y as i32;
+        let body_w = rect.w;
+        let body_h = rect.h;
+        let visual_rect = visual_rect_for_entry(entry);
+        draw_contact_shadow(dst, stride, height, visual_rect, theme);
         fill_rect(dst, stride, body_x, body_y, body_w, body_h, theme.body_top);
         draw_content_field(dst, stride, height, body_x, body_y, body_w, body_h, theme);
     }

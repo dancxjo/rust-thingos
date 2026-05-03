@@ -159,7 +159,6 @@ mod tests {
             z_order: z,
             alpha: 255,
             chrome,
-            handle_height: 0,
             active: false,
             title: None,
             is_fullscreen: false,

@@ -207,41 +207,37 @@ pub fn surface_visual_rect(rect: Rect, chrome: SurfaceChrome) -> Rect {
     if chrome.is_empty() {
         return rect;
     }
-    let t = chrome.frame_thickness;
-    Rect {
-        x: (rect.x - t).max(0),
-        y: (rect.y - chrome.titlebar_height).max(0),
-        w: rect.w + t * 2,
-        h: rect.h + chrome.titlebar_height + t,
-    }
+    let t = chrome.frame_thickness.max(0);
+    let titlebar_height = chrome.titlebar_height.max(0);
+    let x0 = (rect.x - t).max(0);
+    let y0 = (rect.y - titlebar_height).max(0);
+    let x1 = rect.x + rect.w + t;
+    let y1 = rect.y + rect.h + t;
+    Rect { x: x0, y: y0, w: (x1 - x0).max(0), h: (y1 - y0).max(0) }
 }
 
-pub fn resize_edge_at(rect: Rect, t: i32, x: i32, y: i32) -> Option<ResizeEdge> {
-    if t <= 0 {
+pub fn resize_edge_at(rect: Rect, chrome: SurfaceChrome, x: i32, y: i32) -> Option<ResizeEdge> {
+    let t = chrome.frame_thickness.max(0);
+    if chrome.is_empty() || t <= 0 {
         return None;
     }
 
-    let x0 = rect.x;
-    let y0 = rect.y;
-    let x1 = rect.x + rect.w;
-    let y1 = rect.y + rect.h;
-
-    let out_x0 = x0 - t;
-    let out_y0 = y0 - t;
-    let out_x1 = x1 + t;
-    let out_y1 = y1 + t;
-
-    if x < out_x0 || x >= out_x1 || y < out_y0 || y >= out_y1 {
+    let visual = surface_visual_rect(rect, chrome);
+    let vx0 = visual.x;
+    let vy0 = visual.y;
+    let vx1 = visual.x + visual.w;
+    let vy1 = visual.y + visual.h;
+    if x < vx0 || x >= vx1 || y < vy0 || y >= vy1 {
         return None;
     }
-    if x >= x0 && x < x1 && y >= y0 && y < y1 {
+    if x >= rect.x && x < rect.x + rect.w && y >= rect.y && y < rect.y + rect.h {
         return None;
     }
 
-    let north = y < y0 + t;
-    let south = y >= y1 - t;
-    let west = x < x0 + t;
-    let east = x >= x1 - t;
+    let north = y < visual.y + t;
+    let south = y >= rect.y + rect.h;
+    let west = x < rect.x;
+    let east = x >= rect.x + rect.w;
 
     match (north, south, west, east) {
         (true, _, true, _) => Some(ResizeEdge::NorthWest),
@@ -261,8 +257,9 @@ pub fn chrome_button_rects(rect: Rect, chrome: SurfaceChrome) -> Option<[(Chrome
         return None;
     }
 
-    let frame = chrome.frame_thickness.min(rect.w / 2).min(rect.h / 2);
-    let titlebar_height = chrome.titlebar_height.min(rect.h);
+    let visual = surface_visual_rect(rect, chrome);
+    let frame = chrome.frame_thickness.max(0).min(visual.w / 2).min(visual.h / 2);
+    let titlebar_height = chrome.titlebar_height.max(0).min(visual.h);
     let button_height = 24.min(titlebar_height);
     let button_width = 28;
     let spacing = 4;
@@ -271,9 +268,9 @@ pub fn chrome_button_rects(rect: Rect, chrome: SurfaceChrome) -> Option<[(Chrome
         return None;
     }
 
-    let right = rect.x + rect.w - right_inset;
+    let right = visual.x + visual.w - right_inset;
     let total_w = button_width * 3 + spacing * 2;
-    if total_w + right_inset > rect.w {
+    if total_w + right_inset > visual.w {
         return None;
     }
 
@@ -323,7 +320,7 @@ pub fn chrome_button_rects(rect: Rect, chrome: SurfaceChrome) -> Option<[(Chrome
 
     let mk_rect = |b: petals::LayoutBox| Rect {
         x: left + b.x as i32,
-        y: rect.y + b.y as i32,
+        y: visual.y + b.y as i32,
         w: b.width as i32,
         h: b.height as i32,
     };
@@ -371,5 +368,29 @@ pub fn translate_surface_damage(local: Rect, src_w: i32, src_h: i32, dest: Rect)
         None
     } else {
         Some(Rect { x: dx0, y: dy0, w: dx1 - dx0, h: dy1 - dy0 })
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn chrome_geometry_reserves_space_around_client_content() {
+        let content = Rect { x: 44, y: 88, w: 320, h: 200 };
+        let chrome = SurfaceChrome { titlebar_height: 28, frame_thickness: 4 };
+
+        assert_eq!(surface_visual_rect(content, chrome), Rect { x: 40, y: 60, w: 328, h: 232 });
+
+        let buttons = chrome_button_rects(content, chrome).expect("chrome buttons");
+        assert!(buttons.iter().all(|(_, rect)| rect.y >= 60 && rect.y < content.y));
+        assert_eq!(
+            chrome_button_at(content, chrome, buttons[2].1.x + 1, buttons[2].1.y + 1),
+            Some(ChromeButton::Close)
+        );
+
+        assert_eq!(resize_edge_at(content, chrome, 200, 100), None);
+        assert_eq!(resize_edge_at(content, chrome, 42, 120), Some(ResizeEdge::West));
+        assert_eq!(resize_edge_at(content, chrome, 200, 290), Some(ResizeEdge::South));
     }
 }

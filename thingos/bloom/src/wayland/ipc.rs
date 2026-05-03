@@ -15,7 +15,6 @@
 //! | `WCMD_DAMAGE`        | Mark a damage region on a surface             |
 //! | `WCMD_COMMIT`        | Commit pending surface state                  |
 //! | `WCMD_SET_CHROME`    | Mark compositor-known shell chrome geometry   |
-//! | `WCMD_SET_WINDOW_HANDLE`| Update the compositor-owned move handle    |
 //! | `WCMD_SET_TITLE`     | Update compositor-owned shell chrome title    |
 //! | `WCMD_SET_SUBSURFACE`| Update parent/position/stacking for a subsurface |
 //! | `WCMD_SET_LAYER_SURFACE`| Update wlr-layer-shell state for a surface |
@@ -50,7 +49,6 @@ pub const WCMD_SET_LAYER_SURFACE: u8 = 9;
 pub const WCMD_SET_OPAQUE_REGION: u8 = 10;
 pub const WCMD_SET_INPUT_REGION: u8 = 11;
 pub const WCMD_DRAMATIC_CLOSE_SURFACE: u8 = 12;
-pub const WCMD_SET_WINDOW_HANDLE: u8 = 13;
 pub const MAX_TITLE_BYTES: usize = 64;
 
 pub const WEVT_BUFFER_RELEASE: u8 = 1;
@@ -155,16 +153,6 @@ pub struct WCmdSetChrome {
     pub bloom_surface_id: u32,
     pub titlebar_height: u32,
     pub frame_thickness: u32,
-}
-
-/// [`WCMD_SET_WINDOW_HANDLE`] — set the compositor-owned move handle height.
-#[repr(C, packed)]
-#[derive(Clone, Copy)]
-pub struct WCmdSetWindowHandle {
-    pub msg_type: u8, // = WCMD_SET_WINDOW_HANDLE
-    pub _pad: [u8; 3],
-    pub bloom_surface_id: u32,
-    pub handle_height: u32,
 }
 
 /// [`WCMD_SET_TITLE`] — update the compositor-owned title text for a surface.
@@ -526,18 +514,6 @@ pub fn encode_set_chrome(
     };
     let mut out = [0u8; 16];
     out.copy_from_slice(as_bytes!(msg, WCmdSetChrome));
-    out
-}
-
-pub fn encode_set_window_handle(bloom_surface_id: u32, handle_height: u32) -> [u8; 12] {
-    let msg = WCmdSetWindowHandle {
-        msg_type: WCMD_SET_WINDOW_HANDLE,
-        _pad: [0; 3],
-        bloom_surface_id,
-        handle_height,
-    };
-    let mut out = [0u8; 12];
-    out.copy_from_slice(as_bytes!(msg, WCmdSetWindowHandle));
     out
 }
 

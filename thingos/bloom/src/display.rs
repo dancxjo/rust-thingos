@@ -447,7 +447,7 @@ impl DisplayBackend {
             // 2.3 Chrome plane (interleaved)
             if let Some(overlay) = find_window_overlay(chrome_overlays, entry.surface_id) {
                 if !entry.is_fullscreen
-                    && (!entry.chrome.is_empty() || entry.handle_height > 0)
+                    && !entry.chrome.is_empty()
                     && plane_count < MAX_COMMIT_PLANES
                 {
                     planes[plane_count] = PlaneCommit {
@@ -732,10 +732,7 @@ impl DisplayBackend {
 
             // 2.3 Window chrome overlay (title bar / frame, drawn over content).
             if let Some(overlay) = find_window_overlay(chrome_overlays, entry.surface_id) {
-                if !entry.is_fullscreen
-                    && (!entry.chrome.is_empty() || entry.handle_height > 0)
-                    && !batch.is_full()
-                {
+                if !entry.is_fullscreen && !entry.chrome.is_empty() && !batch.is_full() {
                     let dst = Rect {
                         x: overlay.x.max(0) as u32,
                         y: overlay.y.max(0) as u32,

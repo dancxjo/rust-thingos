@@ -1,11 +1,9 @@
 use alloc::vec::Vec;
 
-use petals::{ChromeStyle, UiTheme};
+use stile::{ChromeStyle, UiTheme};
 
-use crate::{
-    Rect,
-    wm::{ChromeButton, SurfaceChrome, chrome_button_rects},
-};
+use crate::Rect;
+use crate::wm::{ChromeButton, SurfaceChrome, chrome_button_rects, surface_visual_rect};
 
 pub const WINDOW_ICON_SHADE_PATH: &str = "/public/icons/lucide/chevron-up.svg";
 pub const WINDOW_ICON_UNSHADE_PATH: &str = "/public/icons/lucide/chevron-down.svg";
@@ -51,23 +49,43 @@ pub fn window_chrome_plan<'a>(
         return plan;
     }
 
-    let frame = chrome.frame_thickness.min(rect.w / 2).min(rect.h / 2);
+    let visual_rect = surface_visual_rect(rect, chrome);
+    let frame = chrome.frame_thickness.max(0).min(visual_rect.w / 2).min(visual_rect.h / 2);
     if frame <= 0 {
         return plan;
     }
 
-    let titlebar_height = chrome.titlebar_height.min(theme.titlebar_height as i32).min(rect.h);
+    let titlebar_height =
+        chrome.titlebar_height.max(0).min(theme.titlebar_height as i32).min(visual_rect.h);
     match theme.chrome_style {
-        ChromeStyle::Facet => push_facet_frame(&mut plan, rect, frame, titlebar_height, state.active, theme),
-        ChromeStyle::Ghost => {
-            push_ghost_frame(&mut plan, rect, frame, titlebar_height, state.active, state.hovered, theme)
+        ChromeStyle::Facet => {
+            push_facet_frame(&mut plan, visual_rect, frame, titlebar_height, state.active, theme)
         }
+        ChromeStyle::Ghost => push_ghost_frame(
+            &mut plan,
+            visual_rect,
+            frame,
+            titlebar_height,
+            state.active,
+            state.hovered,
+            theme,
+        ),
     }
 
     if titlebar_height > 0 {
         push_chrome_buttons(&mut plan, rect, chrome, theme, state);
         if let Some(title) = title {
-            push_title(&mut plan, rect, chrome, frame, titlebar_height, theme, state.active, title);
+            push_title(
+                &mut plan,
+                visual_rect,
+                rect,
+                chrome,
+                frame,
+                titlebar_height,
+                theme,
+                state.active,
+                title,
+            );
         }
     }
 
@@ -97,12 +115,7 @@ fn push_facet_frame(
         });
         if active && titlebar_height > 6 && rect.w > frame * 2 {
             plan.commands.push(ChromeDrawCommand::HorizontalGradient {
-                rect: Rect {
-                    x: rect.x + frame,
-                    y: rect.y + 2,
-                    w: rect.w - frame * 2,
-                    h: 2,
-                },
+                rect: Rect { x: rect.x + frame, y: rect.y + 2, w: rect.w - frame * 2, h: 2 },
                 left: state.title_top,
                 center: theme.title_sheen,
                 right: state.title_top,
@@ -341,7 +354,8 @@ fn push_chrome_buttons(
 
 fn push_title<'a>(
     plan: &mut ChromeDrawPlan<'a>,
-    rect: Rect,
+    visual_rect: Rect,
+    content_rect: Rect,
     chrome: SurfaceChrome,
     frame: i32,
     titlebar_height: i32,
@@ -349,14 +363,15 @@ fn push_title<'a>(
     active: bool,
     title: &'a str,
 ) {
-    let buttons_w = chrome_button_rects(rect, chrome)
-        .map(|rects| rect.x + rect.w - rects[0].1.x)
+    let buttons_w = chrome_button_rects(content_rect, chrome)
+        .map(|rects| visual_rect.x + visual_rect.w - rects[0].1.x)
         .unwrap_or(0);
-    let max_chars =
-        ((rect.w - frame * 2 - 24 - buttons_w).max(10) as u32).saturating_div(10).max(1) as usize;
+    let max_chars = ((visual_rect.w - frame * 2 - 24 - buttons_w).max(10) as u32)
+        .saturating_div(10)
+        .max(1) as usize;
     plan.commands.push(ChromeDrawCommand::Text {
-        x: rect.x + frame + 8,
-        y: rect.y + (titlebar_height + 16) / 2,
+        x: visual_rect.x + frame + 8,
+        y: visual_rect.y + (titlebar_height + 16) / 2,
         px_size_bits: 16.0f32.to_bits(),
         text: title_prefix(title, max_chars),
         color: if active { theme.chrome_text } else { theme.chrome_text_inactive },
@@ -382,11 +397,19 @@ fn icon_path(button: ChromeButton, is_shaded: bool, is_fullscreen: bool) -> Opti
     match button {
         ChromeButton::Minimize => None,
         ChromeButton::Shade => {
-            if is_shaded { Some(WINDOW_ICON_UNSHADE_PATH) } else { Some(WINDOW_ICON_SHADE_PATH) }
+            if is_shaded {
+                Some(WINDOW_ICON_UNSHADE_PATH)
+            } else {
+                Some(WINDOW_ICON_SHADE_PATH)
+            }
         }
         ChromeButton::Maximize => None,
         ChromeButton::Fullscreen => {
-            if is_fullscreen { Some(WINDOW_ICON_RESTORE_PATH) } else { Some(WINDOW_ICON_FULLSCREEN_PATH) }
+            if is_fullscreen {
+                Some(WINDOW_ICON_RESTORE_PATH)
+            } else {
+                Some(WINDOW_ICON_FULLSCREEN_PATH)
+            }
         }
         ChromeButton::Close => Some(WINDOW_ICON_CLOSE_PATH),
     }
@@ -429,7 +452,7 @@ mod tests {
         let plan = window_chrome_plan(
             Rect::new(0, 0, 320, 240),
             SurfaceChrome { titlebar_height: 28, frame_thickness: 4 },
-            petals::default_theme(),
+            stile::default_theme(),
             ChromeVisualState {
                 active: true,
                 hovered: true,
@@ -442,8 +465,14 @@ mod tests {
             Some("Window"),
         );
 
-        assert!(plan.commands.iter().any(|cmd| matches!(cmd, ChromeDrawCommand::VerticalGradient { .. })));
+        assert!(
+            plan.commands
+                .iter()
+                .any(|cmd| matches!(cmd, ChromeDrawCommand::VerticalGradient { .. }))
+        );
         assert!(plan.commands.iter().any(|cmd| matches!(cmd, ChromeDrawCommand::Text { .. })));
-        assert!(plan.commands.iter().any(|cmd| matches!(cmd, ChromeDrawCommand::ControlGlyph { .. })));
+        assert!(
+            plan.commands.iter().any(|cmd| matches!(cmd, ChromeDrawCommand::ControlGlyph { .. }))
+        );
     }
 }

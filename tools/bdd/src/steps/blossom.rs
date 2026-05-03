@@ -3,8 +3,8 @@ use cucumber::{given, then, when};
 use super::basic::turn_on_machine;
 use super::helpers::{StepError, capture_failure_diagnostics, color_close};
 use crate::input::{
-    WindowInfo, drag_pointer, find_window as find_shared_window, qmp_key,
-    read_wayland_windows as read_shared_wayland_windows, send_qmp_sequence,
+    WindowInfo, drag_pointer, find_window as find_shared_window, move_pointer_to, qmp_key,
+    qmp_left_button, read_wayland_windows as read_shared_wayland_windows, send_qmp_sequence,
 };
 use crate::world::ThingOsWorld;
 
@@ -344,30 +344,33 @@ async fn compositor_emits_surface_configure(world: &mut ThingOsWorld) -> Result<
     }
 }
 
-/// `And the compositor does not reserve titlebar chrome for the toplevel`
-#[then("the compositor does not reserve titlebar chrome for the toplevel")]
-async fn compositor_does_not_reserve_titlebar_chrome(
+/// `And the compositor reserves stile titlebar chrome for the toplevel`
+#[then("the compositor reserves stile titlebar chrome for the toplevel")]
+async fn compositor_reserves_stile_titlebar_chrome(
     world: &mut ThingOsWorld,
 ) -> Result<(), StepError> {
-    let log = world.get_serial_log().await;
-    if log.contains("registered titlebar drag zone") || log.contains("titlebar height") {
-        Err(StepError(
-            "Compositor registered titlebar chrome during xdg_toplevel setup".to_string(),
-        ))
-    } else {
-        eprintln!("│  │  │      ✅ no compositor titlebar chrome reservation observed");
+    if world.wait_for_serial("bloom: registered titlebar drag zone", 60.0).await {
+        eprintln!("│  │  │      ✅ compositor reserved stile titlebar chrome");
         Ok(())
+    } else {
+        Err(StepError(
+            "Compositor did not reserve stile titlebar chrome during xdg_toplevel setup"
+                .to_string(),
+        ))
     }
 }
 
-/// `And the compositor exposes a move handle for the toplevel`
-#[then("the compositor exposes a move handle for the toplevel")]
-async fn compositor_exposes_move_handle(world: &mut ThingOsWorld) -> Result<(), StepError> {
-    if world.wait_for_serial("Window handle ready", 60.0).await {
-        eprintln!("│  │  │      ✅ compositor move handle observed");
-        Ok(())
+/// `And the compositor does not expose an extra move handle for the toplevel`
+#[then("the compositor does not expose an extra move handle for the toplevel")]
+async fn compositor_does_not_expose_extra_move_handle(
+    world: &mut ThingOsWorld,
+) -> Result<(), StepError> {
+    let log = world.get_serial_log().await;
+    if log.contains("Window handle ready") {
+        Err(StepError("Compositor exposed an extra toplevel move handle".to_string()))
     } else {
-        Err(StepError("Compositor did not expose a toplevel move handle".to_string()))
+        eprintln!("│  │  │      ✅ compositor uses titlebar chrome without an extra handle");
+        Ok(())
     }
 }
 
@@ -1023,7 +1026,7 @@ async fn drag_clock_window_over_wayland_hello_title_bar(
     let target_x = hello.x.saturating_add(40);
     let target_y = hello.y.saturating_sub(20);
     let start_x = clock.x.saturating_add(24);
-    let start_y = clock.y.saturating_add(14);
+    let start_y = clock.y.saturating_sub(14);
     let commands = drag_pointer(start_x, start_y, target_x, target_y, 1);
     send_qmp_sequence(world, &commands, "clock-window drag")
         .await
@@ -1041,7 +1044,7 @@ async fn higher_z_content_obscures_lower_window_chrome(
     let clock = find_window(&windows, "Clock")?;
     let hello_title = TestRect {
         x: hello.x.saturating_add(8),
-        y: hello.y.saturating_add(6),
+        y: hello.y.saturating_sub(22),
         w: hello.w.saturating_sub(16),
         h: 18,
     };
@@ -1101,13 +1104,10 @@ async fn higher_z_content_obscures_lower_window_chrome(
     )))
 }
 
-#[when("I drag the Wayland hello window handle")]
-async fn drag_wayland_hello_window_handle(world: &mut ThingOsWorld) -> Result<(), StepError> {
+#[when("I drag the Wayland hello titlebar")]
+async fn drag_wayland_hello_titlebar(world: &mut ThingOsWorld) -> Result<(), StepError> {
     if world.qmp_control.is_none() {
-        return Err(StepError("No QMP connection for window-handle drag input".to_string()));
-    }
-    if !world.wait_for_serial("Window handle ready", 60.0).await {
-        return Err(StepError("Bloom did not expose a window handle".to_string()));
+        return Err(StepError("No QMP connection for titlebar drag input".to_string()));
     }
     if !world.wait_for_serial("ps2_mouse: bristle pid=", 60.0).await {
         return Err(StepError("PS/2 mouse driver did not connect to Bristle".to_string()));
@@ -1116,37 +1116,16 @@ async fn drag_wayland_hello_window_handle(world: &mut ThingOsWorld) -> Result<()
         return Err(StepError("Bloom did not register its Bristle pointer sink".to_string()));
     }
 
-    let commands = [
-        (
-            r#"{"execute": "input-send-event", "arguments": {"events": [{"type": "rel", "data": {"axis": "x", "value": -10000}}, {"type": "rel", "data": {"axis": "y", "value": -10000}}]}}"#,
-            1_000,
-        ),
-        (
-            r#"{"execute": "input-send-event", "arguments": {"events": [{"type": "rel", "data": {"axis": "x", "value": 50}}, {"type": "rel", "data": {"axis": "y", "value": 10}}]}}"#,
-            500,
-        ),
-        (
-            r#"{"execute": "input-send-event", "arguments": {"events": [{"type": "btn", "data": {"down": true, "button": "left"}}]}}"#,
-            200,
-        ),
-        (
-            r#"{"execute": "input-send-event", "arguments": {"events": [{"type": "rel", "data": {"axis": "x", "value": 80}}, {"type": "rel", "data": {"axis": "y", "value": 48}}]}}"#,
-            500,
-        ),
-        (
-            r#"{"execute": "input-send-event", "arguments": {"events": [{"type": "btn", "data": {"down": false, "button": "left"}}]}}"#,
-            100,
-        ),
-    ];
-
-    for (command, settle_ms) in commands {
-        world
-            .execute_qmp_control(command)
-            .await
-            .map_err(|e| StepError(format!("QMP window-handle drag failed: {}", e)))?;
-        tokio::time::sleep(std::time::Duration::from_millis(settle_ms)).await;
-    }
-    Ok(())
+    let windows = read_wayland_windows(world).await?;
+    let window = find_window(&windows, "Wayland Lab")?;
+    let start_x = window.x.saturating_add(48);
+    let start_y = window.y.saturating_sub(14);
+    let end_x = start_x.saturating_add(80);
+    let end_y = start_y.saturating_add(48);
+    let commands = drag_pointer(start_x, start_y, end_x, end_y, 4);
+    send_qmp_sequence(world, &commands, "titlebar drag")
+        .await
+        .map_err(|e| StepError(format!("QMP titlebar drag failed: {}", e)))
 }
 
 #[when("I hold Meta and drag inside the Wayland hello client")]
@@ -1328,37 +1307,16 @@ async fn drag_wayland_hello_frame(world: &mut ThingOsWorld) -> Result<(), StepEr
         return Err(StepError("Bloom did not register its Bristle pointer sink".to_string()));
     }
 
-    let commands = [
-        (
-            r#"{"execute": "input-send-event", "arguments": {"events": [{"type": "rel", "data": {"axis": "x", "value": -10000}}, {"type": "rel", "data": {"axis": "y", "value": -10000}}]}}"#,
-            1_000,
-        ),
-        (
-            r#"{"execute": "input-send-event", "arguments": {"events": [{"type": "rel", "data": {"axis": "x", "value": 476}}, {"type": "rel", "data": {"axis": "y", "value": 316}}]}}"#,
-            500,
-        ),
-        (
-            r#"{"execute": "input-send-event", "arguments": {"events": [{"type": "btn", "data": {"down": true, "button": "left"}}]}}"#,
-            200,
-        ),
-        (
-            r#"{"execute": "input-send-event", "arguments": {"events": [{"type": "rel", "data": {"axis": "x", "value": 64}}, {"type": "rel", "data": {"axis": "y", "value": 48}}]}}"#,
-            500,
-        ),
-        (
-            r#"{"execute": "input-send-event", "arguments": {"events": [{"type": "btn", "data": {"down": false, "button": "left"}}]}}"#,
-            100,
-        ),
-    ];
-
-    for (command, settle_ms) in commands {
-        world
-            .execute_qmp_control(command)
-            .await
-            .map_err(|e| StepError(format!("QMP frame resize failed: {}", e)))?;
-        tokio::time::sleep(std::time::Duration::from_millis(settle_ms)).await;
-    }
-    Ok(())
+    let windows = read_wayland_windows(world).await?;
+    let window = find_window(&windows, "Wayland Lab")?;
+    let start_x = window.x.saturating_add(window.w as i32).saturating_add(2);
+    let start_y = window.y.saturating_add(window.h as i32).saturating_add(2);
+    let end_x = start_x.saturating_add(64);
+    let end_y = start_y.saturating_add(48);
+    let commands = drag_pointer(start_x, start_y, end_x, end_y, 4);
+    send_qmp_sequence(world, &commands, "frame resize")
+        .await
+        .map_err(|e| StepError(format!("QMP frame resize failed: {}", e)))
 }
 
 #[then("the compositor should resize the toplevel window")]
@@ -1378,10 +1336,77 @@ async fn compositor_resizes_toplevel_window(world: &mut ThingOsWorld) -> Result<
     Ok(())
 }
 
+#[when("I move the pointer over the Wayland hello titlebar")]
+async fn move_pointer_over_wayland_hello_titlebar(
+    world: &mut ThingOsWorld,
+) -> Result<(), StepError> {
+    if world.qmp_control.is_none() {
+        return Err(StepError("No QMP connection for titlebar hover input".to_string()));
+    }
+    if !world.wait_for_serial("ps2_mouse: bristle pid=", 60.0).await {
+        return Err(StepError("PS/2 mouse driver did not connect to Bristle".to_string()));
+    }
+    if !world.wait_for_serial("bloom: registered bristle pointer sink", 60.0).await {
+        return Err(StepError("Bloom did not register its Bristle pointer sink".to_string()));
+    }
+
+    let windows = read_wayland_windows(world).await?;
+    let window = find_window(&windows, "Wayland Lab")?;
+    let mut commands = move_pointer_to(window.x.saturating_add(24), window.y.saturating_add(24));
+    commands.extend(move_pointer_to(window.x.saturating_add(48), window.y.saturating_sub(14)));
+    send_qmp_sequence(world, &commands, "titlebar cursor hover")
+        .await
+        .map_err(|e| StepError(format!("QMP titlebar hover failed: {}", e)))
+}
+
+#[then("the compositor should use the move cursor")]
+async fn compositor_uses_move_cursor(world: &mut ThingOsWorld) -> Result<(), StepError> {
+    if world.wait_for_serial("Cursor kind Move", 10.0).await {
+        eprintln!("│  │  │      ✅ compositor selected the move cursor");
+        Ok(())
+    } else {
+        Err(StepError("Bloom did not select the move cursor over the titlebar".to_string()))
+    }
+}
+
+#[when("I move the pointer over the Wayland hello frame")]
+async fn move_pointer_over_wayland_hello_frame(world: &mut ThingOsWorld) -> Result<(), StepError> {
+    if world.qmp_control.is_none() {
+        return Err(StepError("No QMP connection for frame hover input".to_string()));
+    }
+    if !world.wait_for_serial("ps2_mouse: bristle pid=", 60.0).await {
+        return Err(StepError("PS/2 mouse driver did not connect to Bristle".to_string()));
+    }
+    if !world.wait_for_serial("bloom: registered bristle pointer sink", 60.0).await {
+        return Err(StepError("Bloom did not register its Bristle pointer sink".to_string()));
+    }
+
+    let windows = read_wayland_windows(world).await?;
+    let window = find_window(&windows, "Wayland Lab")?;
+    let mut commands = move_pointer_to(window.x.saturating_add(24), window.y.saturating_add(24));
+    commands.extend(move_pointer_to(
+        window.x.saturating_add(window.w as i32).saturating_add(2),
+        window.y.saturating_add(window.h as i32).saturating_add(2),
+    ));
+    send_qmp_sequence(world, &commands, "frame cursor hover")
+        .await
+        .map_err(|e| StepError(format!("QMP frame hover failed: {}", e)))
+}
+
+#[then("the compositor should use a resize cursor")]
+async fn compositor_uses_resize_cursor(world: &mut ThingOsWorld) -> Result<(), StepError> {
+    if world.wait_for_serial("Cursor kind Resize", 10.0).await {
+        eprintln!("│  │  │      ✅ compositor selected a resize cursor");
+        Ok(())
+    } else {
+        Err(StepError("Bloom did not select a resize cursor over the frame".to_string()))
+    }
+}
+
 async fn click_wayland_hello_chrome_button(
     world: &mut ThingOsWorld,
     name: &str,
-    x: i32,
+    _x: i32,
 ) -> Result<(), StepError> {
     if world.qmp_control.is_none() {
         return Err(StepError(format!("No QMP connection for {} button input", name)));
@@ -1396,34 +1421,26 @@ async fn click_wayland_hello_chrome_button(
         return Err(StepError("Bloom did not register its Bristle pointer sink".to_string()));
     }
 
-    let move_to_button = format!(
-        r#"{{"execute": "input-send-event", "arguments": {{"events": [{{"type": "rel", "data": {{"axis": "x", "value": {}}}}}, {{"type": "rel", "data": {{"axis": "y", "value": 20}}}}]}}}}"#,
-        x
-    );
-    let commands = [
-        (
-            r#"{"execute": "input-send-event", "arguments": {"events": [{"type": "rel", "data": {"axis": "x", "value": -10000}}, {"type": "rel", "data": {"axis": "y", "value": -10000}}]}}"#.to_string(),
-            1_000,
-        ),
-        (move_to_button, 500),
-        (
-            r#"{"execute": "input-send-event", "arguments": {"events": [{"type": "btn", "data": {"down": true, "button": "left"}}]}}"#.to_string(),
-            200,
-        ),
-        (
-            r#"{"execute": "input-send-event", "arguments": {"events": [{"type": "btn", "data": {"down": false, "button": "left"}}]}}"#.to_string(),
-            200,
-        ),
-    ];
-
-    for (command, settle_ms) in commands {
-        world
-            .execute_qmp_control(&command)
-            .await
-            .map_err(|e| StepError(format!("QMP {} button click failed: {}", name, e)))?;
-        tokio::time::sleep(std::time::Duration::from_millis(settle_ms)).await;
-    }
-    Ok(())
+    let windows = read_wayland_windows(world).await?;
+    let window = find_window(&windows, "Wayland Lab")?;
+    let visual_x = window.x.saturating_sub(4);
+    let visual_right = visual_x.saturating_add(window.w as i32).saturating_add(8);
+    let right = visual_right.saturating_sub(10);
+    let total_w = 28 * 3 + 4 * 2;
+    let left = right.saturating_sub(total_w);
+    let button_x = match name {
+        "minimize" => left.saturating_add(14),
+        "maximize" => left.saturating_add(28 + 4 + 14),
+        "close" => left.saturating_add((28 + 4) * 2 + 14),
+        _ => left.saturating_add(14),
+    };
+    let button_y = window.y.saturating_sub(14);
+    let mut commands = move_pointer_to(button_x, button_y);
+    commands.push((qmp_left_button(true), std::time::Duration::from_millis(120)));
+    commands.push((qmp_left_button(false), std::time::Duration::from_millis(200)));
+    send_qmp_sequence(world, &commands, &format!("{} button click", name))
+        .await
+        .map_err(|e| StepError(format!("QMP {} button click failed: {}", name, e)))
 }
 
 #[when("I click the Wayland hello maximize button")]

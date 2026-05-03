@@ -103,7 +103,6 @@ pub struct Surface {
     pub focus_eligible: bool,
     pub keyboard_interactivity: blossom::LayerKeyboardInteractivity,
     pub chrome: SurfaceChrome,
-    pub handle_height: u32,
     pub title: Option<String>,
     pub frame_serial: u64,
     pub is_fullscreen: bool,
@@ -136,7 +135,6 @@ pub struct CompositionEntry {
     pub z_order: i32,
     pub alpha: u8,
     pub chrome: SurfaceChrome,
-    pub handle_height: u32,
     pub active: bool,
     pub title: Option<String>,
     pub is_fullscreen: bool,
@@ -237,7 +235,6 @@ impl Scene {
                 focus_eligible: true,
                 keyboard_interactivity: blossom::LayerKeyboardInteractivity::None,
                 chrome: SurfaceChrome::default(),
-                handle_height: 0,
                 title: None,
                 frame_serial: 0,
                 is_fullscreen: false,
@@ -350,7 +347,6 @@ impl Scene {
             child.focus_eligible = false;
             // Subsurfaces have no compositor-drawn chrome.
             child.chrome = SurfaceChrome::default();
-            child.handle_height = 0;
         }
         true
     }
@@ -488,22 +484,6 @@ impl Scene {
         true
     }
 
-    pub fn set_surface_handle_height(
-        &mut self,
-        client_id: u32,
-        surface_id: u32,
-        height: u32,
-    ) -> bool {
-        let Some(surface) = self.surfaces.get_mut(&surface_id) else {
-            return false;
-        };
-        if surface.client_id != client_id {
-            return false;
-        }
-        surface.handle_height = height;
-        true
-    }
-
     pub fn set_surface_title(&mut self, client_id: u32, surface_id: u32, title: String) -> bool {
         let Some(surface) = self.surfaces.get_mut(&surface_id) else {
             return false;
@@ -558,7 +538,7 @@ impl Scene {
         } else {
             surface.restored_rect = Some(old_rect);
             surface.is_shaded = true;
-            new_rect.h = surface.chrome.titlebar_height;
+            new_rect.h = 0;
         }
 
         let changed = old_rect != new_rect;
@@ -612,7 +592,7 @@ impl Scene {
                     && surface.mapped
                     && surface.current.buffer.is_some()
             })
-            .map(|s| s.current.dest_rect)
+            .map(|s| bloom_surface_visual_rect(s.current.dest_rect, s.chrome))
             .collect();
 
         let next_z = self
@@ -658,6 +638,7 @@ impl Scene {
                         &existing_rects,
                         pending_buf.width,
                         pending_buf.height,
+                        surface.chrome,
                     )
                 };
                 if surface.current.z_order == 0 && surface.pending.z_order.is_none() {
@@ -810,7 +791,6 @@ impl Scene {
                 z_order: surface.current.z_order,
                 alpha,
                 chrome: surface.chrome,
-                handle_height: surface.handle_height,
                 active: active_surface == Some(surface.id),
                 title: surface.title.clone(),
                 is_fullscreen: surface.is_fullscreen,
@@ -850,20 +830,16 @@ impl Scene {
             }
             let rect = surface.current.dest_rect;
             let input_rect = surface.current.input_region.unwrap_or(rect);
-            let hit_rect = if surface.chrome.is_empty() { input_rect } else { rect };
+            let hit_rect = if surface.chrome.is_empty() {
+                input_rect
+            } else {
+                bloom_surface_visual_rect(rect, surface.chrome)
+            };
             let max_x = hit_rect.x.saturating_add(hit_rect.w) as i32;
             let max_y = hit_rect.y.saturating_add(hit_rect.h) as i32;
             let inside_input =
                 x >= hit_rect.x as i32 && y >= hit_rect.y as i32 && x < max_x && y < max_y;
-            let handle_bottom = rect.y.saturating_add(surface.handle_height.min(rect.h));
-            let inside_handle = surface.chrome.is_empty()
-                && surface.handle_height > 0
-                && x >= rect.x as i32
-                && x < rect.x.saturating_add(rect.w) as i32
-                && y >= rect.y as i32
-                && y < handle_bottom as i32;
-            let inside = inside_input || inside_handle;
-            if !inside {
+            if !inside_input {
                 continue;
             }
             match best {
@@ -880,22 +856,15 @@ impl Scene {
         if let Some(button) = bloom_chrome_button_at(rect, surface.chrome, x, y) {
             return Some(HitTarget::ChromeButton { surface_id, button });
         }
-        if let Some(edge) = bloom_resize_edge_at(rect, surface.chrome.frame_thickness, x, y) {
+        if let Some(edge) = bloom_resize_edge_at(rect, surface.chrome, x, y) {
             return Some(HitTarget::Frame { surface_id, edge });
         }
-        let titlebar_bottom = rect.y.saturating_add(surface.chrome.titlebar_height);
+        let visual_rect = bloom_surface_visual_rect(rect, surface.chrome);
         if surface.chrome.titlebar_height > 0
-            && x >= rect.x as i32
-            && x < rect.x.saturating_add(rect.w) as i32
-            && y >= rect.y as i32
-            && y < titlebar_bottom as i32
-        {
-            Some(HitTarget::TitleBar { surface_id })
-        } else if surface.handle_height > 0
-            && x >= rect.x as i32
-            && x < rect.x.saturating_add(rect.w) as i32
-            && y >= rect.y as i32
-            && y < rect.y.saturating_add(surface.handle_height.min(rect.h)) as i32
+            && x >= visual_rect.x as i32
+            && x < visual_rect.x.saturating_add(visual_rect.w) as i32
+            && y >= visual_rect.y as i32
+            && y < rect.y as i32
         {
             Some(HitTarget::TitleBar { surface_id })
         } else {
@@ -1167,27 +1136,67 @@ mod tests {
     }
 
     #[test]
-    fn handle_height_creates_titlebar_hit_target_without_chrome() {
+    fn chrome_extends_visual_rect_and_titlebar_hit_target() {
         let (mut scene, client_id, surface_id) = mapped_scene_with_surface();
-        assert!(scene.set_surface_handle_height(client_id, surface_id, 14));
+        assert!(scene.set_surface_chrome(
+            client_id,
+            surface_id,
+            SurfaceChrome { titlebar_height: 20, frame_thickness: 4 },
+        ));
 
-        assert_eq!(scene.hit_test(30, 35), Some(HitTarget::TitleBar { surface_id }));
-        assert_eq!(scene.hit_test(30, 50), Some(HitTarget::Client { surface_id }));
         assert_eq!(
             scene.surface_visual_rect(surface_id),
-            Some(Rect { x: 20, y: 30, w: 100, h: 80 })
+            Some(Rect { x: 16, y: 10, w: 108, h: 104 })
         );
+        assert_eq!(scene.hit_test(30, 20), Some(HitTarget::TitleBar { surface_id }));
+        assert_eq!(
+            scene.hit_test(18, 60),
+            Some(HitTarget::Frame { surface_id, edge: ResizeEdge::West })
+        );
+        assert_eq!(scene.hit_test(30, 40), Some(HitTarget::Client { surface_id }));
     }
 
     #[test]
-    fn fullscreen_surface_ignores_handle_hit_target() {
+    fn chrome_frame_hit_targets_cover_resize_cursors() {
         let (mut scene, client_id, surface_id) = mapped_scene_with_surface();
-        assert!(scene.set_surface_handle_height(client_id, surface_id, 14));
-        scene
-            .toggle_surface_fullscreen(surface_id, Rect { x: 0, y: 0, w: 800, h: 600 })
-            .expect("fullscreen");
+        assert!(scene.set_surface_chrome(
+            client_id,
+            surface_id,
+            SurfaceChrome { titlebar_height: 20, frame_thickness: 4 },
+        ));
 
-        assert_eq!(scene.hit_test(30, 35), Some(HitTarget::Client { surface_id }));
+        assert_eq!(
+            scene.hit_test(18, 12),
+            Some(HitTarget::Frame { surface_id, edge: ResizeEdge::NorthWest })
+        );
+        assert_eq!(
+            scene.hit_test(122, 12),
+            Some(HitTarget::Frame { surface_id, edge: ResizeEdge::NorthEast })
+        );
+        assert_eq!(
+            scene.hit_test(18, 112),
+            Some(HitTarget::Frame { surface_id, edge: ResizeEdge::SouthWest })
+        );
+        assert_eq!(
+            scene.hit_test(122, 112),
+            Some(HitTarget::Frame { surface_id, edge: ResizeEdge::SouthEast })
+        );
+        assert_eq!(
+            scene.hit_test(70, 12),
+            Some(HitTarget::Frame { surface_id, edge: ResizeEdge::North })
+        );
+        assert_eq!(
+            scene.hit_test(70, 112),
+            Some(HitTarget::Frame { surface_id, edge: ResizeEdge::South })
+        );
+        assert_eq!(
+            scene.hit_test(18, 70),
+            Some(HitTarget::Frame { surface_id, edge: ResizeEdge::West })
+        );
+        assert_eq!(
+            scene.hit_test(122, 70),
+            Some(HitTarget::Frame { surface_id, edge: ResizeEdge::East })
+        );
     }
 }
 
@@ -1241,18 +1250,28 @@ fn bloom_airy_window_rect(
     existing_rects: &[Rect],
     width: u32,
     height: u32,
+    chrome: SurfaceChrome,
 ) -> Rect {
     let mut blossom_rects = Vec::new();
     for rect in existing_rects {
         blossom_rects.push(to_blossom_rect(*rect));
     }
-    from_blossom_rect(blossom::wm::airy_window_rect(
+    let chrome = to_blossom_chrome(chrome);
+    let frame = chrome.frame_thickness.max(0);
+    let titlebar_height = chrome.titlebar_height.max(0);
+    let visual = blossom::wm::airy_window_rect(
         screen_w.min(i32::MAX as u32) as i32,
         screen_h.min(i32::MAX as u32) as i32,
         &blossom_rects,
-        width.min(i32::MAX as u32) as i32,
-        height.min(i32::MAX as u32) as i32,
-    ))
+        width.min(i32::MAX as u32) as i32 + frame.saturating_mul(2),
+        height.min(i32::MAX as u32) as i32 + titlebar_height + frame,
+    );
+    from_blossom_rect(BlossomRect {
+        x: visual.x.saturating_add(frame),
+        y: visual.y.saturating_add(titlebar_height),
+        w: width.min(i32::MAX as u32) as i32,
+        h: height.min(i32::MAX as u32) as i32,
+    })
 }
 
 fn bloom_surface_visual_rect(rect: Rect, chrome: SurfaceChrome) -> Rect {
@@ -1323,14 +1342,9 @@ fn bloom_chrome_button_at(
         .map(from_blossom_chrome_button)
 }
 
-fn bloom_resize_edge_at(rect: Rect, frame_thickness: u32, x: i32, y: i32) -> Option<ResizeEdge> {
-    blossom::wm::resize_edge_at(
-        to_blossom_rect(rect),
-        frame_thickness.min(i32::MAX as u32) as i32,
-        x,
-        y,
-    )
-    .map(from_blossom_resize_edge)
+fn bloom_resize_edge_at(rect: Rect, chrome: SurfaceChrome, x: i32, y: i32) -> Option<ResizeEdge> {
+    blossom::wm::resize_edge_at(to_blossom_rect(rect), to_blossom_chrome(chrome), x, y)
+        .map(from_blossom_resize_edge)
 }
 
 fn from_blossom_chrome_button(button: blossom::wm::ChromeButton) -> ChromeButton {

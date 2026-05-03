@@ -727,6 +727,7 @@ dependencies = [
  "abi",
  "petals",
  "stem",
+ "stile",
 ]
 
 [[package]]
