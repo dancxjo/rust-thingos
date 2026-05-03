@@ -47,29 +47,29 @@ pub fn select_shell() -> String {
     "/bin/sh".to_string()
 }
 
-fn spawn_shell_path(shell_path: &str) -> Option<u64> {
-    debug!("Launching shell '{}'", shell_path);
+fn spawn_shell_path(shell_path: &str, stdio_path: &str) -> Option<u64> {
+    debug!("Launching shell '{}' on '{}'", shell_path, stdio_path);
 
-    let open_console = || vfs_open("/dev/console", O_RDWR);
-    let stdin_fd = match open_console() {
+    let open_stdio = || vfs_open(stdio_path, O_RDWR);
+    let stdin_fd = match open_stdio() {
         Ok(fd) => fd,
         Err(err) => {
-            warn!("SPROUT: failed to open /dev/console for shell stdin: {:?}", err);
+            warn!("Failed to open {} for shell stdin: {:?}", stdio_path, err);
             return None;
         }
     };
-    let stdout_fd = match open_console() {
+    let stdout_fd = match open_stdio() {
         Ok(fd) => fd,
         Err(err) => {
-            warn!("SPROUT: failed to open /dev/console for shell stdout: {:?}", err);
+            warn!("Failed to open {} for shell stdout: {:?}", stdio_path, err);
             let _ = vfs_close(stdin_fd);
             return None;
         }
     };
-    let stderr_fd = match open_console() {
+    let stderr_fd = match open_stdio() {
         Ok(fd) => fd,
         Err(err) => {
-            warn!("SPROUT: failed to open /dev/console for shell stderr: {:?}", err);
+            warn!("Failed to open {} for shell stderr: {:?}", stdio_path, err);
             let _ = vfs_close(stdin_fd);
             let _ = vfs_close(stdout_fd);
             return None;
@@ -108,12 +108,12 @@ fn spawn_shell_path(shell_path: &str) -> Option<u64> {
 
 pub fn spawn_shell() -> Option<u64> {
     let shell_path = select_shell();
-    spawn_shell_path(&shell_path)
+    spawn_shell_path(&shell_path, "/dev/console")
 }
 
 pub fn spawn_safe_shell() -> Option<u64> {
-    info!("Safe shell requested; launching /bin/sh only");
-    spawn_shell_path("/bin/sh")
+    info!("Safe shell requested; launching /bin/sh on /dev/tty0");
+    spawn_shell_path("/bin/sh", "/dev/tty0")
 }
 
 pub fn safe_shell_requested() -> bool {
