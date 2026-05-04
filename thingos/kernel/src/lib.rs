@@ -2,6 +2,7 @@
 
 extern crate alloc;
 
+pub mod acpi_tables;
 pub mod authority;
 mod boot_progress;
 pub mod device_registry;

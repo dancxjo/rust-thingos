@@ -11,8 +11,8 @@ use stem::syscall::message::{KindId, msg_send};
 use stem::{debug, info, warn};
 
 use crate::pipelines::{
-    kernel_terminal_requested, safe_shell_requested, spawn_bloom, spawn_blossom, spawn_bristle,
-    spawn_chime, spawn_kernel_terminal_shell, spawn_netd, spawn_safe_serial_shell,
+    kernel_terminal_requested, safe_shell_requested, spawn_acpid, spawn_bloom, spawn_blossom,
+    spawn_bristle, spawn_chime, spawn_kernel_terminal_shell, spawn_netd, spawn_safe_serial_shell,
     spawn_safe_shell, spawn_shell,
 };
 
@@ -29,6 +29,11 @@ impl Supervisor {
 
     pub fn run_forever(&mut self) -> ! {
         info!("Starting session supervisor...");
+
+        // Spawn acpid early so the ACPI namespace is ready before cambium
+        // begins probing devices.  Missing binary is non-fatal (non-ACPI
+        // platforms simply skip this).
+        let _acpid_pid = spawn_acpid();
 
         if safe_shell_requested() {
             let _bristle_pid = spawn_bristle();
