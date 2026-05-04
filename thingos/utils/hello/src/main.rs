@@ -978,14 +978,18 @@ fn paint_tree(
             draw_rect_stroke(pixels, stride, height, dx, dy, dw, dh, 1, 0x66333B48);
         }
         if node.style.outline_color.is_some() {
+            // Outline is drawn at the original node boundary, not the clipped one,
+            // so the focus ring is always anchored to the actual widget edge.
+            // fill_rect clips at the buffer boundary; overflow past the clip rect is
+            // acceptable for the thin outline ring at V0.
             draw_rect_stroke(
                 pixels,
                 stride,
                 height,
-                dx - 1,
-                dy - 1,
-                dw.saturating_add(2),
-                dh.saturating_add(2),
+                x - 1,
+                y - 1,
+                w.saturating_add(2),
+                h.saturating_add(2),
                 1,
                 color_argb(node.style.outline_color.unwrap()),
             );
@@ -1003,7 +1007,9 @@ fn paint_tree(
                 let ty = y + px as i32;
                 if point_in_clip(tx, ty, clip) {
                     let color = node.style.color.map(color_argb).unwrap_or(fallback_text);
-                    let label = petals::ellipsize_ascii(text, text_capacity(dw as f32, px));
+                    // Ellipsize to the full node width so text layout is unaffected
+                    // by how much of the node happens to be visible.
+                    let label = petals::ellipsize_ascii(text, text_capacity(w as f32, px));
                     draw_text(text_renderer, pixels, stride, height, tx, ty, px, &label, color);
                 }
             }
@@ -1014,7 +1020,8 @@ fn paint_tree(
                 let ty = y + ((h as f32 + px) / 2.0) as i32 - 3;
                 if point_in_clip(tx, ty, clip) {
                     let color = node.style.color.map(color_argb).unwrap_or(fallback_text);
-                    let label = petals::ellipsize_ascii(text, text_capacity(dw as f32, px));
+                    // Ellipsize to the full node width (see comment above).
+                    let label = petals::ellipsize_ascii(text, text_capacity(w as f32, px));
                     draw_text(text_renderer, pixels, stride, height, tx, ty, px, &label, color);
                 }
             }
