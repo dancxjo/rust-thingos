@@ -373,7 +373,7 @@ impl NetVfsProvider {
             }
             match self.try_next_request() {
                 Ok(Some((resp_port, op, req_id, payload))) => {
-                    trace!("NETD: handling RPC op={:?} payload_len={}", op, payload.len());
+                    trace!("flower.pnghandling RPC op={:?} payload_len={}", op, payload.len());
                     self.handle_decoded(
                         iface, device, socket_set, socket_api, resp_port, op, req_id, &payload,
                     );
@@ -567,14 +567,14 @@ impl NetVfsProvider {
             }
         };
 
-        trace!("NETD: lookup path='{}'", path);
+        trace!("flower.pnglookup path='{}'", path);
         match self.resolve_path(path) {
             Some(handle) => {
-                trace!("NETD: lookup path='{}' -> handle {}", path, handle);
+                trace!("flower.pnglookup path='{}' -> handle {}", path, handle);
                 send_handle(resp_port, req_id, handle);
             }
             None => {
-                warn!("NETD: lookup path='{}' failed", path);
+                warn!("flower.pnglookup path='{}' failed", path);
                 send_err(resp_port, req_id, E_NOENT);
             }
         }
@@ -771,7 +771,7 @@ impl NetVfsProvider {
 
         let revents = self.poll_handle(handle, socket_set, socket_api);
 
-        trace!("NETD: op_poll handle={} revents=0x{:04x}", handle, revents);
+        trace!("flower.pngop_poll handle={} revents=0x{:04x}", handle, revents);
 
         let mut resp = [0u8; 5];
         resp[0] = E_OK as u8;

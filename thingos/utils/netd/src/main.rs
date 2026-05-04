@@ -141,7 +141,7 @@ fn get_args() -> Vec<String> {
 
     let mut buf = alloc::vec![0u8; len];
     if let Err(e) = argv_get(&mut buf) {
-        stem::error!("NETD: argv_get failed: {:?}", e);
+        stem::error!("flower.pngargv_get failed: {:?}", e);
         return Vec::new();
     }
 
@@ -150,7 +150,7 @@ fn get_args() -> Vec<String> {
         .skip(1)
         .filter_map(|arg| core::str::from_utf8(arg).ok().map(String::from))
         .collect();
-    stem::debug!("NETD: parsed {} argv bytes into {} args", len, args.len());
+    stem::debug!("flower.pngparsed {} argv bytes into {} args", len, args.len());
     args
 }
 
@@ -175,7 +175,7 @@ fn parse_config_from_args(args: &[String], cfg: &mut NetdConfig) {
                         cfg.mount_point = args[i + 1].clone();
                     } else {
                         warn!(
-                            "NETD: ignoring non-absolute --mount argument '{}' ; using {}",
+                            "flower.pngignoring non-absolute --mount argument '{}' ; using {}",
                             candidate, cfg.mount_point
                         );
                     }
@@ -187,7 +187,7 @@ fn parse_config_from_args(args: &[String], cfg: &mut NetdConfig) {
             // absolute path args as mount targets.
             _ if arg.starts_with('/') => cfg.mount_point = args[i].clone(),
             _ => {
-                debug!("NETD: ignoring positional arg '{}'", arg);
+                debug!("flower.pngignoring positional arg '{}'", arg);
             }
         }
         i += 1;
@@ -459,7 +459,7 @@ fn run_poll_thread(
                 let mp = state.mount_point.clone();
                 drop(state);
                 publish_ready_flag(&mp);
-                info!("NETD: Network ready");
+                info!("flower.pngNetwork ready");
                 net_state.lock().ready_announced = true;
                 continue; // skip delay — we have fresh work
             }
@@ -585,7 +585,7 @@ fn run_rpc_thread(
 
 #[stem::main]
 fn main(arg: usize) -> ! {
-    info!("NETD: Starting network service...");
+    info!("flower.pngStarting network service...");
     clear_ready_flag();
     let cfg = parse_config();
     if cfg.help {
@@ -594,17 +594,17 @@ fn main(arg: usize) -> ! {
     }
 
     debug!(
-        "NETD: startup arg={} mount_point={} oneshot={} provider_prefix={}",
+        "flower.pngstartup arg={} mount_point={} oneshot={} provider_prefix={}",
         arg, cfg.mount_point, cfg.oneshot, NIC_PATH_PREFIX
     );
 
-    info!("NETD: Waiting for network device VFS provider at {}*...", NIC_PATH_PREFIX);
+    info!("flower.pngWaiting for network device VFS provider at {}*...", NIC_PATH_PREFIX);
     let (provider_path, rx_fd, tx_fd, events_fd, mac, iface_mtu, initial_link_up) =
         open_nic_device();
     let mtu = iface_mtu as usize;
 
     debug!(
-        "NETD: Driver online at {} — MAC {:02x}:{:02x}:{:02x}:{:02x}:{:02x}:{:02x}  MTU {}",
+        "flower.pngDriver online at {} — MAC {:02x}:{:02x}:{:02x}:{:02x}:{:02x}:{:02x}  MTU {}",
         provider_path, mac[0], mac[1], mac[2], mac[3], mac[4], mac[5], mtu
     );
 
@@ -619,7 +619,7 @@ fn main(arg: usize) -> ! {
         match NetVfsProvider::new(mac, mtu, initial_link_up) {
             Some(provider) => break provider,
             None => {
-                warn!("NETD: Failed to create provider, retrying...");
+                warn!("flower.pngFailed to create provider, retrying...");
                 stem::time::sleep_ms(200);
             }
         }
@@ -629,7 +629,7 @@ fn main(arg: usize) -> ! {
         match stem::syscall::vfs::vfs_handle_from_port(net_provider.req_read_port()) {
             Ok(fd) => break fd,
             Err(e) => {
-                warn!("NETD: failed to bridge request port to fd: {:?}; retrying", e);
+                warn!("flower.pngfailed to bridge request port to fd: {:?}; retrying", e);
                 stem::time::sleep_ms(50);
             }
         }
@@ -639,7 +639,7 @@ fn main(arg: usize) -> ! {
         match vfs_watch_path("/dev/net", watch_mask::ALL_EVENTS, watch_flags::NONBLOCK) {
             Ok(fd) => Some(fd),
             Err(e) => {
-                warn!("NETD: Failed to watch /dev/net for NIC registrations: {:?}", e);
+                warn!("flower.pngFailed to watch /dev/net for NIC registrations: {:?}", e);
                 None
             }
         };
@@ -647,10 +647,10 @@ fn main(arg: usize) -> ! {
     // Now mount the provider just before entering the service loop
     loop {
         if net_provider.mount(&mount_point) {
-            debug!("NETD: mounted VFS provider at {} with req_fd={}", mount_point, req_fd);
+            debug!("flower.pngmounted VFS provider at {} with req_fd={}", mount_point, req_fd);
             break;
         } else {
-            warn!("NETD: Failed to mount {}, retrying...", mount_point);
+            warn!("flower.pngFailed to mount {}, retrying...", mount_point);
             stem::time::sleep_ms(200);
         }
     }
@@ -696,26 +696,26 @@ fn main(arg: usize) -> ! {
         match dhcp::run_dhcp(&mut state.iface, &mut state.device) {
             Ok(cfg) => {
                 debug!(
-                    "NETD: oneshot DHCP result ip={} gateway={} dns={}",
+                    "flower.pngoneshot DHCP result ip={} gateway={} dns={}",
                     cfg.ip, cfg.gateway, cfg.dns
                 );
                 exit(0);
             }
             Err(e) => {
-                warn!("NETD: DHCP failed in oneshot mode: {:?}", e);
+                warn!("flower.pngDHCP failed in oneshot mode: {:?}", e);
                 exit(1);
             }
         }
     }
 
-    info!("NETD: Configuring network with DHCP...");
+    info!("flower.pngConfiguring network with DHCP...");
     let dhcp_config = loop {
         let mut state_guard = net_state.lock();
         let state = &mut *state_guard;
         match dhcp::run_dhcp(&mut state.iface, &mut state.device) {
             Ok(cfg) => break cfg,
             Err(e) => {
-                warn!("NETD: DHCP failed: {:?}; retrying in 5s", e);
+                warn!("flower.pngDHCP failed: {:?}; retrying in 5s", e);
                 drop(state_guard);
                 stem::time::sleep_ms(5000);
             }
@@ -723,7 +723,7 @@ fn main(arg: usize) -> ! {
     };
 
     debug!(
-        "NETD: DHCP configured ip={} gateway={} dns={}",
+        "flower.pngDHCP configured ip={} gateway={} dns={}",
         dhcp_config.ip, dhcp_config.gateway, dhcp_config.dns
     );
     {
@@ -732,7 +732,7 @@ fn main(arg: usize) -> ! {
     }
 
     // ── Main thread becomes the network poll thread ──────────────────────────
-    debug!("NETD: entering network poll loop mount_point={} req_fd={}", mount_point, req_fd);
+    debug!("flower.pngentering network poll loop mount_point={} req_fd={}", mount_point, req_fd);
     run_poll_thread(net_state, cmd_queue, event_queue)
 }
 
@@ -764,7 +764,7 @@ fn scan_registered_nic_units() -> [bool; MAX_NIC_UNITS as usize] {
             seen[unit as usize] = true;
         }
     }
-    debug!("NETD: NIC scan complete: {:?}", seen);
+    debug!("flower.pngNIC scan complete: {:?}", seen);
     seen
 }
 
@@ -777,7 +777,7 @@ fn report_new_nic_registrations(known_units: &mut [bool; MAX_NIC_UNITS as usize]
             known_units[idx] = true;
             detected = true;
             debug!(
-                "NETD: Detected new NIC registration from cambium at {}{}",
+                "flower.pngDetected new NIC registration from cambium at {}{}",
                 NIC_PATH_PREFIX, unit
             );
         } else if !ready {
@@ -789,7 +789,7 @@ fn report_new_nic_registrations(known_units: &mut [bool; MAX_NIC_UNITS as usize]
 
 fn nic_unit_ready(unit: u32) -> bool {
     let rx_path = alloc::format!("{}{}{}", NIC_PATH_PREFIX, unit, "/rx");
-    stem::trace!("NETD: checking nic unit {} at {}", unit, rx_path);
+    stem::trace!("flower.pngchecking nic unit {} at {}", unit, rx_path);
     match vfs_open(&rx_path, O_RDONLY | O_NONBLOCK) {
         Ok(fd) => {
             let _ = vfs_close(fd);
@@ -807,7 +807,7 @@ fn drain_watch_fd(fd: u32) {
             Ok(_) => {}
             Err(abi::errors::Errno::EAGAIN) => break,
             Err(err) => {
-                warn!("NETD: failed draining /dev/net watch events: {:?}", err);
+                warn!("flower.pngfailed draining /dev/net watch events: {:?}", err);
                 break;
             }
         }
@@ -831,17 +831,17 @@ fn open_nic_device() -> (alloc::string::String, u32, u32, u32, [u8; 6], u32, boo
                 let mtu_path = alloc::format!("{}/mtu", provider_path);
                 let status_path = alloc::format!("{}/status", provider_path);
 
-                stem::trace!("NETD: probing {}", provider_path);
+                stem::trace!("flower.pngprobing {}", provider_path);
                 let rx_fd = match vfs_open(&rx_path, O_RDONLY | O_NONBLOCK) {
                     Ok(fd) => fd,
                     Err(_) => continue,
                 };
 
-                stem::trace!("NETD: found {}/rx, opening companion files", provider_path);
+                stem::trace!("flower.pngfound {}/rx, opening companion files", provider_path);
                 let tx_fd = match vfs_open(&tx_path, O_WRONLY) {
                     Ok(fd) => fd,
                     Err(e) => {
-                        warn!("NETD: Failed to open {}: {:?}", tx_path, e);
+                        warn!("flower.pngFailed to open {}: {:?}", tx_path, e);
                         let _ = vfs_close(rx_fd);
                         continue;
                     }
@@ -850,7 +850,7 @@ fn open_nic_device() -> (alloc::string::String, u32, u32, u32, [u8; 6], u32, boo
                 let events_fd = match vfs_open(&events_path, O_RDONLY | O_NONBLOCK) {
                     Ok(fd) => fd,
                     Err(e) => {
-                        warn!("NETD: Failed to open {}: {:?}", events_path, e);
+                        warn!("flower.pngFailed to open {}: {:?}", events_path, e);
                         let _ = vfs_close(rx_fd);
                         let _ = vfs_close(tx_fd);
                         continue;
@@ -862,7 +862,7 @@ fn open_nic_device() -> (alloc::string::String, u32, u32, u32, [u8; 6], u32, boo
                 let initial_link_up = read_link_state_file(&status_path).unwrap_or(false);
 
                 debug!(
-                    "NETD: Opened VFS NIC device at {} (rx={}, tx={}, events={}, mtu={}, link={})",
+                    "flower.pngOpened VFS NIC device at {} (rx={}, tx={}, events={}, mtu={}, link={})",
                     provider_path,
                     rx_fd,
                     tx_fd,
