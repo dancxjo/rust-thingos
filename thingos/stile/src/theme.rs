@@ -239,7 +239,7 @@ pub const AURORA_GLASS: Theme = Theme {
 pub const NOCTURNE_IRIS: Theme = Theme {
     name: DEFAULT_THEME_NAME,
     renderer: ThemeRenderer::NocturneIris,
-    wallpaper_path: "/public/wallpapers/flower.png",
+    wallpaper_path: Some("/public/wallpapers/flower.png"),
     active: WindowStateTokens {
         border: 0x996F55D9,
         title_top: 0x702E2158,

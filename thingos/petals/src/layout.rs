@@ -633,6 +633,8 @@ mod tests {
             let taffy_style = apply_style_to_taffy(&style);
             assert_eq!(taffy_style.flex_wrap, FlexWrap::NoWrap);
         }
+    }
+
     /// A `list_row_pressable` should expand to fill the full container width
     /// when the parent container uses `align_items: Stretch`.
     ///
