@@ -737,6 +737,7 @@ impl CompositorVisuals {
         pointer_x: i32,
         pointer_y: i32,
         primary_button_down: bool,
+        layout_debug: bool,
     ) -> (Vec<WindowOverlayPlane>, Vec<WindowOverlayPlane>) {
         if !composition.iter().any(needs_window_overlay) {
             release_overlay_buffers(display, &mut self.body_overlays);
@@ -796,6 +797,7 @@ impl CompositorVisuals {
                 local_pointer_x,
                 local_pointer_y,
                 primary_button_down,
+                layout_debug,
             );
             chrome_planes.push(WindowOverlayPlane {
                 surface_id: entry.surface_id,
@@ -984,6 +986,7 @@ impl CompositorVisuals {
         &mut self,
         display: &DisplayBackend,
         state: &blossom::runbox::RunState,
+        layout_debug: bool,
     ) -> Option<OverlayPlane> {
         if !state.visible {
             return None;
@@ -999,6 +1002,7 @@ impl CompositorVisuals {
             overlay.height,
             state,
             self.pistil.as_ref().and_then(|lib| lib.draw_text),
+            layout_debug,
         );
 
         Some(OverlayPlane {
@@ -1044,6 +1048,7 @@ impl CompositorVisuals {
         &mut self,
         display: &DisplayBackend,
         state: &blossom::launcher::LauncherState,
+        layout_debug: bool,
     ) -> Option<OverlayPlane> {
         if !state.visible {
             return None;
@@ -1060,6 +1065,7 @@ impl CompositorVisuals {
             state,
             self.pistil.as_ref().and_then(|lib| lib.draw_text),
             self.pistil.as_ref().and_then(|lib| lib.draw_svg_icon),
+            layout_debug,
         );
 
         Some(OverlayPlane {
@@ -1664,6 +1670,7 @@ fn draw_chrome_overlay(
     pointer_x: i32,
     pointer_y: i32,
     primary_button_down: bool,
+    layout_debug: bool,
 ) {
     dst.fill(0);
     for entry in composition {
@@ -1699,6 +1706,10 @@ fn draw_chrome_overlay(
             pistil_draw_svg_icon,
             pistil_draw_text,
         );
+
+        if layout_debug {
+            draw_chrome_layout_debug(dst, stride, height, entry, theme);
+        }
     }
 
     let len = (stride.saturating_mul(height)) as usize;
@@ -1707,6 +1718,55 @@ fn draw_chrome_overlay(
             *px = 0;
         }
     }
+}
+
+/// Draw layout-debug bounding boxes on a chrome overlay by building a petals
+/// `UiTree` for the window chrome and calling [`petals::draw_layout_debug`].
+///
+/// The tree is rebuilt and re-laid-out on every frame while the overlay is
+/// active.  This is intentional: the overlay is only rendered when the
+/// developer explicitly enables it (Alt+F9), so the per-frame allocation cost
+/// is an acceptable trade-off for simplicity and accuracy.
+fn draw_chrome_layout_debug(
+    dst: &mut [u32],
+    stride: u32,
+    height: u32,
+    entry: &CompositionEntry,
+    theme: Theme,
+) {
+    let title = entry.title.as_deref().unwrap_or("");
+    let Ok((mut tree, _)) = petals::window_chrome_tree(title) else {
+        return;
+    };
+    let rules = petals::window_chrome_rules_for_theme(theme);
+    if tree.restyle(&rules).is_err() {
+        return;
+    }
+    if tree
+        .apply_style(
+            tree.root(),
+            petals::ResolvedStyle {
+                width: Some(stride as f32),
+                height: Some(height as f32),
+                flex_direction: Some(petals::FlexDirection::Column),
+                align_items: Some(petals::AlignItems::Stretch),
+                ..petals::ResolvedStyle::default()
+            },
+        )
+        .is_err()
+    {
+        return;
+    }
+    if tree
+        .compute_layout(petals::Size {
+            width: petals::AvailableSpace::Definite(stride as f32),
+            height: petals::AvailableSpace::Definite(height as f32),
+        })
+        .is_err()
+    {
+        return;
+    }
+    petals::draw_layout_debug(&tree, dst, stride, height);
 }
 
 fn execute_blossom_chrome_plan(
@@ -2243,6 +2303,7 @@ fn draw_runbox_overlay(
     height: u32,
     state: &blossom::runbox::RunState,
     pistil_draw_text: Option<DrawTextFn>,
+    layout_debug: bool,
 ) {
     dst.fill(0);
     fill_rect(dst, width, 0, 0, width, height, 0xF5181C26);
@@ -2297,6 +2358,35 @@ fn draw_runbox_overlay(
         "Run",
         0xFF111318,
     );
+
+    if layout_debug {
+        // Run dialog doesn't use a petals tree, so draw known hit regions manually
+        // using the same color palette as `petals::debug_overlay`.
+        // Layout bound: full dialog (depth 0 color).
+        draw_debug_border_argb(dst, width, height, 0, 0, width, height, petals::DEPTH_COLORS[0]);
+        // Text input field (depth 1 color – layout bound + hit region).
+        draw_debug_border_argb(
+            dst,
+            width,
+            height,
+            field_x,
+            field_y,
+            field_w,
+            field_h,
+            petals::DEPTH_COLORS[1],
+        );
+        // Run button (hit region color).
+        draw_debug_border_argb(
+            dst,
+            width,
+            height,
+            button_x,
+            button_y,
+            button_w,
+            button_h,
+            petals::HIT_REGION_COLOR,
+        );
+    }
 }
 
 fn draw_launcher_overlay(
@@ -2306,6 +2396,7 @@ fn draw_launcher_overlay(
     state: &blossom::launcher::LauncherState,
     pistil_draw_text: Option<DrawTextFn>,
     pistil_draw_svg_icon: Option<DrawSvgIconFn>,
+    layout_debug: bool,
 ) {
     dst.fill(0);
     fill_rect(dst, width, 0, 0, width, height, 0xF516181D);
@@ -2366,6 +2457,10 @@ fn draw_launcher_overlay(
     }
 
     draw_tree_text(&tree, nodes.status, dst, width, height, pistil_draw_text, 12.0, 0xFFADB7C7);
+
+    if layout_debug {
+        petals::draw_layout_debug(&tree, dst, width, height);
+    }
 }
 
 fn draw_launcher_icon(
@@ -2623,6 +2718,24 @@ fn fill_rect_i32(
 fn fill_rect(dst: &mut [u32], stride: u32, x: i32, y: i32, w: u32, h: u32, color: u32) {
     let height = if stride == 0 { 0 } else { (dst.len() as u32) / stride };
     fill_rect_i32(dst, stride, height, x, y, w as i32, h as i32, color);
+}
+
+/// Draw a 1-pixel border rectangle using `color` (ARGB). Delegates to
+/// [`draw_rect_stroke`], which writes the color as-is (direct pixel
+/// assignment, no per-pixel alpha blending).  The caller is responsible
+/// for supplying a pre-multiplied or debug-friendly opaque color.
+/// Suitable for layout-debug borders that need to stand out.
+fn draw_debug_border_argb(
+    dst: &mut [u32],
+    stride: u32,
+    height: u32,
+    x: i32,
+    y: i32,
+    w: u32,
+    h: u32,
+    color: u32,
+) {
+    draw_rect_stroke(dst, stride, height, x, y, w, h, 1, color);
 }
 
 fn draw_text(

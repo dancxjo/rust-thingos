@@ -59,6 +59,7 @@ pub struct InputState {
     /// frame rather than per sample.  `None` means no motion since last flush.
     pending_motion_ts: Option<u64>,
     pointer_overlay_enabled: bool,
+    layout_debug_enabled: bool,
     primary_button_down: bool,
     pointer_grab: Option<PointerGrab>,
     cursor_kind: CursorKind,
@@ -106,6 +107,7 @@ impl InputState {
             deferred_cursor_events: 0,
             pending_motion_ts: None,
             pointer_overlay_enabled: false,
+            layout_debug_enabled: false,
             primary_button_down: false,
             pointer_grab: None,
             cursor_kind: CursorKind::Default,
@@ -165,6 +167,10 @@ impl InputState {
 
     pub fn pointer_overlay_enabled(&self) -> bool {
         self.pointer_overlay_enabled
+    }
+
+    pub fn layout_debug_enabled(&self) -> bool {
+        self.layout_debug_enabled
     }
 
     pub fn primary_button_down(&self) -> bool {
@@ -716,6 +722,17 @@ impl InputState {
                     }
                     return true;
                 }
+                if is_layout_debug_toggle(key) {
+                    if !key.is_repeat() {
+                        self.layout_debug_enabled = !self.layout_debug_enabled;
+                        damage.mark_full(self.output_w as u32, self.output_h as u32);
+                        stem::info!(
+                            "Layout debug overlay {}",
+                            if self.layout_debug_enabled { "enabled" } else { "disabled" }
+                        );
+                    }
+                    return true;
+                }
                 let wm_action =
                     blossom::input::handle_hotkey(key.key(), key.mods(), key.is_repeat());
                 if matches!(wm_action, blossom::input::WmAction::ToggleRunBox) {
@@ -881,6 +898,9 @@ impl InputState {
                 let key = KeyEventPayload::from_bytes(&p);
                 self.keyboard_modifiers = key.mods;
                 if is_pointer_overlay_toggle(key) {
+                    return false;
+                }
+                if is_layout_debug_toggle(key) {
                     return false;
                 }
                 if self.launcher.visible || self.launcher_keyboard_modal {
@@ -1695,6 +1715,10 @@ fn pressed_flag(pressed: bool) -> u8 {
 
 fn is_pointer_overlay_toggle(key: KeyEventPayload) -> bool {
     key.key() == Key::F7 && key.mods().has_alt()
+}
+
+fn is_layout_debug_toggle(key: KeyEventPayload) -> bool {
+    key.key() == Key::F9 && key.mods().has_alt()
 }
 
 struct BloomLauncher;

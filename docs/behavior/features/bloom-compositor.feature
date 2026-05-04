@@ -156,6 +156,16 @@ Feature: Bloom compositor desktop behavior
     When I press Alt+F7
     Then the serial output should contain "bloom: pointer debug overlay disabled" within 60s
 
+  @layout-debug
+  Scenario: Layout debug overlay is toggled with Alt+F9
+    Given the machine is booted
+    Then the serial output should contain "bloom: registered bristle pointer sink" within 60s
+    And the serial output should contain "ps2_kbd: bristle pid=" within 60s
+    When I press Alt+F9
+    Then the serial output should contain "Layout debug overlay enabled" within 60s
+    When I press Alt+F9
+    Then the serial output should contain "Layout debug overlay disabled" within 60s
+
   Scenario: Default Wayland clients receive a complete desktop protocol surface
     Given the machine is booted
     Then the serial output should contain "wayland-server: listening on /run/wayland-0" within 60s

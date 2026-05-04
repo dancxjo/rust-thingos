@@ -562,9 +562,12 @@ impl BloomWorld {
         } else {
             None
         };
-        let runbox_overlay = self.visuals.runbox_overlay_plane(&self.display, self.input.runbox());
-        let launcher_overlay =
-            self.visuals.launcher_overlay_plane(&self.display, self.input.launcher());
+        let layout_debug = self.input.layout_debug_enabled();
+        let runbox_overlay =
+            self.visuals.runbox_overlay_plane(&self.display, self.input.runbox(), layout_debug);
+        let launcher_overlay = self
+            .visuals
+            .launcher_overlay_plane(&self.display, self.input.launcher(), layout_debug);
 
         // When hardware cursor is active the cursor plane is handled
         // independently; pass `None` to the software compositor so it is not
@@ -578,6 +581,7 @@ impl BloomWorld {
             pointer_x,
             pointer_y,
             self.input.primary_button_down(),
+            layout_debug,
         );
 
         let mut flags = if self.vsync_enabled {
