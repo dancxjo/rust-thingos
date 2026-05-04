@@ -33,7 +33,10 @@ use scene::Scene;
 use services::busy_spinner::BusySpinnerService;
 use services::input_service::InputService;
 use services::resources::ResourceRetryService;
-use services::theme_service::{DEFAULT_THEME_CONFIG_PATH, ThemeService, ensure_theme_config};
+use services::theme_service::{
+    DEFAULT_THEME_CONFIG_PATH, WALLPAPER_CONFIG_PATH, ThemeService, ensure_theme_config,
+    write_themed_wallpaper,
+};
 use services::wayland::WaylandService;
 use services::wayland_cmd::WaylandCommandService;
 use stem::syscall::port_create;
@@ -129,6 +132,13 @@ fn main(_arg: usize) -> ! {
     let applied_theme = visuals.set_theme_by_name(&initial_theme);
     stem::debug!("bloom: initial theme configured {}", applied_theme);
     visuals.prepare_solid_background(&display, 0xFF0B0A10);
+
+    // Write the theme's wallpaper path so blossom has it before it first paints.
+    if !minimal_mode {
+        let theme_obj = crate::theme::theme_by_name(&initial_theme);
+        write_themed_wallpaper(WALLPAPER_CONFIG_PATH, theme_obj.wallpaper_path);
+        stem::debug!("bloom: initial wallpaper path set to {}", theme_obj.wallpaper_path);
+    }
 
     stem::debug!("bloom.phase=init_cursor");
     if !minimal_mode {

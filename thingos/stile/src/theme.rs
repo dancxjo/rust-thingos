@@ -45,6 +45,9 @@ pub struct Theme {
     pub content_edge: u32,
     pub grid_line: u32,
     pub contact_shadow: u32,
+    /// The default wallpaper image path for this theme.  Blossom reads this
+    /// via the petals desktop module to choose what to display at first paint.
+    pub wallpaper_path: &'static str,
 }
 
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
@@ -133,6 +136,7 @@ pub const SOLARIS_WARM: Theme = Theme {
     content_edge: color_argb(SOLARIS_WARM_PALETTE.border),
     grid_line: color_with_alpha(SOLARIS_WARM_PALETTE.border, 31),
     contact_shadow: color_argb(SOLARIS_WARM_PALETTE.shadow),
+    wallpaper_path: "/public/wallpapers/flower.bmp",
 };
 
 pub const OBSIDIAN_BLOOM: Theme = Theme {
@@ -180,6 +184,7 @@ pub const OBSIDIAN_BLOOM: Theme = Theme {
     content_edge: 0xFF1B2638,
     grid_line: 0x221F3148,
     contact_shadow: 0x72000000,
+    wallpaper_path: "/public/wallpapers/flower.png",
 };
 
 pub const AURORA_GLASS: Theme = Theme {
@@ -227,6 +232,7 @@ pub const AURORA_GLASS: Theme = Theme {
     content_edge: 0x55406B87,
     grid_line: 0x1F7DE7FF,
     contact_shadow: 0x8A000000,
+    wallpaper_path: "/public/wallpapers/clouds.bmp",
 };
 
 impl Theme {
@@ -957,6 +963,23 @@ mod tests {
         assert_eq!(find_theme_by_name("obsidian_bloom").unwrap().name, OBSIDIAN_BLOOM.name);
         assert!(find_theme_by_name("not-a-theme").is_none());
         assert_eq!(theme_by_name("leather.bmp").name, SOLARIS_WARM.name);
+    }
+
+    #[test]
+    fn bundled_themes_have_correct_wallpaper_paths() {
+        assert_eq!(SOLARIS_WARM.wallpaper_path, "/public/wallpapers/flower.bmp");
+        assert_eq!(OBSIDIAN_BLOOM.wallpaper_path, "/public/wallpapers/flower.png");
+        assert_eq!(AURORA_GLASS.wallpaper_path, "/public/wallpapers/clouds.bmp");
+        // All paths are non-empty and rooted under /public/
+        for theme in available_themes() {
+            assert!(!theme.wallpaper_path.is_empty(), "{} has empty wallpaper_path", theme.name);
+            assert!(
+                theme.wallpaper_path.starts_with("/public/"),
+                "{} wallpaper_path '{}' not under /public/",
+                theme.name,
+                theme.wallpaper_path
+            );
+        }
     }
 
     #[test]

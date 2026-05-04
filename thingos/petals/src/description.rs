@@ -54,4 +54,6 @@ pub enum Description {
     ShowcaseHeader,
     ShowcaseSwatch,
     ShowcaseStateStrip,
+    Desktop,
+    Wallpaper,
 }

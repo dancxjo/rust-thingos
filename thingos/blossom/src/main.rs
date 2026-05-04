@@ -8,6 +8,7 @@ use alloc::vec::Vec;
 use core::convert::TryInto;
 
 use libdl::{RTLD_NOW, dlopen_str, dlsym_bytes};
+use petals::{default_theme, theme_by_name, wallpaper_path_for_theme};
 use stem::application::{
     AppAction, Application, ApplicationContext, ServiceLooper, run_application,
 };
@@ -51,7 +52,7 @@ const EVDEV_F2: u32 = 60;
 // ── Wallpaper constants ───────────────────────────────────────────────────────
 
 const WALLPAPER_CONFIG_PATH: &str = "/session/desktop/wallpaper";
-const DEFAULT_WALLPAPER_PATH: &str = "/public/wallpapers/flower.png";
+const THEME_CONFIG_PATH: &str = "/session/desktop/theme";
 const PISTIL_PATH: &str = "/lib/libpistil.so";
 const PREPARE_BG_SYMBOL: &[u8] = b"pistil_prepare_background\0";
 const PISTIL_RETRY_DELAY_MS: u64 = 1500;
@@ -523,21 +524,33 @@ fn setup_wallpaper_surface(fd: u32) {
     commit_surface(fd, WP_SURFACE_ID);
 }
 
-/// Read the wallpaper image path from the config file, returning the default
-/// if the file is absent or empty.
+/// Read the wallpaper image path from the config file, falling back to the
+/// theme-derived path when the file is absent or empty.  The theme is read
+/// from the session theme config; if that is also absent the default theme is
+/// used so the wallpaper is always consistent with the active theme.
 fn read_wallpaper_target() -> String {
+    // Explicit wallpaper override.
     let Ok(fd) = vfs_open(WALLPAPER_CONFIG_PATH, O_RDONLY) else {
-        return String::from(DEFAULT_WALLPAPER_PATH);
+        return wallpaper_from_active_theme();
     };
     let mut buf = [0u8; 512];
     let n = vfs_read(fd, &mut buf).unwrap_or(0);
     let _ = vfs_close(fd);
     let s = core::str::from_utf8(&buf[..n]).unwrap_or("").trim();
-    if s.is_empty() {
-        String::from(DEFAULT_WALLPAPER_PATH)
-    } else {
-        String::from(s)
-    }
+    if s.is_empty() { wallpaper_from_active_theme() } else { String::from(s) }
+}
+
+/// Derive the wallpaper path from the active theme as recorded in the session
+/// theme config file.  Falls back to the default theme when unavailable.
+fn wallpaper_from_active_theme() -> String {
+    let Ok(fd) = vfs_open(THEME_CONFIG_PATH, O_RDONLY) else {
+        return String::from(wallpaper_path_for_theme(default_theme()));
+    };
+    let mut buf = [0u8; 128];
+    let n = vfs_read(fd, &mut buf).unwrap_or(0);
+    let _ = vfs_close(fd);
+    let name = core::str::from_utf8(&buf[..n]).unwrap_or("").trim();
+    String::from(wallpaper_path_for_theme(theme_by_name(name)))
 }
 
 fn read_events(fd: u32, state: &mut ShellState, wallpaper: &mut WallpaperState) {
