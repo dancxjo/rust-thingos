@@ -56,4 +56,5 @@ pub enum Description {
     ShowcaseStateStrip,
     Desktop,
     Wallpaper,
+    ScrollContainer,
 }

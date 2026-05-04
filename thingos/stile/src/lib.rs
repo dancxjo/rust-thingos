@@ -34,8 +34,8 @@ pub use typography::{
     SPACE_MD, SPACE_SM, SPACE_XL, SPACE_XS,
 };
 pub use values::{
-    AlignItems, Color, Control, FlexDirection, FontWeight, JustifyContent, ResolvedStyle, State,
-    StateSet, Stylable, StyleProperty,
+    AlignItems, Color, Control, FlexDirection, FontWeight, JustifyContent, Overflow, ResolvedStyle,
+    State, StateSet, Stylable, StyleProperty,
 };
 pub use wasi::{STILE_WASI_RENDER_CHROME, STILE_WASI_VERSION, WasmTheme, WasmThemeHost};
 

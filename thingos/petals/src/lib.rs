@@ -45,7 +45,7 @@ pub use pressable::{InputEvent, KeyCode, PressConfig, PressEvent, PressState, Pr
 pub use service_loop::{PetalsEvent, PetalsService, ServiceAction};
 pub use showcase::{PetalsShowcase, ShowcaseComponent, ShowcaseServices, StileStateDemoNodes};
 pub use stile::{
-    AlignItems, Color, Control, Declaration, FlexDirection, FontWeight, JustifyContent,
+    AlignItems, Color, Control, Declaration, FlexDirection, FontWeight, JustifyContent, Overflow,
     ResolvedStyle, Rule, Selector, State, StateSet, Stylable, StyleProperty, Theme,
     WindowStateTokens, available_themes, default_theme, find_theme_by_name, theme_by_name,
 };

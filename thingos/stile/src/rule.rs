@@ -3,7 +3,8 @@ use alloc::vec::Vec;
 
 use crate::selector::Selector;
 use crate::values::{
-    AlignItems, Color, FlexDirection, FontWeight, JustifyContent, ResolvedStyle, StyleProperty,
+    AlignItems, Color, FlexDirection, FontWeight, JustifyContent, Overflow, ResolvedStyle,
+    StyleProperty,
 };
 
 #[derive(Clone, Debug, PartialEq)]
@@ -31,6 +32,7 @@ pub enum Declaration {
     FontFamily(String),
     FontSize(f32),
     FontWeight(FontWeight),
+    Overflow(Overflow),
 }
 
 impl Declaration {
@@ -59,6 +61,7 @@ impl Declaration {
             Declaration::FontFamily(_) => StyleProperty::FontFamily,
             Declaration::FontSize(_) => StyleProperty::FontSize,
             Declaration::FontWeight(_) => StyleProperty::FontWeight,
+            Declaration::Overflow(_) => StyleProperty::Overflow,
         }
     }
 
@@ -87,6 +90,7 @@ impl Declaration {
             Declaration::FontFamily(value) => style.font_family = Some(value.clone()),
             Declaration::FontSize(value) => style.font_size = Some(*value),
             Declaration::FontWeight(value) => style.font_weight = Some(*value),
+            Declaration::Overflow(value) => style.overflow = Some(*value),
         }
     }
 }
