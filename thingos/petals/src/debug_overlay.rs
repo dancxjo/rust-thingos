@@ -54,7 +54,8 @@ pub fn draw_layout_debug(tree: &UiTree, dst: &mut [u32], stride: u32, height: u3
     let mut depths: Vec<u32> = alloc::vec![0u32; nodes.len()];
     let root = tree.root();
     let mut queue: Vec<(NodeId, u32)> = alloc::vec![(root, 0)];
-    while let Some((id, d)) = queue.pop() {
+    while !queue.is_empty() {
+        let (id, d) = queue.remove(0);
         if let Some(slot) = depths.get_mut(id as usize) {
             *slot = d;
         }

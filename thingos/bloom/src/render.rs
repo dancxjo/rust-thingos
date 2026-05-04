@@ -1722,6 +1722,11 @@ fn draw_chrome_overlay(
 
 /// Draw layout-debug bounding boxes on a chrome overlay by building a petals
 /// `UiTree` for the window chrome and calling [`petals::draw_layout_debug`].
+///
+/// The tree is rebuilt and re-laid-out on every frame while the overlay is
+/// active.  This is intentional: the overlay is only rendered when the
+/// developer explicitly enables it (Alt+F9), so the per-frame allocation cost
+/// is an acceptable trade-off for simplicity and accuracy.
 fn draw_chrome_layout_debug(
     dst: &mut [u32],
     stride: u32,
@@ -2716,7 +2721,9 @@ fn fill_rect(dst: &mut [u32], stride: u32, x: i32, y: i32, w: u32, h: u32, color
 }
 
 /// Draw a 1-pixel border rectangle using `color` (ARGB). Delegates to
-/// [`draw_rect_stroke`], which writes the color as-is (no alpha blending).
+/// [`draw_rect_stroke`], which writes the color as-is (direct pixel
+/// assignment, no per-pixel alpha blending).  The caller is responsible
+/// for supplying a pre-multiplied or debug-friendly opaque color.
 /// Suitable for layout-debug borders that need to stand out.
 fn draw_debug_border_argb(
     dst: &mut [u32],
