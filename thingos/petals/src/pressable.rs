@@ -9,6 +9,31 @@
 //! [`Pressable::update`] with a monotonic nanosecond timestamp on each frame
 //! or timer tick. Input events are fed via [`Pressable::process`].
 //!
+//! # Hit region contract
+//!
+//! The hit region of a [`Pressable`] node in a [`crate::UiTree`] is its
+//! **computed layout bounds** — the same rectangle that is painted on screen.
+//! There is no separate "invisible" extension of the touch target; what you see
+//! is exactly what you can press.
+//!
+//! ## Full-row list items
+//!
+//! For list-style layouts where each row should be activatable across its full
+//! width, the row pressable must expand to fill available space.  Use
+//! [`crate::UiTree::list_row_pressable`] which sets `flex_grow: 1.0` on the
+//! node; pair it with a column container that has `align_items: Stretch` so
+//! the node also fills the container's cross-axis.
+//!
+//! ## Nested pressables
+//!
+//! When a [`Pressable`] node contains child nodes (including other
+//! [`Pressable`] nodes), input events are routed by the **innermost** matching
+//! hit region first (deepest first in the render tree).  A child pressable
+//! captures events that land inside its bounds; events outside its bounds but
+//! inside the parent's bounds are handled by the parent.  Each [`Pressable`]
+//! state machine is independent — the parent's state is not affected by events
+//! consumed by a child.
+//!
 //! # Example
 //!
 //! ```

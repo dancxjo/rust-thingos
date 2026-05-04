@@ -29,7 +29,7 @@ pub use chrome::{
     window_chrome_rules_for_theme, window_chrome_tree,
 };
 pub use clock::{Clock, ClockNodes, ClockService, ClockState};
-pub use debug_overlay::{DEPTH_COLORS, HIT_REGION_COLOR, draw_layout_debug};
+pub use debug_overlay::{DEPTH_COLORS, HIT_REGION_COLOR, draw_hit_regions, draw_layout_debug};
 pub use description::Description;
 pub use desktop::{
     DesktopNodes, desktop_rules_for_theme, desktop_tree_for_theme, wallpaper_path_for_theme,

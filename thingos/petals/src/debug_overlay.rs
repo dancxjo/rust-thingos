@@ -6,12 +6,13 @@
 //!
 //! ## Visual encoding
 //!
-//! | Visual                  | Meaning                                          |
-//! |-------------------------|--------------------------------------------------|
-//! | Depth-coded border      | Layout bounds for every node                     |
-//! | Blue tint fill          | Clip/container regions                           |
-//! | Yellow/amber border     | Hit-testable regions (Pressable, ResizeEdge)     |
-//! | Nesting level → color   | Helps distinguish sibling vs parent/child groups |
+//! | Visual                  | Meaning                                                     |
+//! |-------------------------|-------------------------------------------------------------|
+//! | Depth-coded border      | Layout bounds for every node                                |
+//! | Blue tint fill          | Clip/container regions                                      |
+//! | Yellow/amber border     | Hit-testable regions (Pressable, ListRow, ResizeEdge)       |
+//! | Amber tint fill         | Hit-testable regions in `draw_hit_regions` standalone view  |
+//! | Nesting level → color   | Helps distinguish sibling vs parent/child groups            |
 
 use alloc::vec::Vec;
 
@@ -81,7 +82,8 @@ pub fn draw_layout_debug(tree: &UiTree, dst: &mut [u32], stride: u32, height: u3
         let h = b.height.max(0.0) as u32;
 
         let is_hit = node.descriptions.contains(&Description::Pressable)
-            || node.descriptions.contains(&Description::ResizeEdge);
+            || node.descriptions.contains(&Description::ResizeEdge)
+            || node.descriptions.contains(&Description::ListRow);
 
         let is_container = node.descriptions.contains(&Description::Container)
             || node.descriptions.contains(&Description::WindowChrome)
@@ -101,6 +103,40 @@ pub fn draw_layout_debug(tree: &UiTree, dst: &mut [u32], stride: u32, height: u3
             if is_hit { HIT_REGION_COLOR } else { DEPTH_COLORS[depth % DEPTH_COLORS.len()] };
 
         draw_border(dst, stride, height, x, y, w, h, border_color);
+    }
+}
+
+/// Draw a semi-transparent tint fill over every hit-testable node in `tree`.
+///
+/// Unlike [`draw_layout_debug`] which overlays the full node tree, this
+/// function only renders a lightweight amber fill for nodes that carry
+/// [`Description::Pressable`], [`Description::ListRow`], or
+/// [`Description::ResizeEdge`].  Useful as a lightweight, always-on hit
+/// region indicator that can be toggled independently of the full layout
+/// debug overlay.
+pub fn draw_hit_regions(tree: &UiTree, dst: &mut [u32], stride: u32, height: u32) {
+    /// Faint amber fill for hit regions.
+    const HIT_FILL: u32 = 0x33FFEE00;
+
+    for node in tree.nodes() {
+        let is_hit = node.descriptions.contains(&Description::Pressable)
+            || node.descriptions.contains(&Description::ListRow)
+            || node.descriptions.contains(&Description::ResizeEdge);
+        if !is_hit {
+            continue;
+        }
+        let Ok(b) = tree.global_layout_box(node.id) else {
+            continue;
+        };
+        if b.width < 1.0 || b.height < 1.0 {
+            continue;
+        }
+        let x = b.x as i32;
+        let y = b.y as i32;
+        let w = b.width.max(0.0) as u32;
+        let h = b.height.max(0.0) as u32;
+        fill_rect_alpha(dst, stride, height, x, y, w, h, HIT_FILL);
+        draw_border(dst, stride, height, x, y, w, h, HIT_REGION_COLOR);
     }
 }
 
@@ -256,5 +292,49 @@ mod tests {
         draw_layout_debug(&tree, &mut pixels, 100, 100);
         // At least some pixels should have been painted (non-zero).
         assert!(pixels.iter().any(|&p| p != 0));
+    }
+
+    #[test]
+    fn draw_hit_regions_paints_pressable_and_list_row_only() {
+        use crate::layout::{AvailableSpace, Size};
+
+        let mut tree = UiTree::new().unwrap();
+        let btn = tree.pressable("Click").unwrap();
+        let list = tree.list_row_pressable("Item").unwrap();
+        tree.add_child(tree.root(), btn).unwrap();
+        tree.add_child(tree.root(), list).unwrap();
+
+        let rules = alloc::vec![
+            Rule::new(
+                Selector::has(Description::Container),
+                alloc::vec![
+                    Declaration::Width(80.0),
+                    Declaration::Height(80.0),
+                    Declaration::FlexDirection(stile::FlexDirection::Column),
+                ],
+            ),
+            Rule::new(
+                Selector::has(Description::Pressable),
+                alloc::vec![Declaration::Width(60.0), Declaration::Height(30.0)],
+            ),
+            Rule::new(
+                Selector::has(Description::ListRow),
+                alloc::vec![Declaration::Width(60.0), Declaration::Height(30.0)],
+            ),
+        ];
+        tree.restyle(&rules).unwrap();
+        tree.compute_layout(Size {
+            width: AvailableSpace::Definite(100.0),
+            height: AvailableSpace::Definite(100.0),
+        })
+        .unwrap();
+
+        let mut pixels_hit = alloc::vec![0u32; 100 * 100];
+        draw_hit_regions(&tree, &mut pixels_hit, 100, 100);
+        // Hit regions should have painted some pixels.
+        assert!(
+            pixels_hit.iter().any(|&p| p != 0),
+            "draw_hit_regions should paint pressable nodes"
+        );
     }
 }

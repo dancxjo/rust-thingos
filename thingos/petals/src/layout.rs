@@ -2,8 +2,8 @@ use alloc::string::String;
 use alloc::vec::Vec;
 
 use stile::{
-    AlignItems as StileAlignItems, FlexDirection as StileFlexDirection, FontWeight,
-    JustifyContent as StileJustifyContent, ResolvedStyle, Rule,
+    AlignItems as StileAlignItems, Declaration, FlexDirection as StileFlexDirection, FontWeight,
+    JustifyContent as StileJustifyContent, ResolvedStyle, Rule, Selector,
 };
 use taffy::prelude::*;
 pub use taffy::prelude::{AvailableSpace, Size};
@@ -87,6 +87,33 @@ impl UiTree {
         Ok(id)
     }
 
+    /// Create a full-width list-row [`Pressable`] node.
+    ///
+    /// Equivalent to [`pressable`][Self::pressable] but also tags the node
+    /// with [`Description::ListRow`].
+    ///
+    /// To achieve a full-width hit region, add `align_items: Stretch` to the
+    /// parent container.  In a `flex-direction: column` list, the cross-axis
+    /// is horizontal, so `Stretch` causes each `ListRow` child to fill the
+    /// full container width.  The [`Description::ListRow`] tag lets callers
+    /// write targeted CSS-like rules (e.g. minimum height, padding) and is
+    /// also recognised by the debug overlay as a hit region marker.
+    ///
+    /// # Hit region contract
+    ///
+    /// The hit region of a `ListRow` is its computed layout bounds — the same
+    /// rectangle that is painted.  No invisible extension is added beyond the
+    /// visible area.  When the parent container uses `align_items: Stretch`,
+    /// those bounds span the full container width, fulfilling the full-row
+    /// activation requirement.
+    pub fn list_row_pressable(&mut self, label: &str) -> Result<NodeId, taffy::TaffyError> {
+        let id = self.pressable(label)?;
+        if let Some(node) = self.node_mut(id) {
+            node.descriptions.push(Description::ListRow);
+        }
+        Ok(id)
+    }
+
     pub fn text(&mut self, text: &str) -> Result<NodeId, taffy::TaffyError> {
         let id = self.add_node(&[Description::Textual])?;
         if let Some(node) = self.node_mut(id) {
@@ -124,8 +151,11 @@ impl UiTree {
     }
 
     pub fn restyle(&mut self, rules: &[Rule<Description>]) -> Result<(), taffy::TaffyError> {
+        // Built-in rules are prepended so user-supplied rules take precedence.
+        let mut all_rules = built_in_rules();
+        all_rules.extend_from_slice(rules);
         for id in 0..self.nodes.len() {
-            let style = stile::compute_for(&self.nodes[id], rules);
+            let style = stile::compute_for(&self.nodes[id], &all_rules);
             self.apply_style(id as NodeId, style)?;
         }
         Ok(())
@@ -399,6 +429,17 @@ fn map_align_items(value: StileAlignItems) -> AlignItems {
     }
 }
 
+/// Built-in default rules that are prepended to every [`UiTree::restyle`]
+/// call so that semantic node types have sensible layout defaults without
+/// requiring every caller to repeat them.  User-supplied rules are appended
+/// after these, so they win in cascade order.
+fn built_in_rules() -> Vec<Rule<Description>> {
+    // Currently empty — future built-in defaults can be added here.
+    // Users wanting full-width list rows should set `align-items: Stretch` on
+    // the parent container (cross-axis fill for column layouts).
+    alloc::vec![]
+}
+
 #[cfg(test)]
 mod tests {
     use stile::{AlignItems, Color, Declaration, FlexDirection, JustifyContent, Selector};
@@ -511,5 +552,97 @@ mod tests {
         let fitted = tree.compute_content_fit_layout(80.0, 200.0).unwrap();
         assert_eq!(fitted.width, 80.0);
         assert_eq!(tree.layout_box(tree.root()).unwrap().width, 80.0);
+    }
+
+    /// A `list_row_pressable` should expand to fill the full container width
+    /// when the parent container uses `align_items: Stretch`.
+    ///
+    /// In a `flex-direction: column` parent, the cross axis is horizontal.
+    /// Setting `align_items: Stretch` on the parent makes each child fill the
+    /// full container width — that is the intended hit-region mechanism for
+    /// list rows, not `flex_grow` (which affects height, not width, in
+    /// column direction).
+    #[test]
+    fn list_row_pressable_fills_container_width() {
+        let container_width = 360.0_f32;
+        let mut tree = UiTree::new().unwrap();
+        let row = tree.list_row_pressable("Settings").unwrap();
+        tree.add_child(tree.root(), row).unwrap();
+
+        let rules = alloc::vec![Rule::new(
+            Selector::has(Description::ListRow),
+            alloc::vec![Declaration::Height(44.0)],
+        )];
+        tree.restyle(&rules).unwrap();
+
+        // Parent container with explicit width and align_items: Stretch so
+        // that list row children fill the full cross-axis (width).
+        tree.apply_style(
+            tree.root(),
+            ResolvedStyle {
+                width: Some(container_width),
+                height: Some(200.0),
+                flex_direction: Some(FlexDirection::Column),
+                align_items: Some(AlignItems::Stretch),
+                ..ResolvedStyle::default()
+            },
+        )
+        .unwrap();
+
+        tree.compute_layout(Size {
+            width: AvailableSpace::Definite(container_width),
+            height: AvailableSpace::Definite(200.0),
+        })
+        .unwrap();
+
+        let row_box = tree.global_layout_box(row).unwrap();
+        assert_eq!(
+            row_box.width, container_width,
+            "list row should span the full container width via parent align_items: Stretch"
+        );
+        assert_eq!(row_box.height, 44.0, "row height should respect the explicit Height rule");
+        // Verify it has the correct descriptions.
+        let node = tree.node(row).unwrap();
+        assert!(node.descriptions.contains(&Description::Pressable));
+        assert!(node.descriptions.contains(&Description::ListRow));
+    }
+
+    /// `flex_grow` can be explicitly set on a `ListRow` when height expansion
+    /// is desired (e.g. the row should fill remaining vertical space).
+    #[test]
+    fn list_row_pressable_flex_grow_can_be_overridden() {
+        let container_width = 300.0_f32;
+        let mut tree = UiTree::new().unwrap();
+        let row = tree.list_row_pressable("Item").unwrap();
+        tree.add_child(tree.root(), row).unwrap();
+
+        let rules = alloc::vec![Rule::new(
+            Selector::has(Description::ListRow),
+            alloc::vec![
+                Declaration::Width(120.0),
+                Declaration::Height(44.0),
+            ],
+        )];
+        tree.restyle(&rules).unwrap();
+        tree.apply_style(
+            tree.root(),
+            ResolvedStyle {
+                width: Some(container_width),
+                height: Some(200.0),
+                flex_direction: Some(FlexDirection::Column),
+                align_items: Some(AlignItems::Start),
+                ..ResolvedStyle::default()
+            },
+        )
+        .unwrap();
+        tree.compute_layout(Size {
+            width: AvailableSpace::Definite(container_width),
+            height: AvailableSpace::Definite(200.0),
+        })
+        .unwrap();
+
+        let row_box = tree.global_layout_box(row).unwrap();
+        assert_eq!(row_box.width, 120.0, "explicit width from rule should be respected");
+        assert_eq!(row_box.height, 44.0, "explicit height from rule should be respected");
     }
 }

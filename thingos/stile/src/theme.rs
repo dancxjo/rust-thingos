@@ -11,7 +11,6 @@ pub const DEFAULT_THEME_NAME: &str = "SolarisWarm";
 pub struct Theme {
     pub name: &'static str,
     pub renderer: ThemeRenderer,
-    pub wallpaper_path: Option<&'static str>,
     pub active: WindowStateTokens,
     pub inactive: WindowStateTokens,
     pub titlebar_height: u32,
@@ -96,7 +95,6 @@ pub const SOLARIS_WARM_PALETTE: SolarisWarmPalette = SolarisWarmPalette {
 pub const SOLARIS_WARM: Theme = Theme {
     name: DEFAULT_THEME_NAME,
     renderer: ThemeRenderer::SolarisWarm,
-    wallpaper_path: None,
     active: WindowStateTokens {
         border: color_argb(SOLARIS_WARM_PALETTE.border),
         title_top: color_argb(SOLARIS_WARM_PALETTE.bg_secondary),
@@ -145,7 +143,6 @@ pub const SOLARIS_WARM: Theme = Theme {
 pub const OBSIDIAN_BLOOM: Theme = Theme {
     name: "Obsidian Bloom",
     renderer: ThemeRenderer::ObsidianFacet,
-    wallpaper_path: None,
     active: WindowStateTokens {
         border: 0xFF11131D,
         title_top: 0xFF2A3147,
@@ -194,7 +191,6 @@ pub const OBSIDIAN_BLOOM: Theme = Theme {
 pub const AURORA_GLASS: Theme = Theme {
     name: "Aurora Glass",
     renderer: ThemeRenderer::AuroraGlass,
-    wallpaper_path: None,
     active: WindowStateTokens {
         border: 0x8A174A5A,
         title_top: 0x70406B87,
@@ -243,7 +239,7 @@ pub const AURORA_GLASS: Theme = Theme {
 pub const NOCTURNE_IRIS: Theme = Theme {
     name: "NocturneIris",
     renderer: ThemeRenderer::NocturneIris,
-    wallpaper_path: Some("/public/wallpapers/flower.png"),
+    wallpaper_path: "/public/wallpapers/flower.png",
     active: WindowStateTokens {
         border: 0x996F55D9,
         title_top: 0x702E2158,
@@ -1190,7 +1186,7 @@ mod tests {
         assert_eq!(theme_by_name("solaris-warm").name, SOLARIS_WARM.name);
         assert_eq!(theme_by_name("nocturne-iris").name, NOCTURNE_IRIS.name);
         assert_eq!(theme_by_name("nocturne_iris.stile").name, NOCTURNE_IRIS.name);
-        assert_eq!(theme_by_name("iris").wallpaper_path, Some("/public/wallpapers/flower.png"));
+        assert_eq!(theme_by_name("iris").wallpaper_path, "/public/wallpapers/flower.png");
         assert_eq!(theme_by_name("aurora-glass").name, AURORA_GLASS.name);
         assert_eq!(theme_by_name("obsidian-bloom").name, OBSIDIAN_BLOOM.name);
         assert_eq!(find_theme_by_name("obsidian_bloom").unwrap().name, OBSIDIAN_BLOOM.name);

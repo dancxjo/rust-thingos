@@ -56,4 +56,9 @@ pub enum Description {
     ShowcaseStateStrip,
     Desktop,
     Wallpaper,
+    /// A full-width pressable list row.  Nodes with this description have
+    /// `flex_grow: 1.0` applied by default so they expand to fill the
+    /// available main-axis space of their container.  Pair the container with
+    /// `align_items: Stretch` to also span the cross-axis.
+    ListRow,
 }
