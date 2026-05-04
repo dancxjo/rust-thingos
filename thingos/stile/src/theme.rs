@@ -377,7 +377,7 @@ fn matches_obsidian_bloom(trimmed: &str) -> bool {
     trimmed.eq_ignore_ascii_case("obsidian bloom")
         || trimmed.eq_ignore_ascii_case("obsidian-bloom")
         || trimmed.eq_ignore_ascii_case("obsidian_bloom")
-    || trimmed.eq_ignore_ascii_case("leather.bmp")
+        || trimmed.eq_ignore_ascii_case("leather.bmp")
 }
 
 fn push_nocturne_iris_window<'a>(
