@@ -89,7 +89,7 @@ unsafe extern "C" fn thingos_driver_probe(
     if out.is_null() {
         return Status::InvalidArgument;
     }
-    let out = unsafe { &mut *out };
+    let out = &mut *out;
     out.matched = 0;
     out.score = 0;
     out.claimed_class = DriverClass::Input;
@@ -174,7 +174,9 @@ fn read_u32_file(path: &str) -> Option<u32> {
     let mut buf = [0u8; 32];
     let n = vfs_read(fd, &mut buf).unwrap_or(0);
     let _ = vfs_close(fd);
-    if n == 0 { return None; }
+    if n == 0 {
+        return None;
+    }
     let s = core::str::from_utf8(&buf[..n]).ok()?.trim();
     s.parse::<u32>().ok()
 }
@@ -267,7 +269,7 @@ fn send_key_event(bristle_pid: u32, edge: KeyEdge, drop_counter: &mut u32) {
 
     let (event_type, key, mods, repeat) = match edge {
         KeyEdge::Down { key, mods, repeat } => (EventType::KeyDown, key, mods, repeat),
-        KeyEdge::Up { key, mods }           => (EventType::KeyUp,   key, mods, false),
+        KeyEdge::Up { key, mods } => (EventType::KeyUp, key, mods, false),
     };
 
     let header = BristleEventHeader {

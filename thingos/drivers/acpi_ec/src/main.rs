@@ -143,7 +143,7 @@ unsafe extern "C" fn thingos_driver_probe(
     out: *mut ProbeResult,
 ) -> Status {
     if out.is_null() { return Status::InvalidArgument; }
-    let out = unsafe { &mut *out };
+    let out = &mut *out;
     out.matched = 0;
     out.score = 0;
     out.claimed_class = DriverClass::Other;

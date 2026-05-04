@@ -248,16 +248,22 @@ impl AcpiContext {
                 let chunk = &names[i..end];
                 let mut line = String::new();
                 for (j, n) in chunk.iter().enumerate() {
-                    if j > 0 { line.push(' '); }
+                    if j > 0 {
+                        line.push(' ');
+                    }
                     line.push_str(n);
                 }
-                if i == 0 { info!("ACPI tables: {}", line); } else { debug!("Tables (cont): {}", line); }
+                if i == 0 {
+                    info!("ACPI tables: {}", line);
+                } else {
+                    debug!("Tables (cont): {}", line);
+                }
                 i = end;
             }
             if !devices.is_empty() {
                 info!("ACPI devices found: {}", devices.len());
                 for d in &devices {
-                    debug!("Device {} at {}", d.hid, d.path);
+                    debug!("Device {} — {} (at {})", d.hid, d._desc, d.path);
                 }
             }
         }
