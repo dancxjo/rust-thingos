@@ -12,11 +12,6 @@ Feature: Reading files from a USB FAT volume
     And the serial output should not contain "USB partition scan failed to open /dev/block/usb0"
     And the serial output should contain "fatd: found Fat16 filesystem on /dev/block/usb0p1" within 120s
     And the serial output should contain "fatd: mounted /dev/block/usb0p1 at /media/usb" within 120s
-
-  Scenario: Files on the USB FAT volume can be listed and read
-    When I wait for the shell prompt
-    Then the serial output should contain "fatd: mounted /dev/block/usb0p1 at /media/usb" within 120s
-    When I wait for the shell prompt
     When I type "ls /media/usb" on the serial console
     Then the command output should not contain "No such file"
     When I type "cat /media/usb/hello.txt" on the serial console

@@ -1876,13 +1876,24 @@ fn run_partition_provider(
     lba_count: u64,
     ino: u64,
 ) {
-    let mut svc = match ServiceProviderLoop::new(ploop, 4096) {
+    let svc = match ServiceProviderLoop::new(ploop, 4096) {
         Ok(svc) => svc,
         Err(e) => {
             warn!("USB partition service loop failed to start for {}: {:?}.", path, e);
             return;
         }
     };
+    run_partition_service_loop(provider, svc, path, start_lba, lba_count, ino)
+}
+
+fn run_partition_service_loop(
+    provider: SharedUsbBlockProvider,
+    mut svc: ServiceProviderLoop,
+    path: String,
+    start_lba: u64,
+    lba_count: u64,
+    ino: u64,
+) {
     svc.register_mount_path(&path);
     trace!("USB partition service provider online for {}", path);
     loop {
@@ -2001,13 +2012,39 @@ fn serve_usb_block(controller: XhciController, storage: UsbMassStorage) -> ! {
     // Mount a provider for each discovered MBR partition.  Keep the first
     // partition on the original xHCI task so the hot USB-FAT path uses the
     // same task that initialized and successfully probed the controller.
-    let mut foreground_partition: Option<(ProviderLoop, String, u64, u64, u64)> = None;
+    let mut foreground_partition: Option<(ServiceProviderLoop, String, u64, u64, u64)> = None;
     let mut mounted_partition_count = 0usize;
     for (i, part) in parts.iter().enumerate() {
         let part_path = format!("/dev/block/usb0p{}", i + 1);
         match port_create(65536) {
             Ok((pw, pr)) => {
-                if vfs_mount(pw, &part_path).is_ok() {
+                let ploop = ProviderLoop::new(pr);
+                if foreground_partition.is_none() {
+                    let svc = match ServiceProviderLoop::new(ploop, 4096) {
+                        Ok(svc) => svc,
+                        Err(e) => {
+                            warn!(
+                                "USB partition service loop failed to start for {}: {:?}.",
+                                part_path, e
+                            );
+                            continue;
+                        }
+                    };
+                    if vfs_mount(pw, &part_path).is_ok() {
+                        mounted_partition_count += 1;
+                        debug!(
+                            "USB partition mounted: index={} path={} sectors={} start_lba={}.",
+                            i + 1,
+                            part_path,
+                            part.lba_count,
+                            part.start_lba
+                        );
+                        foreground_partition =
+                            Some((svc, part_path, part.start_lba, part.lba_count, (i + 1) as u64));
+                    } else {
+                        warn!("USB partition provider failed to mount at {}.", part_path);
+                    }
+                } else if vfs_mount(pw, &part_path).is_ok() {
                     mounted_partition_count += 1;
                     debug!(
                         "USB partition mounted: index={} path={} sectors={} start_lba={}.",
@@ -2016,25 +2053,14 @@ fn serve_usb_block(controller: XhciController, storage: UsbMassStorage) -> ! {
                         part.lba_count,
                         part.start_lba
                     );
-                    let ploop = ProviderLoop::new(pr);
-                    if foreground_partition.is_none() {
-                        foreground_partition = Some((
-                            ploop,
-                            part_path,
-                            part.start_lba,
-                            part.lba_count,
-                            (i + 1) as u64,
-                        ));
-                    } else {
-                        spawn_partition_provider(
-                            provider.clone(),
-                            ploop,
-                            part_path,
-                            part.start_lba,
-                            part.lba_count,
-                            (i + 1) as u64,
-                        );
-                    }
+                    spawn_partition_provider(
+                        provider.clone(),
+                        ploop,
+                        part_path,
+                        part.start_lba,
+                        part.lba_count,
+                        (i + 1) as u64,
+                    );
                 } else {
                     warn!("USB partition provider failed to mount at {}.", part_path);
                 }
@@ -2049,8 +2075,8 @@ fn serve_usb_block(controller: XhciController, storage: UsbMassStorage) -> ! {
         mounted_partition_count
     );
 
-    if let Some((ploop, path, start_lba, lba_count, ino)) = foreground_partition {
-        run_partition_provider(provider.clone(), ploop, path, start_lba, lba_count, ino);
+    if let Some((svc, path, start_lba, lba_count, ino)) = foreground_partition {
+        run_partition_service_loop(provider.clone(), svc, path, start_lba, lba_count, ino);
     }
 
     loop {
