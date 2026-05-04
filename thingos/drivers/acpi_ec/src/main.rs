@@ -459,7 +459,6 @@ fn publish_to_bus(bus_fd: Option<u32>, code: u8) {
         extra:    0,
     };
     let _ = vfs_write(fd, &ev.to_bytes());
-    trace!("Published EC event kind=0x{:02x} raw=0x{:02x} ts={}ms to bus", ev.kind, code, ts_ms);
 }
 
 // ── Main loop ─────────────────────────────────────────────────────────────────

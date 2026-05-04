@@ -359,6 +359,9 @@ impl EventBus {
     }
 }
 
+/// `RECORD_SIZE` cast to `u64` for arithmetic in stat/read handlers.
+const RECORD_SIZE_U64: u64 = RECORD_SIZE as u64;
+
 fn dispatch(ctx: &AcpiContext, bus: &mut EventBus, op: VfsRpcOp, payload: &[u8]) -> ProviderResponse {
     match op {
         VfsRpcOp::Lookup     => handle_lookup(ctx, payload),
@@ -468,7 +471,7 @@ fn handle_stat(ctx: &AcpiContext, bus: &EventBus, payload: &[u8]) -> ProviderRes
         HANDLE_EVENTS => {
             // Readable by consumers, writable by event producers.
             // st_size reflects the total bytes published so far.
-            let size = bus.seq_head * RECORD_SIZE as u64;
+            let size = bus.seq_head * RECORD_SIZE_U64;
             ProviderResponse::ok_stat(S_IFREG | 0o644, size, INO_EVENTS)
         }
         h if h >= HANDLE_TABLE_BASE && h < HANDLE_DEV_DIR_BASE => {
@@ -532,10 +535,10 @@ fn handle_read(ctx: &AcpiContext, bus: &EventBus, payload: &[u8]) -> ProviderRes
 
     if handle == HANDLE_EVENTS {
         // Fan-out: interpret byte offset as event-sequence * RECORD_SIZE.
-        if offset % RECORD_SIZE as u64 != 0 {
+        if offset % RECORD_SIZE_U64 != 0 {
             return ProviderResponse::err(Errno::EINVAL);
         }
-        let seq = offset / RECORD_SIZE as u64;
+        let seq = offset / RECORD_SIZE_U64;
         return match bus.get(seq) {
             Some(record) if len >= RECORD_SIZE => ProviderResponse::ok_read(record),
             Some(_) => ProviderResponse::err(Errno::EINVAL),  // buffer too small
@@ -543,7 +546,7 @@ fn handle_read(ctx: &AcpiContext, bus: &EventBus, payload: &[u8]) -> ProviderRes
                 if seq < bus.seq_head {
                     // Event has been overwritten.  Log so unknown events are
                     // not silently dropped from the consumer's perspective.
-                    warn!("ACPI event bus: consumer at seq {} is behind head {}; event overwritten",
+                    warn!("Consumer at seq {} is behind head {}; event overwritten",
                           seq, bus.seq_head);
                 }
                 ProviderResponse::err(Errno::EAGAIN)
@@ -608,7 +611,7 @@ fn handle_write_events(bus: &mut EventBus, payload: &[u8]) -> ProviderResponse {
     match AcpiEvent::from_bytes(&data[..RECORD_SIZE]) {
         Some(ev) => {
             if ev.kind == acpi_common::KIND_UNKNOWN {
-                warn!("ACPI event bus: unknown event kind=0xff source={} raw=0x{:02x} — preserved",
+                warn!("Unknown event source={} raw=0x{:02x} — preserved",
                       ev.source, ev.raw_code);
             }
             bus.publish(ev);
