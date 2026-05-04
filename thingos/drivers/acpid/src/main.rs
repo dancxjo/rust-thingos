@@ -183,8 +183,10 @@ impl AcpiContext {
             if let Some(data) = read_file_bytes(&path, MAX_TABLE_BYTES) {
                 debug!("Loaded table {} ({} bytes)", name, data.len());
                 // Accumulate DSDT/SSDT AML for device scanning.
-                let sig = name.trim_start_matches(|c: char| !c.is_ascii_alphabetic());
-                if sig.starts_with("DSDT") || sig.starts_with("SSDT") {
+                // Table names may have a numeric suffix (e.g., "SSDT1"), so
+                // check the first 4 characters for the signature prefix.
+                let prefix = &name[..name.len().min(4)];
+                if prefix == "DSDT" || prefix == "SSDT" {
                     // AML body starts after the 36-byte SDT header.
                     if data.len() > 36 {
                         all_aml.extend_from_slice(&data[36..]);
@@ -422,7 +424,6 @@ fn handle_readdir(ctx: &AcpiContext, payload: &[u8]) -> ProviderResponse {
     const DT_REG: u8 = 8;
 
     let mut out: Vec<u8> = Vec::new();
-    let mut emitted = 0usize;
 
     let append = |out: &mut Vec<u8>, ino: u64, ft: u8, name: &str| {
         out.extend_from_slice(&ino.to_le_bytes());
@@ -445,7 +446,6 @@ fn handle_readdir(ctx: &AcpiContext, payload: &[u8]) -> ProviderResponse {
                     break;
                 }
                 append(&mut out, ino, ft, name);
-                emitted += 1;
             }
         }
         HANDLE_TABLES_DIR => {
@@ -458,13 +458,11 @@ fn handle_readdir(ctx: &AcpiContext, payload: &[u8]) -> ProviderResponse {
                     break;
                 }
                 append(&mut out, INO_TABLE_BASE + i as u64, DT_REG, name);
-                emitted += 1;
             }
         }
         _ => return ProviderResponse::err(Errno::ENOTDIR),
     }
 
-    let _ = emitted;
     ProviderResponse::ok_read(&out)
 }
 

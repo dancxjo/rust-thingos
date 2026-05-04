@@ -69,12 +69,14 @@ unsafe fn do_enumerate(rsdp_phys: u64, hhdm: u64) -> Vec<AcpiEntry> {
     }
 
     // Verify ACPI 1.0 checksum (first 20 bytes).
-    if !checksum_ok(rsdp_virt, 20) {
+    if !unsafe { checksum_ok(rsdp_virt, 20) } {
         crate::kwarn!("ACPI: RSDP v1 checksum failed");
         return Vec::new();
     }
 
-    let revision = unsafe { *(rsdp_virt.wrapping_add(RSDP_OFF_REVISION as u64) as *const u8) };
+    let revision = unsafe {
+        core::ptr::read_unaligned(rsdp_virt.wrapping_add(RSDP_OFF_REVISION as u64) as *const u8)
+    };
     crate::kdebug!("ACPI: RSDP revision {}", revision);
 
     if revision >= 2 {
@@ -82,7 +84,7 @@ unsafe fn do_enumerate(rsdp_phys: u64, hhdm: u64) -> Vec<AcpiEntry> {
         let ext_len = unsafe {
             core::ptr::read_unaligned((rsdp_virt + RSDP_OFF_LENGTH as u64) as *const u32)
         } as usize;
-        if (36..=64).contains(&ext_len) && !checksum_ok(rsdp_virt, ext_len) {
+        if (36..=64).contains(&ext_len) && !unsafe { checksum_ok(rsdp_virt, ext_len) } {
             crate::kwarn!("ACPI: RSDP extended checksum failed (continuing)");
         }
         let xsdt_phys = unsafe {
@@ -191,7 +193,7 @@ unsafe fn read_full_table(phys: u64, hhdm: u64) -> Option<AcpiEntry> {
 
     let virt = phys.wrapping_add(hhdm);
 
-    if !checksum_ok(virt, total) {
+    if !unsafe { checksum_ok(virt, total) } {
         crate::kwarn!(
             "ACPI: checksum failed for table {:?} at 0x{:x}",
             core::str::from_utf8(&sig).unwrap_or("????"),
@@ -204,7 +206,12 @@ unsafe fn read_full_table(phys: u64, hhdm: u64) -> Option<AcpiEntry> {
     Some(AcpiEntry { signature: sig, phys_addr: phys, data: slice.to_vec() })
 }
 
-fn checksum_ok(virt: u64, len: usize) -> bool {
+/// Verify the byte sum of `len` bytes at virtual address `virt` is zero.
+///
+/// # Safety
+/// `virt` must point to at least `len` bytes of valid, mapped memory.
+/// Callers must ensure this via HHDM validation before invoking.
+unsafe fn checksum_ok(virt: u64, len: usize) -> bool {
     let slice = unsafe { core::slice::from_raw_parts(virt as *const u8, len) };
     let sum: u8 = slice.iter().fold(0u8, |a, &b| a.wrapping_add(b));
     sum == 0
@@ -273,14 +280,14 @@ mod tests {
         let data = [0u8; 8];
         // All-zeros passes checksum (sum = 0).
         let ptr = data.as_ptr() as u64;
-        assert!(checksum_ok(ptr, 8));
+        assert!(unsafe { checksum_ok(ptr, 8) });
     }
 
     #[test]
     fn test_checksum_bad() {
         let data = [1u8, 2, 3, 4, 5, 6, 7, 8];
         let ptr = data.as_ptr() as u64;
-        assert!(!checksum_ok(ptr, 8));
+        assert!(!unsafe { checksum_ok(ptr, 8) });
     }
 
     #[test]
