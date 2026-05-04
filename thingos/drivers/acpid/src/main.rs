@@ -181,7 +181,7 @@ impl AcpiContext {
         for name in &table_names {
             let path = alloc::format!("{}/{}", SYSFS_TABLES_DIR, name);
             if let Some(data) = read_file_bytes(&path, MAX_TABLE_BYTES) {
-                debug!("acpid: loaded table {} ({} bytes)", name, data.len());
+                debug!("Loaded table {} ({} bytes)", name, data.len());
                 // Accumulate DSDT/SSDT AML for device scanning.
                 let sig = name.trim_start_matches(|c: char| !c.is_ascii_alphabetic());
                 if sig.starts_with("DSDT") || sig.starts_with("SSDT") {
@@ -192,7 +192,7 @@ impl AcpiContext {
                 }
                 tables.push(AcpiTable { name: name.clone(), data });
             } else {
-                warn!("acpid: failed to read table {}", name);
+                warn!("Failed to read table {}", name);
             }
         }
 
@@ -233,14 +233,14 @@ impl AcpiContext {
                 if i == 0 {
                     info!("ACPI tables: {}", line);
                 } else {
-                    debug!("acpid: tables (cont): {}", line);
+                    debug!("Tables (cont): {}", line);
                 }
                 i = end;
             }
             if !devices.is_empty() {
                 info!("ACPI devices found: {} device IDs", devices.len());
                 for (hid, desc) in &devices {
-                    debug!("acpid: device {} — {}", hid, desc);
+                    debug!("Device {} — {}", hid, desc);
                 }
             }
         }
@@ -477,15 +477,15 @@ fn run_provider(ctx: AcpiContext, req_read: u32) -> ! {
             Ok(req) => {
                 let resp = dispatch(&ctx, req.op, &req.payload);
                 if let Err(e) = lp.send_response(&req, resp) {
-                    warn!("acpid: send_response failed: {:?}", e);
+                    warn!("Send_response failed: {:?}", e);
                 }
             }
             Err(Errno::EPIPE) => {
-                info!("acpid: provider port closed, restarting");
+                info!("Provider port closed, restarting");
                 stem::syscall::exit(0);
             }
             Err(e) => {
-                warn!("acpid: provider loop error: {:?}", e);
+                warn!("Provider loop error: {:?}", e);
                 stem::time::sleep_ms(100);
             }
         }
@@ -502,17 +502,17 @@ fn main(_arg: usize) -> ! {
     let (req_write, req_read) = match stem::syscall::port::port_create(PORT_CAPACITY) {
         Ok(p) => p,
         Err(e) => {
-            warn!("acpid: port_create failed: {:?}", e);
+            warn!("Port_create failed: {:?}", e);
             stem::syscall::exit(1);
         }
     };
 
     // Mount at /services/acpi.
     if let Err(e) = vfs_mount(req_write, MOUNT_POINT) {
-        warn!("acpid: mount at {} failed: {:?}", MOUNT_POINT, e);
+        warn!("Mount at {} failed: {:?}", MOUNT_POINT, e);
         // Do not exit — other services may depend on us being alive.
     } else {
-        debug!("acpid: mounted at {}", MOUNT_POINT);
+        debug!("Mounted at {}", MOUNT_POINT);
     }
 
     run_provider(ctx, req_read)

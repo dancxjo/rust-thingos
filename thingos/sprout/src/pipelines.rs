@@ -343,7 +343,7 @@ pub fn spawn_acpid() -> Option<u64> {
             None
         }
         Err(err) => {
-            warn!("SPROUT: failed to spawn acpid: {:?}", err);
+            warn!("Failed to spawn acpid: {:?}", err);
             None
         }
     }
