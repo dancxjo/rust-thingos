@@ -22,6 +22,7 @@ const GLYPH_PRELOAD_END: u32 = 0xFF;
 const GLYPH_PRELOAD_START_U8: u8 = GLYPH_PRELOAD_START as u8;
 const GLYPH_PRELOAD_END_U8: u8 = GLYPH_PRELOAD_END as u8;
 const ACTIVATION_BANNER: &[u8] = b"\x1b[0mThing-OS kernel terminal (F12)\n";
+const WRAP_CLEAR_ROW_DIVISOR: u32 = 2;
 
 pub static CONSOLE: Mutex<Option<FbConsole>> = Mutex::new(None);
 pub static FB_CONSOLE_DISABLED: AtomicBool = AtomicBool::new(false);
@@ -304,66 +305,119 @@ impl FbConsole {
         self.cursor_drawn = false;
     }
 
-    fn set_pixel(&mut self, x: u32, y: u32, color: u32) {
-        if self.fb.bpp != 4 || x >= self.fb.width || y >= self.fb.height {
+    fn text_rows(&self) -> u32 {
+        (self.fb.height / CELL_H).max(1)
+    }
+
+    fn cursor_row(&self) -> u32 {
+        (self.cursor_y / CELL_H).min(self.text_rows().saturating_sub(1))
+    }
+
+    fn fill_pixel_rect(&mut self, x: u32, y: u32, width: u32, height: u32, color: u32) {
+        if self.fb.bpp != 4
+            || x >= self.fb.width
+            || y >= self.fb.height
+            || width == 0
+            || height == 0
+        {
             return;
         }
+
         let pitch_px = (self.fb.pitch / 4) as usize;
-        let off = (y as usize).saturating_mul(pitch_px).saturating_add(x as usize);
-        unsafe { *self.fb.addr.add(off) = color };
+        if pitch_px == 0 {
+            return;
+        }
+
+        let pitch_limit = (pitch_px as u32).saturating_sub(x);
+        let start_col = x as usize;
+        let cols = width.min(self.fb.width - x).min(pitch_limit) as usize;
+        if cols == 0 {
+            return;
+        }
+        let start_row = y as usize;
+        let end_row = y.saturating_add(height).min(self.fb.height) as usize;
+        for row in start_row..end_row {
+            let start = row.saturating_mul(pitch_px).saturating_add(start_col);
+            unsafe {
+                let pixels = core::slice::from_raw_parts_mut(self.fb.addr.add(start), cols);
+                pixels.fill(color);
+            }
+        }
+    }
+
+    fn clear_pixel_band(&mut self, y: u32, height: u32) {
+        self.fill_pixel_rect(0, y, self.fb.width, height, self.bg);
+    }
+
+    fn clear_text_rows(&mut self, start: u32, count: u32) {
+        let rows = self.text_rows();
+        if start >= rows || count == 0 {
+            return;
+        }
+        let count = count.min(rows - start);
+        self.clear_pixel_band(start.saturating_mul(CELL_H), count.saturating_mul(CELL_H));
+    }
+
+    fn clear_text_row(&mut self, row: u32) {
+        self.clear_text_rows(row, 1);
+    }
+
+    fn draw_bits_row(&mut self, bits: u16, bit_width: u32, x: u32, y: u32) {
+        if self.fb.bpp != 4 || x >= self.fb.width || y >= self.fb.height || bit_width == 0 {
+            return;
+        }
+
+        let pitch_px = (self.fb.pitch / 4) as usize;
+        if pitch_px == 0 {
+            return;
+        }
+
+        let pitch_limit = (pitch_px as u32).saturating_sub(x);
+        let cols = bit_width.min(self.fb.width - x).min(pitch_limit) as usize;
+        if cols == 0 {
+            return;
+        }
+        let start = (y as usize).saturating_mul(pitch_px).saturating_add(x as usize);
+        unsafe {
+            let pixels = core::slice::from_raw_parts_mut(self.fb.addr.add(start), cols);
+            for (col, pixel) in pixels.iter_mut().enumerate() {
+                let mask = 1u16 << (bit_width - 1 - col as u32);
+                *pixel = if (bits & mask) != 0 { self.fg } else { self.bg };
+            }
+        }
     }
 
     fn draw_glyph(&mut self, g: &Glyph, x: u32, y: u32) {
         if g.len == 16 {
             for row in 0..16u32 {
-                let bits = g.bytes[row as usize];
-                for col in 0..8u32 {
-                    let on = (bits & (0x80 >> col)) != 0;
-                    self.set_pixel(x + col, y + row, if on { self.fg } else { self.bg });
-                }
+                self.draw_bits_row(g.bytes[row as usize] as u16, 8, x, y + row);
             }
         } else {
             for row in 0..16u32 {
                 let b1 = g.bytes[(row as usize) * 2];
                 let b2 = g.bytes[(row as usize) * 2 + 1];
-                for col in 0..8u32 {
-                    let on1 = (b1 & (0x80 >> col)) != 0;
-                    let on2 = (b2 & (0x80 >> col)) != 0;
-                    self.set_pixel(x + col, y + row, if on1 { self.fg } else { self.bg });
-                    self.set_pixel(x + 8 + col, y + row, if on2 { self.fg } else { self.bg });
-                }
+                let bits = ((b1 as u16) << 8) | b2 as u16;
+                self.draw_bits_row(bits, 16, x, y + row);
             }
         }
-    }
-
-    fn scroll(&mut self) {
-        if self.fb.bpp != 4 || self.fb.height <= CELL_H {
-            return;
-        }
-        let pitch_px = (self.fb.pitch / 4) as usize;
-        let row_px = (CELL_H as usize).saturating_mul(pitch_px);
-        let total_px = (self.fb.height as usize).saturating_mul(pitch_px);
-        if row_px >= total_px {
-            self.clear_to_bg();
-            return;
-        }
-        unsafe {
-            core::ptr::copy(self.fb.addr.add(row_px), self.fb.addr, total_px - row_px);
-            let tail = core::slice::from_raw_parts_mut(self.fb.addr.add(total_px - row_px), row_px);
-            tail.fill(self.bg);
-        }
-        self.cursor_y = self.cursor_y.saturating_sub(CELL_H);
-        // The scroll shifted framebuffer contents; any painted cursor is gone.
-        self.cursor_drawn = false;
     }
 
     fn newline(&mut self) {
         self.erase_cursor();
         self.cursor_x = 0;
-        self.cursor_y = self.cursor_y.saturating_add(CELL_H);
-        if self.cursor_y.saturating_add(CELL_H) > self.fb.height {
-            self.scroll();
+        let row = self.cursor_row();
+        let rows = self.text_rows();
+        if row.saturating_add(1) >= rows {
+            // Avoid a full-framebuffer scroll on every bottom-row newline.
+            self.cursor_y = 0;
+            let clear_rows = (rows / WRAP_CLEAR_ROW_DIVISOR).max(1);
+            self.clear_text_rows(0, clear_rows);
+        } else {
+            let next_row = row + 1;
+            self.cursor_y = next_row.saturating_mul(CELL_H);
+            self.clear_text_row(next_row);
         }
+        self.cursor_drawn = false;
         self.draw_cursor();
     }
 
@@ -396,13 +450,7 @@ impl FbConsole {
         if self.cursor_drawn || !self.cursor_visible {
             return;
         }
-        let x = self.cursor_x;
-        let y = self.cursor_y;
-        for row in 0..CELL_H {
-            for col in 0..CURSOR_W {
-                self.set_pixel(x + col, y + row, self.fg);
-            }
-        }
+        self.fill_pixel_rect(self.cursor_x, self.cursor_y, CURSOR_W, CELL_H, self.fg);
         self.cursor_drawn = true;
     }
 
@@ -411,13 +459,7 @@ impl FbConsole {
         if !self.cursor_drawn {
             return;
         }
-        let x = self.cursor_x;
-        let y = self.cursor_y;
-        for row in 0..CELL_H {
-            for col in 0..CURSOR_W {
-                self.set_pixel(x + col, y + row, self.bg);
-            }
-        }
+        self.fill_pixel_rect(self.cursor_x, self.cursor_y, CURSOR_W, CELL_H, self.bg);
         self.cursor_drawn = false;
     }
 

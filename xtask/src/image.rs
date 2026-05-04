@@ -36,7 +36,7 @@ const DEFAULT_WALLPAPERS: [WallpaperSpec; 7] = [
     WallpaperSpec { file_name: "leather.bmp", variant: 2 },
     WallpaperSpec { file_name: "linen.bmp", variant: 3 },
     WallpaperSpec { file_name: "nocturne_iris.bmp", variant: 4 },
-    WallpaperSpec { file_name: "nocturne_iris.png", variant: 4 },
+    WallpaperSpec { file_name: "flower.png", variant: 4 },
 ];
 
 const ISO_ROOT_DIRS: &[&str] = &[
@@ -413,12 +413,7 @@ pub fn default_programs() -> Vec<ProgramConfig> {
         ProgramConfig { name: "leaf", is_init: false, boot_module: true, features: vec![] },
         ProgramConfig { name: "date", is_init: false, boot_module: true, features: vec![] },
         ProgramConfig { name: "tree", is_init: false, boot_module: true, features: vec![] },
-        ProgramConfig {
-            name: "hello",
-            is_init: false,
-            boot_module: true,
-            features: vec![],
-        },
+        ProgramConfig { name: "hello", is_init: false, boot_module: true, features: vec![] },
         ProgramConfig { name: "tee", is_init: false, boot_module: true, features: vec![] },
         ProgramConfig { name: "themes", is_init: false, boot_module: true, features: vec![] },
         ProgramConfig { name: "xargs", is_init: false, boot_module: true, features: vec![] },
@@ -500,10 +495,8 @@ fn generate_limine_config(
         },
         LimineEntry {
             title: "ThingOS (Safe Shell)".to_string(),
-            kernel_cmdline: format!(
-                "loglevel={} display=bootfb kernel.terminal=1 sprout.safe=sh",
-                default_loglevel
-            ),
+            kernel_cmdline: "loglevel=5 display=bootfb kernel.terminal=1 sprout.safe=sh"
+                .to_string(),
             bootfb_only: true,
             safe_shell_only: true,
         },
@@ -1420,7 +1413,7 @@ mod tests {
         let safe_entry = limine_entry(&conf, "ThingOS (Safe Shell)");
 
         assert!(safe_entry.contains(
-            "kernel_cmdline: loglevel=3 display=bootfb kernel.terminal=1 sprout.safe=sh"
+            "kernel_cmdline: loglevel=5 display=bootfb kernel.terminal=1 sprout.safe=sh"
         ));
         assert!(safe_entry.contains("module_path: boot():/applications/sprout"));
         assert!(safe_entry.contains("module_path: boot():/bin/sh"));
@@ -1569,7 +1562,7 @@ mod tests {
         assert!(
             DEFAULT_WALLPAPERS
                 .iter()
-                .any(|spec| spec.file_name == "nocturne_iris.png" && spec.variant == 4)
+                .any(|spec| spec.file_name == "flower.png" && spec.variant == 4)
         );
         assert!(
             DEFAULT_WALLPAPERS

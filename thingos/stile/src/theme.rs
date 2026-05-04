@@ -237,7 +237,7 @@ pub const AURORA_GLASS: Theme = Theme {
 pub const NOCTURNE_IRIS: Theme = Theme {
     name: "NocturneIris",
     renderer: ThemeRenderer::NocturneIris,
-    wallpaper_path: Some("/public/wallpapers/nocturne_iris.png"),
+    wallpaper_path: Some("/public/wallpapers/flower.png"),
     active: WindowStateTokens {
         border: 0x996F55D9,
         title_top: 0x702E2158,
@@ -366,7 +366,7 @@ fn matches_nocturne_iris(trimmed: &str) -> bool {
         || trimmed.eq_ignore_ascii_case("nocturne-iris")
         || trimmed.eq_ignore_ascii_case("nocturne_iris")
         || trimmed.eq_ignore_ascii_case("nocturne_iris.stile")
-        || trimmed.eq_ignore_ascii_case("nocturne_iris.png")
+        || trimmed.eq_ignore_ascii_case("flower.png")
         || trimmed.eq_ignore_ascii_case("nocturne_iris.bmp")
         || trimmed.eq_ignore_ascii_case("iris")
 }
@@ -1184,10 +1184,7 @@ mod tests {
         assert_eq!(theme_by_name("solaris-warm").name, SOLARIS_WARM.name);
         assert_eq!(theme_by_name("nocturne-iris").name, NOCTURNE_IRIS.name);
         assert_eq!(theme_by_name("nocturne_iris.stile").name, NOCTURNE_IRIS.name);
-        assert_eq!(
-            theme_by_name("iris").wallpaper_path,
-            Some("/public/wallpapers/nocturne_iris.png")
-        );
+        assert_eq!(theme_by_name("iris").wallpaper_path, Some("/public/wallpapers/flower.png"));
         assert_eq!(theme_by_name("aurora-glass").name, AURORA_GLASS.name);
         assert_eq!(theme_by_name("obsidian-bloom").name, OBSIDIAN_BLOOM.name);
         assert_eq!(find_theme_by_name("obsidian_bloom").unwrap().name, OBSIDIAN_BLOOM.name);

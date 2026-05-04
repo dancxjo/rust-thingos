@@ -459,7 +459,7 @@ fn run_poll_thread(
                 let mp = state.mount_point.clone();
                 drop(state);
                 publish_ready_flag(&mp);
-                info!("flower.pngNetwork ready");
+                info!("Network ready");
                 net_state.lock().ready_announced = true;
                 continue; // skip delay — we have fresh work
             }
@@ -585,7 +585,7 @@ fn run_rpc_thread(
 
 #[stem::main]
 fn main(arg: usize) -> ! {
-    info!("flower.pngStarting network service...");
+    info!("Starting network service...");
     clear_ready_flag();
     let cfg = parse_config();
     if cfg.help {
@@ -598,13 +598,13 @@ fn main(arg: usize) -> ! {
         arg, cfg.mount_point, cfg.oneshot, NIC_PATH_PREFIX
     );
 
-    info!("flower.pngWaiting for network device VFS provider at {}*...", NIC_PATH_PREFIX);
+    info!("Waiting for network device VFS provider at {}*...", NIC_PATH_PREFIX);
     let (provider_path, rx_fd, tx_fd, events_fd, mac, iface_mtu, initial_link_up) =
         open_nic_device();
     let mtu = iface_mtu as usize;
 
     debug!(
-        "flower.pngDriver online at {} — MAC {:02x}:{:02x}:{:02x}:{:02x}:{:02x}:{:02x}  MTU {}",
+        "Driver online at {} — MAC {:02x}:{:02x}:{:02x}:{:02x}:{:02x}:{:02x}  MTU {}",
         provider_path, mac[0], mac[1], mac[2], mac[3], mac[4], mac[5], mtu
     );
 
@@ -619,7 +619,7 @@ fn main(arg: usize) -> ! {
         match NetVfsProvider::new(mac, mtu, initial_link_up) {
             Some(provider) => break provider,
             None => {
-                warn!("flower.pngFailed to create provider, retrying...");
+                warn!("Failed to create provider, retrying...");
                 stem::time::sleep_ms(200);
             }
         }
@@ -639,7 +639,7 @@ fn main(arg: usize) -> ! {
         match vfs_watch_path("/dev/net", watch_mask::ALL_EVENTS, watch_flags::NONBLOCK) {
             Ok(fd) => Some(fd),
             Err(e) => {
-                warn!("flower.pngFailed to watch /dev/net for NIC registrations: {:?}", e);
+                warn!("Failed to watch /dev/net for NIC registrations: {:?}", e);
                 None
             }
         };
@@ -650,7 +650,7 @@ fn main(arg: usize) -> ! {
             debug!("flower.pngmounted VFS provider at {} with req_fd={}", mount_point, req_fd);
             break;
         } else {
-            warn!("flower.pngFailed to mount {}, retrying...", mount_point);
+            warn!("Failed to mount {}, retrying...", mount_point);
             stem::time::sleep_ms(200);
         }
     }
@@ -702,20 +702,20 @@ fn main(arg: usize) -> ! {
                 exit(0);
             }
             Err(e) => {
-                warn!("flower.pngDHCP failed in oneshot mode: {:?}", e);
+                warn!("DHCP failed in oneshot mode: {:?}", e);
                 exit(1);
             }
         }
     }
 
-    info!("flower.pngConfiguring network with DHCP...");
+    info!("Configuring network with DHCP...");
     let dhcp_config = loop {
         let mut state_guard = net_state.lock();
         let state = &mut *state_guard;
         match dhcp::run_dhcp(&mut state.iface, &mut state.device) {
             Ok(cfg) => break cfg,
             Err(e) => {
-                warn!("flower.pngDHCP failed: {:?}; retrying in 5s", e);
+                warn!("DHCP failed: {:?}; retrying in 5s", e);
                 drop(state_guard);
                 stem::time::sleep_ms(5000);
             }
@@ -723,7 +723,7 @@ fn main(arg: usize) -> ! {
     };
 
     debug!(
-        "flower.pngDHCP configured ip={} gateway={} dns={}",
+        "DHCP configured ip={} gateway={} dns={}",
         dhcp_config.ip, dhcp_config.gateway, dhcp_config.dns
     );
     {
@@ -764,7 +764,7 @@ fn scan_registered_nic_units() -> [bool; MAX_NIC_UNITS as usize] {
             seen[unit as usize] = true;
         }
     }
-    debug!("flower.pngNIC scan complete: {:?}", seen);
+    debug!("NIC scan complete: {:?}", seen);
     seen
 }
 
@@ -776,10 +776,7 @@ fn report_new_nic_registrations(known_units: &mut [bool; MAX_NIC_UNITS as usize]
         if ready && !known_units[idx] {
             known_units[idx] = true;
             detected = true;
-            debug!(
-                "flower.pngDetected new NIC registration from cambium at {}{}",
-                NIC_PATH_PREFIX, unit
-            );
+            debug!("Detected new NIC registration from cambium at {}{}", NIC_PATH_PREFIX, unit);
         } else if !ready {
             known_units[idx] = false;
         }
@@ -841,7 +838,7 @@ fn open_nic_device() -> (alloc::string::String, u32, u32, u32, [u8; 6], u32, boo
                 let tx_fd = match vfs_open(&tx_path, O_WRONLY) {
                     Ok(fd) => fd,
                     Err(e) => {
-                        warn!("flower.pngFailed to open {}: {:?}", tx_path, e);
+                        warn!("Failed to open {}: {:?}", tx_path, e);
                         let _ = vfs_close(rx_fd);
                         continue;
                     }
@@ -850,7 +847,7 @@ fn open_nic_device() -> (alloc::string::String, u32, u32, u32, [u8; 6], u32, boo
                 let events_fd = match vfs_open(&events_path, O_RDONLY | O_NONBLOCK) {
                     Ok(fd) => fd,
                     Err(e) => {
-                        warn!("flower.pngFailed to open {}: {:?}", events_path, e);
+                        warn!("Failed to open {}: {:?}", events_path, e);
                         let _ = vfs_close(rx_fd);
                         let _ = vfs_close(tx_fd);
                         continue;
@@ -862,7 +859,7 @@ fn open_nic_device() -> (alloc::string::String, u32, u32, u32, [u8; 6], u32, boo
                 let initial_link_up = read_link_state_file(&status_path).unwrap_or(false);
 
                 debug!(
-                    "flower.pngOpened VFS NIC device at {} (rx={}, tx={}, events={}, mtu={}, link={})",
+                    "Opened VFS NIC device at {} (rx={}, tx={}, events={}, mtu={}, link={})",
                     provider_path,
                     rx_fd,
                     tx_fd,

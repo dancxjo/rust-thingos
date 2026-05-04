@@ -280,7 +280,7 @@ Stile palette:
 
 ```sh
 echo flower.png > /session/desktop/theme
-echo nocturne_iris.png > /session/desktop/theme
+echo flower.png > /session/desktop/theme
 echo flower.bmp > /session/desktop/theme
 echo leather.bmp > /session/desktop/theme
 echo linen.bmp > /session/desktop/theme
