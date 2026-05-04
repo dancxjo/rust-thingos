@@ -1,5 +1,5 @@
-#![no_std]
-#![no_main]
+#![cfg_attr(not(test), no_std)]
+#![cfg_attr(not(test), no_main)]
 use core::default::Default;
 extern crate alloc;
 
@@ -778,7 +778,7 @@ fn render_clock_demo(
         .prepare_component(&mut tree, w, h, JustifyContent::Center, AlignItems::Center)
         .is_ok()
     {
-        paint_tree(&tree, pixels, stride, height, x, y, text_renderer, showcase.theme.chrome_text);
+        paint_tree(&tree, pixels, stride, height, x, y, Some((x, y, w, h)), text_renderer, showcase.theme.chrome_text);
     }
 }
 
@@ -809,7 +809,7 @@ fn render_calculator_demo(
         .prepare_component(&mut tree, w, h, JustifyContent::Start, AlignItems::Stretch)
         .is_ok()
     {
-        paint_tree(&tree, pixels, stride, height, x, y, text_renderer, showcase.theme.chrome_text);
+        paint_tree(&tree, pixels, stride, height, x, y, Some((x, y, w, h)), text_renderer, showcase.theme.chrome_text);
     }
 }
 
@@ -840,7 +840,7 @@ fn render_launcher_demo(
         .prepare_component(&mut tree, w, h, JustifyContent::Start, AlignItems::Stretch)
         .is_ok()
     {
-        paint_tree(&tree, pixels, stride, height, x, y, text_renderer, showcase.theme.chrome_text);
+        paint_tree(&tree, pixels, stride, height, x, y, Some((x, y, w, h)), text_renderer, showcase.theme.chrome_text);
     }
 }
 
@@ -869,7 +869,7 @@ fn render_chrome_demo(
         .prepare_component(&mut tree, w, h, JustifyContent::Start, AlignItems::Stretch)
         .is_ok()
     {
-        paint_tree(&tree, pixels, stride, height, x, y, text_renderer, showcase.theme.chrome_text);
+        paint_tree(&tree, pixels, stride, height, x, y, Some((x, y, w, h)), text_renderer, showcase.theme.chrome_text);
         draw_text(
             text_renderer,
             pixels,
@@ -904,10 +904,44 @@ fn render_stile_demo(
         .prepare_component(&mut tree, w, h, JustifyContent::Start, AlignItems::Stretch)
         .is_ok()
     {
-        paint_tree(&tree, pixels, stride, height, x, y, text_renderer, showcase.theme.chrome_text);
+        paint_tree(&tree, pixels, stride, height, x, y, Some((x, y, w, h)), text_renderer, showcase.theme.chrome_text);
     }
 }
 
+/// Returns the intersection of `(x, y, w, h)` with `clip`, or `None` when they don't overlap.
+fn intersect_clip(
+    x: i32,
+    y: i32,
+    w: u32,
+    h: u32,
+    clip: (i32, i32, u32, u32),
+) -> Option<(i32, i32, u32, u32)> {
+    let (cx, cy, cw, ch) = clip;
+    let x0 = x.max(cx);
+    let y0 = y.max(cy);
+    let x1 = (x + w as i32).min(cx + cw as i32);
+    let y1 = (y + h as i32).min(cy + ch as i32);
+    if x1 <= x0 || y1 <= y0 {
+        None
+    } else {
+        Some((x0, y0, (x1 - x0) as u32, (y1 - y0) as u32))
+    }
+}
+
+/// Returns `true` when `(px, py)` falls inside `clip`, or when no clip is active.
+fn point_in_clip(px: i32, py: i32, clip: Option<(i32, i32, u32, u32)>) -> bool {
+    match clip {
+        None => true,
+        Some((cx, cy, cw, ch)) => {
+            px >= cx && px < cx + cw as i32 && py >= cy && py < cy + ch as i32
+        }
+    }
+}
+
+/// Paint all nodes of `tree` into `pixels`.
+///
+/// `clip` restricts all drawing to the given rectangle `(x, y, w, h)` in buffer coordinates.
+/// Nodes whose bounds do not intersect the clip rectangle are skipped entirely.
 fn paint_tree(
     tree: &UiTree,
     pixels: &mut [u32],
@@ -915,6 +949,7 @@ fn paint_tree(
     height: u32,
     origin_x: i32,
     origin_y: i32,
+    clip: Option<(i32, i32, u32, u32)>,
     text_renderer: Option<&TextRenderer>,
     fallback_text: u32,
 ) {
@@ -927,21 +962,30 @@ fn paint_tree(
         let w = b.width.max(0.0) as u32;
         let h = b.height.max(0.0) as u32;
 
+        // Restrict drawing to the clip rectangle when one is set.
+        let (dx, dy, dw, dh) = match clip {
+            Some(c) => match intersect_clip(x, y, w, h, c) {
+                Some(r) => r,
+                None => continue,
+            },
+            None => (x, y, w, h),
+        };
+
         if let Some(color) = node.style.background_color {
-            fill_rect(pixels, stride, height, x, y, w, h, color_argb(color));
+            fill_rect(pixels, stride, height, dx, dy, dw, dh, color_argb(color));
         }
         if node.style.border_width.unwrap_or(0.0) > 0.0 {
-            draw_rect_stroke(pixels, stride, height, x, y, w, h, 1, 0x66333B48);
+            draw_rect_stroke(pixels, stride, height, dx, dy, dw, dh, 1, 0x66333B48);
         }
         if node.style.outline_color.is_some() {
             draw_rect_stroke(
                 pixels,
                 stride,
                 height,
-                x - 1,
-                y - 1,
-                w.saturating_add(2),
-                h.saturating_add(2),
+                dx - 1,
+                dy - 1,
+                dw.saturating_add(2),
+                dh.saturating_add(2),
                 1,
                 color_argb(node.style.outline_color.unwrap()),
             );
@@ -955,36 +999,24 @@ fn paint_tree(
                 let px = node.style.font_size.unwrap_or(
                     if node.descriptions.contains(&Description::Logogram) { 22.0 } else { 12.0 },
                 );
-                let color = node.style.color.map(color_argb).unwrap_or(fallback_text);
-                let label = petals::ellipsize_ascii(text, text_capacity(w as f32, px));
-                draw_text(
-                    text_renderer,
-                    pixels,
-                    stride,
-                    height,
-                    x,
-                    y + px as i32,
-                    px,
-                    &label,
-                    color,
-                );
+                let tx = x;
+                let ty = y + px as i32;
+                if point_in_clip(tx, ty, clip) {
+                    let color = node.style.color.map(color_argb).unwrap_or(fallback_text);
+                    let label = petals::ellipsize_ascii(text, text_capacity(dw as f32, px));
+                    draw_text(text_renderer, pixels, stride, height, tx, ty, px, &label, color);
+                }
             }
         } else if node.descriptions.contains(&Description::Pressable) {
             if let Some(text) = pressable_label(node.id, tree) {
                 let px = node.style.font_size.unwrap_or(12.0);
-                let color = node.style.color.map(color_argb).unwrap_or(fallback_text);
-                let label = petals::ellipsize_ascii(text, text_capacity(w as f32, px));
-                draw_text(
-                    text_renderer,
-                    pixels,
-                    stride,
-                    height,
-                    x + 8,
-                    y + ((h as f32 + px) / 2.0) as i32 - 3,
-                    px,
-                    &label,
-                    color,
-                );
+                let tx = x + 8;
+                let ty = y + ((h as f32 + px) / 2.0) as i32 - 3;
+                if point_in_clip(tx, ty, clip) {
+                    let color = node.style.color.map(color_argb).unwrap_or(fallback_text);
+                    let label = petals::ellipsize_ascii(text, text_capacity(dw as f32, px));
+                    draw_text(text_renderer, pixels, stride, height, tx, ty, px, &label, color);
+                }
             }
         }
     }
@@ -1509,4 +1541,143 @@ fn region_destroy(fd: u32, region_id: u32) {
     let mut buf = Vec::new();
     encode_header(region_id, 0, 8, &mut buf);
     send_request(fd, &buf);
+}
+
+#[cfg(test)]
+mod tests {
+    use petals::{AlignItems, Color, Declaration, Description, FlexDirection, Rule, Selector, UiTree, AvailableSpace, Size};
+
+    use super::*;
+
+    // ── intersect_clip ──────────────────────────────────────────────────────
+
+    #[test]
+    fn intersect_clip_full_overlap() {
+        let result = intersect_clip(10, 10, 80, 80, (0, 0, 100, 100));
+        assert_eq!(result, Some((10, 10, 80, 80)));
+    }
+
+    #[test]
+    fn intersect_clip_right_overflow_is_clamped() {
+        // node right edge (150) extends past clip right (100)
+        let result = intersect_clip(50, 0, 100, 50, (0, 0, 100, 100));
+        assert_eq!(result, Some((50, 0, 50, 50)));
+    }
+
+    #[test]
+    fn intersect_clip_no_overlap_returns_none() {
+        let result = intersect_clip(200, 0, 50, 50, (0, 0, 100, 100));
+        assert!(result.is_none());
+    }
+
+    #[test]
+    fn intersect_clip_touching_edge_returns_none() {
+        // rect starts exactly at clip right edge → zero width → None
+        let result = intersect_clip(100, 0, 50, 50, (0, 0, 100, 100));
+        assert!(result.is_none());
+    }
+
+    // ── point_in_clip ───────────────────────────────────────────────────────
+
+    #[test]
+    fn point_in_clip_inside() {
+        assert!(point_in_clip(50, 50, Some((0, 0, 100, 100))));
+    }
+
+    #[test]
+    fn point_in_clip_outside_right() {
+        assert!(!point_in_clip(100, 50, Some((0, 0, 100, 100))));
+    }
+
+    #[test]
+    fn point_in_clip_none_always_true() {
+        assert!(point_in_clip(999, 999, None));
+    }
+
+    // ── paint_tree clipping ─────────────────────────────────────────────────
+
+    /// Helper: build a tree containing a single wide pressable node.
+    fn wide_button_tree(node_width: f32, container_width: f32) -> UiTree {
+        let mut tree = UiTree::new().unwrap();
+        let root = tree.root();
+        let btn = tree.pressable("Wide").unwrap();
+        tree.add_child(root, btn).unwrap();
+
+        let rules = alloc::vec![
+            Rule::new(
+                Selector::has(Description::Container),
+                alloc::vec![
+                    Declaration::FlexDirection(FlexDirection::Row),
+                    Declaration::AlignItems(AlignItems::Start),
+                ],
+            ),
+            Rule::new(
+                Selector::has(Description::Pressable),
+                alloc::vec![
+                    Declaration::BackgroundColor(Color::rgb(0xFF, 0, 0)),
+                    Declaration::Width(node_width),
+                    Declaration::Height(40.0),
+                ],
+            ),
+        ];
+        tree.restyle(&rules).unwrap();
+        tree.compute_layout(Size {
+            width: AvailableSpace::Definite(container_width),
+            height: AvailableSpace::Definite(100.0),
+        })
+        .unwrap();
+        tree
+    }
+
+    #[test]
+    fn paint_tree_with_clip_does_not_draw_outside_clip_rect() {
+        // Buffer is 200 px wide; the clip rect covers only the first 100 px.
+        // The button node is 150 px wide, so without clipping it would fill
+        // pixels 0..150.  With clipping it must stay within 0..100.
+        let buf_w: u32 = 200;
+        let buf_h: u32 = 100;
+        let mut pixels = alloc::vec![0u32; (buf_w * buf_h) as usize];
+
+        let tree = wide_button_tree(150.0, 200.0);
+        paint_tree(
+            &tree,
+            &mut pixels,
+            buf_w,
+            buf_h,
+            0,
+            0,
+            Some((0, 0, 100, 100)), // clip: left half of the buffer
+            None,
+            0xFF_FF_FF_FF,
+        );
+
+        // All pixels from x=100 onward must remain untouched (zero).
+        for row in 0..buf_h {
+            for col in 100..buf_w {
+                let idx = (row * buf_w + col) as usize;
+                assert_eq!(
+                    pixels[idx], 0,
+                    "pixel at ({col}, {row}) should not have been painted outside the clip rect"
+                );
+            }
+        }
+        // At least one pixel inside the clip should have been painted.
+        let painted = pixels[..100].iter().any(|&p| p != 0);
+        assert!(painted, "expected some pixels to be painted inside the clip rect");
+    }
+
+    #[test]
+    fn paint_tree_without_clip_draws_full_node() {
+        // Same setup but no clip: the 150 px button should fill pixels 0..150.
+        let buf_w: u32 = 200;
+        let buf_h: u32 = 100;
+        let mut pixels = alloc::vec![0u32; (buf_w * buf_h) as usize];
+
+        let tree = wide_button_tree(150.0, 200.0);
+        paint_tree(&tree, &mut pixels, buf_w, buf_h, 0, 0, None, None, 0xFF_FF_FF_FF);
+
+        // Pixels in the range 0..150 on the first painted row should be non-zero.
+        let first_row_painted = (0..150u32).any(|col| pixels[col as usize] != 0);
+        assert!(first_row_painted, "expected pixels inside the node to be painted");
+    }
 }
