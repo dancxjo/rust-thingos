@@ -1,6 +1,6 @@
 //! VFS-backed smoltcp Device implementation.
 //!
-//! Frames are exchanged over `/dev/net/virtio0/{rx,tx,events}` using a
+//! Frames are exchanged over `/dev/net/cardN/{rx,tx,events}` using a
 //! length-prefixed wire format:
 //! `[4 bytes little-endian frame length][raw Ethernet frame bytes...]`
 extern crate alloc;
@@ -16,8 +16,10 @@ use stem::syscall::vfs::{vfs_close, vfs_open, vfs_read, vfs_write};
 
 const MAX_FRAME_LEN: usize = 2048;
 const RX_STAGING_BUF_LEN: usize = 65536;
+const NIC_PATH_PREFIX: &str = "/dev/net/card";
+const MAX_NIC_UNITS: u32 = 16;
 
-/// Network device backed by the virtio_netd VFS tree.
+/// Network device backed by a NIC driver's VFS tree.
 pub struct VfsNicDevice {
     rx_fd: u32,
     tx_fd: u32,
@@ -32,27 +34,30 @@ pub struct VfsNicDevice {
 }
 
 impl VfsNicDevice {
-    /// Open the virtio-net VFS tree, retrying until it is present.
+    /// Open the first NIC VFS tree, retrying until it is present.
     #[allow(dead_code)]
     pub fn open() -> Self {
         loop {
-            if let Some(dev) = Self::try_open() {
-                return dev;
+            for unit in 0..MAX_NIC_UNITS {
+                let provider_path = alloc::format!("{}{}", NIC_PATH_PREFIX, unit);
+                if let Some(dev) = Self::try_open(&provider_path) {
+                    return dev;
+                }
             }
-            stem::debug!("VfsNicDevice: /dev/net/virtio0 not ready, retrying...");
+            stem::debug!("VfsNicDevice: /dev/net/cardN not ready, retrying...");
             stem::time::sleep_ms(100);
         }
     }
 
-    fn try_open() -> Option<Self> {
-        let rx_path = "/dev/net/virtio0/rx";
-        let tx_path = "/dev/net/virtio0/tx";
-        let events_path = "/dev/net/virtio0/events";
-        let mac_path = "/dev/net/virtio0/mac";
-        let mtu_path = "/dev/net/virtio0/mtu";
+    fn try_open(provider_path: &str) -> Option<Self> {
+        let rx_path = alloc::format!("{}/rx", provider_path);
+        let tx_path = alloc::format!("{}/tx", provider_path);
+        let events_path = alloc::format!("{}/events", provider_path);
+        let mac_path = alloc::format!("{}/mac", provider_path);
+        let mtu_path = alloc::format!("{}/mtu", provider_path);
 
-        let rx_fd = vfs_open(rx_path, vfs_flags::O_RDONLY | vfs_flags::O_NONBLOCK).ok()?;
-        let tx_fd = match vfs_open(tx_path, vfs_flags::O_WRONLY) {
+        let rx_fd = vfs_open(&rx_path, vfs_flags::O_RDONLY | vfs_flags::O_NONBLOCK).ok()?;
+        let tx_fd = match vfs_open(&tx_path, vfs_flags::O_WRONLY) {
             Ok(fd) => fd,
             Err(e) => {
                 stem::warn!("VfsNicDevice: failed to open tx: {:?}", e);
@@ -60,13 +65,13 @@ impl VfsNicDevice {
                 return None;
             }
         };
-        let events_fd = match vfs_open(events_path, vfs_flags::O_RDONLY | vfs_flags::O_NONBLOCK) {
+        let events_fd = match vfs_open(&events_path, vfs_flags::O_RDONLY | vfs_flags::O_NONBLOCK) {
             Ok(fd) => fd,
             Err(_) => u32::MAX,
         };
 
-        let mac = Self::read_mac(mac_path).unwrap_or([0x52, 0x54, 0x00, 0x12, 0x34, 0x56]);
-        let mtu = Self::read_mtu(mtu_path).unwrap_or(1500);
+        let mac = Self::read_mac(&mac_path).unwrap_or([0x52, 0x54, 0x00, 0x12, 0x34, 0x56]);
+        let mtu = Self::read_mtu(&mtu_path).unwrap_or(1500);
 
         Some(Self::new(rx_fd, tx_fd, events_fd, mac, mtu, true))
     }

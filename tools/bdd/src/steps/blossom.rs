@@ -1036,9 +1036,7 @@ async fn active_window_chrome_should_include_facet_frame_focus_accents(
 }
 
 #[when("I drag the Clock window over the Hello title bar")]
-async fn drag_clock_window_over_hello_title_bar(
-    world: &mut ThingOsWorld,
-) -> Result<(), StepError> {
+async fn drag_clock_window_over_hello_title_bar(world: &mut ThingOsWorld) -> Result<(), StepError> {
     if world.qmp_control.is_none() {
         return Err(StepError("No QMP connection for clock-window drag input".to_string()));
     }
@@ -1306,9 +1304,7 @@ async fn click_hello_client_and_press_a(world: &mut ThingOsWorld) -> Result<(), 
 }
 
 #[then("the Hello client should receive pointer and keyboard input")]
-async fn hello_receives_pointer_and_keyboard(
-    world: &mut ThingOsWorld,
-) -> Result<(), StepError> {
+async fn hello_receives_pointer_and_keyboard(world: &mut ThingOsWorld) -> Result<(), StepError> {
     if !world.wait_for_serial("hello: pointer enter", 30.0).await {
         return Err(StepError("Wayland client did not receive wl_pointer.enter".to_string()));
     }
@@ -1369,9 +1365,7 @@ async fn compositor_resizes_toplevel_window(world: &mut ThingOsWorld) -> Result<
 }
 
 #[when("I move the pointer over the Hello titlebar")]
-async fn move_pointer_over_hello_titlebar(
-    world: &mut ThingOsWorld,
-) -> Result<(), StepError> {
+async fn move_pointer_over_hello_titlebar(world: &mut ThingOsWorld) -> Result<(), StepError> {
     if world.qmp_control.is_none() {
         return Err(StepError("No QMP connection for titlebar hover input".to_string()));
     }
@@ -1876,15 +1870,13 @@ async fn client_requested_presentation_feedback(world: &mut ThingOsWorld) -> Res
 /// `Then the client receives wp_presentation_feedback.presented for that feedback object`
 #[then("the client receives wp_presentation_feedback.presented for that feedback object")]
 async fn client_receives_feedback_presented(world: &mut ThingOsWorld) -> Result<(), StepError> {
-    let found =
-        world.wait_for_serial("hello: wp_presentation_feedback.presented", 30.0).await;
+    let found = world.wait_for_serial("hello: wp_presentation_feedback.presented", 30.0).await;
     if found {
         eprintln!("│  │  │      ✅ wp_presentation_feedback.presented received");
         Ok(())
     } else {
         Err(StepError(
-            "Expected 'hello: wp_presentation_feedback.presented' in client log"
-                .to_string(),
+            "Expected 'hello: wp_presentation_feedback.presented' in client log".to_string(),
         ))
     }
 }

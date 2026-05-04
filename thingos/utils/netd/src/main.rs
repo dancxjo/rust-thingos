@@ -1,7 +1,7 @@
 //! # Network Service (netd) — Phase 3: /net/ VFS provider
 //!
 //! Replaces the graph-based driver IPC and port-based socket API with:
-//! - Driver access via `/dev/net/virtio0/{rx,tx,mac,mtu}` VFS files (issue #540)
+//! - Driver access via `/dev/net/cardN/{rx,tx,mac,mtu}` VFS files (issue #540)
 //! - Application socket API via `/net/` VFS tree (issue #541)
 //! Provides networking capabilities using smoltcp TCP/IP stack.
 //!
@@ -73,10 +73,12 @@ use stem::{debug, info, warn};
 use vfs_device::VfsNicDevice;
 use vfs_provider::{E_OK, ICMP_DYN_BASE, NetVfsProvider, TCP_DYN_BASE, UDP_DYN_BASE};
 
-/// Path prefix for the virtio NIC VFS provider (published by virtio_netd).
-const VIRTIO_PATH_PREFIX: &str = "/dev/net/virtio";
-/// Maximum virtioN unit index to probe during startup.
-const MAX_VIRTIO_UNITS: u32 = 16;
+/// Path prefix for NIC VFS providers (published by Cambium-managed drivers).
+const NIC_PATH_PREFIX: &str = "/dev/net/card";
+/// Compatibility prefix used by manually launched legacy virtio_netd.
+const LEGACY_VIRTIO_PATH_PREFIX: &str = "/dev/net/virtio";
+/// Maximum cardN unit index to probe during startup.
+const MAX_NIC_UNITS: u32 = 16;
 const DEFAULT_MOUNT_POINT: &str = "/net";
 const READY_PATH: &str = "/run/netd.ready";
 const SEED_NAME: &[u8] = b"netd";
@@ -593,10 +595,10 @@ fn main(arg: usize) -> ! {
 
     debug!(
         "NETD: startup arg={} mount_point={} oneshot={} provider_prefix={}",
-        arg, cfg.mount_point, cfg.oneshot, VIRTIO_PATH_PREFIX
+        arg, cfg.mount_point, cfg.oneshot, NIC_PATH_PREFIX
     );
 
-    info!("NETD: Waiting for virtio_netd VFS provider at {}*...", VIRTIO_PATH_PREFIX);
+    info!("NETD: Waiting for network device VFS provider at {}*...", NIC_PATH_PREFIX);
     let (provider_path, rx_fd, tx_fd, events_fd, mac, iface_mtu, initial_link_up) =
         open_nic_device();
     let mtu = iface_mtu as usize;
@@ -755,9 +757,9 @@ pub extern "C" fn thingos_vfs_unmount_v1(_arg: usize) -> i32 {
     }
 }
 
-fn scan_registered_nic_units() -> [bool; MAX_VIRTIO_UNITS as usize] {
-    let mut seen = [false; MAX_VIRTIO_UNITS as usize];
-    for unit in 0..MAX_VIRTIO_UNITS {
+fn scan_registered_nic_units() -> [bool; MAX_NIC_UNITS as usize] {
+    let mut seen = [false; MAX_NIC_UNITS as usize];
+    for unit in 0..MAX_NIC_UNITS {
         if nic_unit_ready(unit) {
             seen[unit as usize] = true;
         }
@@ -766,9 +768,9 @@ fn scan_registered_nic_units() -> [bool; MAX_VIRTIO_UNITS as usize] {
     seen
 }
 
-fn report_new_nic_registrations(known_units: &mut [bool; MAX_VIRTIO_UNITS as usize]) -> bool {
+fn report_new_nic_registrations(known_units: &mut [bool; MAX_NIC_UNITS as usize]) -> bool {
     let mut detected = false;
-    for unit in 0..MAX_VIRTIO_UNITS {
+    for unit in 0..MAX_NIC_UNITS {
         let idx = unit as usize;
         let ready = nic_unit_ready(unit);
         if ready && !known_units[idx] {
@@ -776,7 +778,7 @@ fn report_new_nic_registrations(known_units: &mut [bool; MAX_VIRTIO_UNITS as usi
             detected = true;
             debug!(
                 "NETD: Detected new NIC registration from cambium at {}{}",
-                VIRTIO_PATH_PREFIX, unit
+                NIC_PATH_PREFIX, unit
             );
         } else if !ready {
             known_units[idx] = false;
@@ -786,7 +788,7 @@ fn report_new_nic_registrations(known_units: &mut [bool; MAX_VIRTIO_UNITS as usi
 }
 
 fn nic_unit_ready(unit: u32) -> bool {
-    let rx_path = alloc::format!("{}{}{}", VIRTIO_PATH_PREFIX, unit, "/rx");
+    let rx_path = alloc::format!("{}{}{}", NIC_PATH_PREFIX, unit, "/rx");
     stem::trace!("NETD: checking nic unit {} at {}", unit, rx_path);
     match vfs_open(&rx_path, O_RDONLY | O_NONBLOCK) {
         Ok(fd) => {
@@ -812,69 +814,72 @@ fn drain_watch_fd(fd: u32) {
     }
 }
 
-/// Open a virtio NIC device fileset, retrying until any `/dev/net/virtioN`
-/// provider is ready.
+/// Open a NIC device fileset, retrying until any `/dev/net/cardN` provider is
+/// ready. A legacy `/dev/net/virtioN` fallback remains for manually launched
+/// old drivers.
 fn open_nic_device() -> (alloc::string::String, u32, u32, u32, [u8; 6], u32, bool) {
     let mut probe_round = 0u32;
 
     loop {
-        for unit in 0..MAX_VIRTIO_UNITS {
-            let provider_path = alloc::format!("{}{}", VIRTIO_PATH_PREFIX, unit);
-            let rx_path = alloc::format!("{}/rx", provider_path);
-            let tx_path = alloc::format!("{}/tx", provider_path);
-            let events_path = alloc::format!("{}/events", provider_path);
-            let mac_path = alloc::format!("{}/mac", provider_path);
-            let mtu_path = alloc::format!("{}/mtu", provider_path);
-            let status_path = alloc::format!("{}/status", provider_path);
+        for prefix in [NIC_PATH_PREFIX, LEGACY_VIRTIO_PATH_PREFIX] {
+            for unit in 0..MAX_NIC_UNITS {
+                let provider_path = alloc::format!("{}{}", prefix, unit);
+                let rx_path = alloc::format!("{}/rx", provider_path);
+                let tx_path = alloc::format!("{}/tx", provider_path);
+                let events_path = alloc::format!("{}/events", provider_path);
+                let mac_path = alloc::format!("{}/mac", provider_path);
+                let mtu_path = alloc::format!("{}/mtu", provider_path);
+                let status_path = alloc::format!("{}/status", provider_path);
 
-            stem::trace!("NETD: probing {}", provider_path);
-            let rx_fd = match vfs_open(&rx_path, O_RDONLY | O_NONBLOCK) {
-                Ok(fd) => fd,
-                Err(_) => continue,
-            };
+                stem::trace!("NETD: probing {}", provider_path);
+                let rx_fd = match vfs_open(&rx_path, O_RDONLY | O_NONBLOCK) {
+                    Ok(fd) => fd,
+                    Err(_) => continue,
+                };
 
-            stem::trace!("NETD: found {}/rx, opening companion files", provider_path);
-            let tx_fd = match vfs_open(&tx_path, O_WRONLY) {
-                Ok(fd) => fd,
-                Err(e) => {
-                    warn!("NETD: Failed to open {}: {:?}", tx_path, e);
-                    let _ = vfs_close(rx_fd);
-                    continue;
-                }
-            };
+                stem::trace!("NETD: found {}/rx, opening companion files", provider_path);
+                let tx_fd = match vfs_open(&tx_path, O_WRONLY) {
+                    Ok(fd) => fd,
+                    Err(e) => {
+                        warn!("NETD: Failed to open {}: {:?}", tx_path, e);
+                        let _ = vfs_close(rx_fd);
+                        continue;
+                    }
+                };
 
-            let events_fd = match vfs_open(&events_path, O_RDONLY | O_NONBLOCK) {
-                Ok(fd) => fd,
-                Err(e) => {
-                    warn!("NETD: Failed to open {}: {:?}", events_path, e);
-                    let _ = vfs_close(rx_fd);
-                    let _ = vfs_close(tx_fd);
-                    continue;
-                }
-            };
+                let events_fd = match vfs_open(&events_path, O_RDONLY | O_NONBLOCK) {
+                    Ok(fd) => fd,
+                    Err(e) => {
+                        warn!("NETD: Failed to open {}: {:?}", events_path, e);
+                        let _ = vfs_close(rx_fd);
+                        let _ = vfs_close(tx_fd);
+                        continue;
+                    }
+                };
 
-            let mac = read_mac_file(&mac_path).unwrap_or([0x52, 0x54, 0x00, 0x12, 0x34, 0x56]);
-            let mtu = read_u32_file(&mtu_path).unwrap_or(1500);
-            let initial_link_up = read_link_state_file(&status_path).unwrap_or(false);
+                let mac = read_mac_file(&mac_path).unwrap_or([0x52, 0x54, 0x00, 0x12, 0x34, 0x56]);
+                let mtu = read_u32_file(&mtu_path).unwrap_or(1500);
+                let initial_link_up = read_link_state_file(&status_path).unwrap_or(false);
 
-            debug!(
-                "NETD: Opened VFS NIC device at {} (rx={}, tx={}, events={}, mtu={}, link={})",
-                provider_path,
-                rx_fd,
-                tx_fd,
-                events_fd,
-                mtu,
-                if initial_link_up { "up" } else { "down" }
-            );
-            return (provider_path, rx_fd, tx_fd, events_fd, mac, mtu, initial_link_up);
+                debug!(
+                    "NETD: Opened VFS NIC device at {} (rx={}, tx={}, events={}, mtu={}, link={})",
+                    provider_path,
+                    rx_fd,
+                    tx_fd,
+                    events_fd,
+                    mtu,
+                    if initial_link_up { "up" } else { "down" }
+                );
+                return (provider_path, rx_fd, tx_fd, events_fd, mac, mtu, initial_link_up);
+            }
         }
 
         probe_round = probe_round.saturating_add(1);
         if probe_round == 1 || probe_round % 20 == 0 {
             stem::trace!(
-                "No virtio VFS provider ready under {}[0..{}], retrying (round={})",
-                VIRTIO_PATH_PREFIX,
-                MAX_VIRTIO_UNITS.saturating_sub(1),
+                "No network VFS provider ready under {}[0..{}], retrying (round={})",
+                NIC_PATH_PREFIX,
+                MAX_NIC_UNITS.saturating_sub(1),
                 probe_round
             );
         }

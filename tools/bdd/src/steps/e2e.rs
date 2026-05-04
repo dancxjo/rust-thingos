@@ -13,8 +13,23 @@ use crate::world::{ThingOsWorld, shell_prompt_present, strip_ansi};
 
 #[then(regex = r#"^the log should match pattern "(.+)"$"#)]
 async fn log_matches_pattern(world: &mut ThingOsWorld, pattern: String) -> Result<(), StepError> {
+    serial_log_matches_pattern(world, &pattern).await
+}
+
+#[then(regex = r#"^the serial output should match pattern "(.+)"$"#)]
+async fn serial_output_matches_pattern(
+    world: &mut ThingOsWorld,
+    pattern: String,
+) -> Result<(), StepError> {
+    serial_log_matches_pattern(world, &pattern).await
+}
+
+async fn serial_log_matches_pattern(
+    world: &mut ThingOsWorld,
+    pattern: &str,
+) -> Result<(), StepError> {
     let timeout = default_timeout_secs(world);
-    let found = world.wait_for_regex_pattern(&pattern, timeout).await;
+    let found = world.wait_for_regex_pattern(pattern, timeout).await;
 
     if !found {
         let log = world.get_serial_log().await;
@@ -35,8 +50,23 @@ async fn log_does_not_match_pattern(
     world: &mut ThingOsWorld,
     pattern: String,
 ) -> Result<(), StepError> {
+    serial_log_does_not_match_pattern(world, &pattern).await
+}
+
+#[then(regex = r#"^the serial output should not match pattern "(.+)"$"#)]
+async fn serial_output_does_not_match_pattern(
+    world: &mut ThingOsWorld,
+    pattern: String,
+) -> Result<(), StepError> {
+    serial_log_does_not_match_pattern(world, &pattern).await
+}
+
+async fn serial_log_does_not_match_pattern(
+    world: &mut ThingOsWorld,
+    pattern: &str,
+) -> Result<(), StepError> {
     let log = world.get_serial_log().await;
-    let re = match regex::Regex::new(&pattern) {
+    let re = match regex::Regex::new(pattern) {
         Ok(r) => r,
         Err(e) => {
             return Err(StepError(format!("Invalid regex pattern '{}': {}", pattern, e)));

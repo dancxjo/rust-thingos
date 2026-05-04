@@ -48,7 +48,6 @@ const JOB_EXIT_CODE_OFFSET: usize = 6;
 const JOB_EXIT_CODE_BYTES: usize = 4;
 const JOB_EXIT_STATE_EXITED: u8 = 2;
 const SPROUT_EARLY_AUDIO_MARKER: &str = "/run/sprout/audio-early";
-const DISPLAY_INPUT_ISOLATION: bool = true;
 const SHUTDOWN_TERM_GRACE_MS: u64 = 1_000;
 const SHUTDOWN_KILL_GRACE_MS: u64 = 1_000;
 const SHUTDOWN_POLL_MS: u64 = 25;
@@ -603,15 +602,6 @@ fn reconcile_devices(
                         device.slot
                     );
                 }
-                if should_skip_for_display_input_isolation(entry.driver_class, &entry.path) {
-                    stem::trace!(
-                        "Isolation mode skipped driver '{}' class={:?} for {}",
-                        entry.path,
-                        entry.driver_class,
-                        device.slot
-                    );
-                    continue;
-                }
                 if fallback_bootfb
                     && entry.driver_class == DriverClass::Display
                     && !entry.path.ends_with("/display_bootfb")
@@ -689,6 +679,7 @@ fn catalog_mount_path(
 ) -> Option<String> {
     match driver_class {
         DriverClass::Display => allocate_indexed_dev_path(drivers, "/dev/display/card"),
+        DriverClass::Net => allocate_indexed_dev_path(drivers, "/dev/net/card"),
         _ => None,
     }
 }
@@ -706,11 +697,6 @@ fn allocate_indexed_dev_path(
         }
     }
     None
-}
-
-fn should_skip_for_display_input_isolation(driver_class: DriverClass, path: &str) -> bool {
-    let _ = path;
-    DISPLAY_INPUT_ISOLATION && matches!(driver_class, DriverClass::Net)
 }
 
 fn is_fallback_bootfb() -> bool {

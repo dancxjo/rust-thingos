@@ -1,9 +1,9 @@
 //! VirtIO-NET VFS provider.
 //!
-//! Serves `/dev/net/virtio0/` with the following files:
+//! Serves the assigned `/dev/net/cardN/` mount with the following files:
 //!
 //! ```text
-//! /dev/net/virtio0/
+//! /dev/net/card0/
 //! ├── ctl        ← write: "up", "down", "set-mtu <n>"
 //! ├── status     ← read: human-readable device state
 //! ├── mac        ← read: MAC address

@@ -1,7 +1,7 @@
 //! VirtIO-NET userspace driver
 //!
 //! This service owns the VirtIO-NET device hardware and exposes it as a VFS
-//! provider mounted at `/dev/net/virtio0/`.
+//! provider mounted at Cambium's assigned `/dev/net/cardN` path.
 //!
 //! Architecture:
 //! - virtio_netd: Hardware driver (RX/TX queues, DMA buffers, interrupts)
@@ -35,6 +35,7 @@ use stem::{error, warn};
 use vfs_provider::{HANDLE_EVENTS, HANDLE_RX, NetVfsState, handle_vfs_rpc};
 
 const DEFAULT_MOUNT_PATH: &str = "/dev/net/virtio0";
+const DRIVER_DEVPATH_ENV: &[u8] = b"THINGOS_DRIVER_DEVPATH";
 const THINGOS_DRIVER_NAME: &[u8] = b"virtio_netd";
 
 #[cfg(target_arch = "x86_64")]
@@ -276,9 +277,16 @@ fn run_driver(claimed_path: Option<String>, bootstrap: Option<SupervisorBootstra
         shutdown_requested: AtomicBool::new(false),
     });
     let provider_started = Arc::new(AtomicBool::new(false));
+    let mount_path = assigned_dev_path().unwrap_or_else(|| DEFAULT_MOUNT_PATH.to_string());
 
-    start_provider_thread(shared.clone(), req_write, req_read, provider_started.clone())
-        .expect("virtio_netd: failed to start provider thread");
+    start_provider_thread(
+        shared.clone(),
+        req_write,
+        req_read,
+        provider_started.clone(),
+        mount_path.clone(),
+    )
+    .expect("virtio_netd: failed to start provider thread");
 
     while !provider_started.load(Ordering::Acquire) {
         stem::syscall::yield_now();
@@ -382,16 +390,20 @@ fn run_driver(claimed_path: Option<String>, bootstrap: Option<SupervisorBootstra
             }
         }
     } else {
-        match vfs_mount(req_write, DEFAULT_MOUNT_PATH) {
+        match vfs_mount(req_write, &mount_path) {
             Ok(()) => {
-                stem::debug!("VIRTIO_NETD: Mounted at {}", DEFAULT_MOUNT_PATH);
-                effective_mount_path = Some(DEFAULT_MOUNT_PATH.to_string());
+                stem::debug!("VIRTIO_NETD: Mounted at {}", mount_path);
+                effective_mount_path = Some(mount_path.clone());
             }
-            Err(e) => warn!("VIRTIO_NETD: vfs_mount({}) failed: {:?}", DEFAULT_MOUNT_PATH, e),
+            Err(e) => warn!("VIRTIO_NETD: vfs_mount({}) failed: {:?}", mount_path, e),
         }
     }
 
-    stem::debug!("VIRTIO_NETD: Provider thread live, entering control loop");
+    if let Some(ref path) = effective_mount_path {
+        stem::debug!("VIRTIO_NETD: Provider thread live at {}", path);
+    } else {
+        stem::debug!("VIRTIO_NETD: Provider thread live, entering control loop");
+    }
 
     // Block the main thread in a ServiceLoop waiting for a shutdown signal.
     // When the inbox is closed (supervisor or kernel requests shutdown),
@@ -489,9 +501,10 @@ fn start_provider_thread(
     req_write: u32,
     req_read: u32,
     provider_started: Arc<AtomicBool>,
+    mount_path: String,
 ) -> Result<(), abi::errors::Errno> {
     stem::thread::spawn_task_detached(move || {
-        stem::debug!("VIRTIO_NETD: Entering VFS provider service loop at {}", DEFAULT_MOUNT_PATH);
+        stem::debug!("VIRTIO_NETD: Entering VFS provider service loop at {}", mount_path);
         let provider_loop = ProviderLoop::new(req_read);
         let mut svc_loop =
             match ServiceProviderLoop::new(provider_loop, abi::vfs_rpc::VFS_RPC_MAX_REQ * 8) {
@@ -595,4 +608,14 @@ fn start_provider_thread(
         }
     })?;
     Ok(())
+}
+
+fn assigned_dev_path() -> Option<String> {
+    let mut buf = [0u8; 128];
+    let len = stem::syscall::env_get(DRIVER_DEVPATH_ENV, &mut buf).ok()?;
+    if len == 0 || len > buf.len() {
+        return None;
+    }
+    let path = core::str::from_utf8(&buf[..len]).ok()?.trim();
+    if path.is_empty() { None } else { Some(path.to_string()) }
 }

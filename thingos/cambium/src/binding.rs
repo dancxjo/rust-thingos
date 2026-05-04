@@ -25,8 +25,8 @@ pub fn match_binding(device: &SysDevice) -> Option<Binding> {
 }
 
 pub fn mount_hint(binding: Binding, device: &SysDevice) -> Option<String> {
-    if binding.driver == "/virtio_netd" && device.class_code == 0x02 {
-        return Some(String::from("/dev/net/virtio0"));
+    if binding.driver == "/virtio_netd" && ((device.class_code >> 16) & 0xff) == 0x02 {
+        return Some(String::from("/dev/net/card0"));
     }
     None
 }
