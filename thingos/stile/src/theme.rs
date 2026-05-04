@@ -5,7 +5,7 @@ use crate::paint::{
 };
 use crate::values::Color;
 
-pub const DEFAULT_THEME_NAME: &str = "SolarisWarm";
+pub const DEFAULT_THEME_NAME: &str = "NocturneIris";
 
 #[derive(Clone, Copy)]
 pub struct Theme {
@@ -93,7 +93,7 @@ pub const SOLARIS_WARM_PALETTE: SolarisWarmPalette = SolarisWarmPalette {
 };
 
 pub const SOLARIS_WARM: Theme = Theme {
-    name: DEFAULT_THEME_NAME,
+    name: "SolarisWarm",
     renderer: ThemeRenderer::SolarisWarm,
     wallpaper_path: Some("/public/wallpapers/flower.bmp"),
     active: WindowStateTokens {
@@ -237,7 +237,7 @@ pub const AURORA_GLASS: Theme = Theme {
 };
 
 pub const NOCTURNE_IRIS: Theme = Theme {
-    name: "NocturneIris",
+    name: DEFAULT_THEME_NAME,
     renderer: ThemeRenderer::NocturneIris,
     wallpaper_path: "/public/wallpapers/flower.png",
     active: WindowStateTokens {
@@ -317,7 +317,7 @@ impl Theme {
 }
 
 pub fn default_theme() -> Theme {
-    SOLARIS_WARM
+    NOCTURNE_IRIS
 }
 
 pub static AVAILABLE_THEMES: [Theme; 4] =
@@ -343,7 +343,7 @@ pub fn find_theme_by_name(name: &str) -> Option<Theme> {
 }
 
 pub fn theme_by_name(name: &str) -> Theme {
-    find_theme_by_name(name).unwrap_or(SOLARIS_WARM)
+    find_theme_by_name(name).unwrap_or(NOCTURNE_IRIS)
 }
 
 fn matches_solaris_warm(trimmed: &str) -> bool {
@@ -1182,7 +1182,7 @@ mod tests {
 
     #[test]
     fn bundled_theme_names_resolve_to_theme_system() {
-        assert_eq!(default_theme().name, SOLARIS_WARM.name);
+        assert_eq!(default_theme().name, NOCTURNE_IRIS.name);
         assert_eq!(available_themes().len(), 4);
         assert_eq!(theme_by_name("solaris-warm").name, SOLARIS_WARM.name);
         assert_eq!(theme_by_name("nocturne-iris").name, NOCTURNE_IRIS.name);

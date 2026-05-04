@@ -52,6 +52,113 @@ dependencies = [
 ]
 
 [[package]]
+name = "acpi_backlight"
+version = "0.1.0"
+dependencies = [
+ "abi",
+ "acpi_common",
+ "stem",
+]
+
+[[package]]
+name = "acpi_battery"
+version = "0.1.0"
+dependencies = [
+ "abi",
+ "acpi_common",
+ "stem",
+]
+
+[[package]]
+name = "acpi_common"
+version = "0.1.0"
+dependencies = [
+ "abi",
+ "stem",
+]
+
+[[package]]
+name = "acpi_ec"
+version = "0.1.0"
+dependencies = [
+ "abi",
+ "acpi_common",
+ "stem",
+]
+
+[[package]]
+name = "acpi_gpio_keys"
+version = "0.1.0"
+dependencies = [
+ "abi",
+ "acpi_common",
+ "stem",
+]
+
+[[package]]
+name = "acpi_i2c_hid"
+version = "0.1.0"
+dependencies = [
+ "abi",
+ "acpi_common",
+ "stem",
+]
+
+[[package]]
+name = "acpi_irq_routing"
+version = "0.1.0"
+dependencies = [
+ "abi",
+ "acpi_common",
+ "stem",
+]
+
+[[package]]
+name = "acpi_power"
+version = "0.1.0"
+dependencies = [
+ "abi",
+ "acpi_common",
+ "stem",
+]
+
+[[package]]
+name = "acpi_sleep"
+version = "0.1.0"
+dependencies = [
+ "abi",
+ "acpi_common",
+ "stem",
+]
+
+[[package]]
+name = "acpi_thermal"
+version = "0.1.0"
+dependencies = [
+ "abi",
+ "acpi_common",
+ "stem",
+]
+
+[[package]]
+name = "acpi_vendor_hotkeys"
+version = "0.1.0"
+dependencies = [
+ "abi",
+ "acpi_common",
+ "stem",
+]
+
+[[package]]
+name = "acpid"
+version = "0.1.0"
+dependencies = [
+ "abi",
+ "acpi_common",
+ "stem",
+]
+
+[[package]]
 name = "addr2line"
 version = "0.25.1"
 source = "registry+https://github.com/rust-lang/crates.io-index"

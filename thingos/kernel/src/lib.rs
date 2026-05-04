@@ -1283,6 +1283,25 @@ pub fn start<R: BootRuntime>(runtime: &'static R) -> ! {
             crate::device_registry::ACPI_EC_IOPORT_RANGES,
             0x66,
         ));
+        for (kind, resource_id) in [
+            ("drv.AcpiNamespace", 0xAC00_0001),
+            ("drv.AcpiEc", 0xAC00_0002),
+            ("drv.AcpiPower", 0xAC00_0003),
+            ("drv.AcpiBattery", 0xAC00_0004),
+            ("drv.AcpiThermal", 0xAC00_0005),
+            ("drv.AcpiBacklight", 0xAC00_0006),
+            ("drv.AcpiI2cHid", 0xAC00_0007),
+            ("drv.AcpiGpioKeys", 0xAC00_0008),
+            ("drv.AcpiIrqRouting", 0xAC00_0009),
+            ("drv.AcpiSleep", 0xAC00_000A),
+            ("drv.AcpiVendorHotkeys", 0xAC00_000B),
+        ] {
+            reg.register(crate::device_registry::DeviceEntry::new_legacy(
+                kind,
+                crate::device_registry::ACPI_PLATFORM_IOPORT_RANGES,
+                resource_id,
+            ));
+        }
         // Legacy ISA IDE controller: primary (0x1F0) + secondary (0x170) channels.
         // Exposed as `isa-01f0` in sysfs with kind="dev.storage.ata" so cambium
         // can auto-discover and spawn the ata_disk userland driver.

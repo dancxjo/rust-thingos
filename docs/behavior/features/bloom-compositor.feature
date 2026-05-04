@@ -14,7 +14,7 @@ Feature: Bloom compositor desktop behavior
     And the serial output should contain "bloom: output0" within 60s
     And the serial output should contain "bloom: pistil background renderer loaded from /lib/libpistil.so" within 60s
     And the serial output should contain "bloom: pistil font text renderer loaded with default /public/fonts/Inter-Regular.ttf" within 60s
-    And the serial output should contain "bloom: initial theme configured SolarisWarm" within 60s
+    And the serial output should contain "bloom: initial theme configured NocturneIris" within 60s
     And the serial output should contain "bloom: watching theme config /session/desktop/theme" within 60s
     And the serial output should contain "bloom: watching wallpaper config /session/desktop/wallpaper" within 60s
     And the serial output should contain "bloom: built-in busy spinner ready" within 60s

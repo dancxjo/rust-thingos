@@ -7,7 +7,7 @@
 use spin::Mutex;
 
 /// Maximum number of devices in the registry
-const MAX_DEVICES: usize = 16;
+const MAX_DEVICES: usize = 64;
 
 /// Maximum number of claimed devices across all tasks
 const MAX_CLAIMS: usize = 32;
@@ -497,6 +497,7 @@ impl DeviceRegistry {
 pub static CMOS_IOPORT_RANGES: &[(u16, u16)] = &[(0x70, 0x71)];
 pub static PS2_IOPORT_RANGES: &[(u16, u16)] = &[(0x60, 0x64)];
 pub static ACPI_EC_IOPORT_RANGES: &[(u16, u16)] = &[(0x62, 0x62), (0x66, 0x66)];
+pub static ACPI_PLATFORM_IOPORT_RANGES: &[(u16, u16)] = &[];
 /// Legacy ISA IDE controller covering both primary (0x1F0–0x1F7, 0x3F6) and
 /// secondary (0x170–0x177, 0x376) channels.  Slot name will be `isa-01f0`.
 pub static ATA_LEGACY_IOPORT_RANGES: &[(u16, u16)] =

@@ -1,0 +1,9 @@
+[package]
+name = "acpi_i2c_hid"
+version = "0.1.0"
+edition = "2021"
+
+[dependencies]
+abi = { path = "../../abi" }
+stem = { path = "../../stem", features = ["rt", "global-alloc"] }
+acpi_common = { path = "../acpi_common" }

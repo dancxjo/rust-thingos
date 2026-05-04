@@ -593,11 +593,16 @@ fn draw_image_cover_into(
     dst_w: usize,
     dst_h: usize,
 ) -> Result<(), i32> {
-    if path.ends_with(".png") {
-        draw_png_cover_into(path, dst, dst_stride_pixels, dst_w, dst_h)
-    } else {
-        draw_bmp_cover_into(path, dst, dst_stride_pixels, dst_w, dst_h)
+    if path.as_bytes().get(path.len().saturating_sub(4)..).is_some_and(|ext| ext.eq_ignore_ascii_case(b".png")) {
+        return draw_png_cover_into(path, dst, dst_stride_pixels, dst_w, dst_h);
     }
+    if path.as_bytes().get(path.len().saturating_sub(4)..).is_some_and(|ext| ext.eq_ignore_ascii_case(b".bmp")) {
+        return draw_bmp_cover_into(path, dst, dst_stride_pixels, dst_w, dst_h);
+    }
+
+    // Unknown extension; try PNG first, then BMP as a compatibility fallback.
+    draw_png_cover_into(path, dst, dst_stride_pixels, dst_w, dst_h)
+        .or_else(|_| draw_bmp_cover_into(path, dst, dst_stride_pixels, dst_w, dst_h))
 }
 
 fn draw_png_cover_into(
@@ -718,120 +723,15 @@ fn draw_bmp_cover_into(
     dst_w: usize,
     dst_h: usize,
 ) -> Result<(), i32> {
-    const MAX_ROW_BYTES: usize = 16 * 1024;
-
-    let fd = vfs_open(path, O_RDONLY).map_err(|_| -3)?;
-    let result = (|| {
-        let mut header = [0u8; 54];
-        read_exact(fd, &mut header).map_err(|_| -3)?;
-
-        if &header[0..2] != b"BM" {
-            return Err(-3);
-        }
-
-        let pixel_offset =
-            u32::from_le_bytes([header[10], header[11], header[12], header[13]]) as usize;
-        let width_i = i32::from_le_bytes([header[18], header[19], header[20], header[21]]);
-        let height_i = i32::from_le_bytes([header[22], header[23], header[24], header[25]]);
-        let bpp = u16::from_le_bytes([header[28], header[29]]);
-        let compression = u32::from_le_bytes([header[30], header[31], header[32], header[33]]);
-
-        if width_i <= 0 || height_i == 0 || compression != 0 {
-            return Err(-3);
-        }
-
-        let src_w = width_i as usize;
-        let src_h = height_i.checked_abs().ok_or(-3)? as usize;
-        let bottom_up = height_i > 0;
-        if src_w == 0 || src_h == 0 || dst_w == 0 || dst_h == 0 {
-            return Err(-3);
-        }
-
-        let row_bytes = match bpp {
-            24 => src_w.checked_mul(3).and_then(|n| n.checked_add(3)).map(|n| n & !3),
-            32 => src_w.checked_mul(4),
-            _ => None,
-        }
-        .ok_or(-3)?;
-        if row_bytes > MAX_ROW_BYTES {
-            return Err(-3);
-        }
-
-        let mut remaining_to_skip = pixel_offset.checked_sub(54).ok_or(-3)?;
-        let mut skip = [0u8; 512];
-        while remaining_to_skip > 0 {
-            let n = remaining_to_skip.min(skip.len());
-            read_exact(fd, &mut skip[..n]).map_err(|_| -3)?;
-            remaining_to_skip -= n;
-        }
-
-        let scale_x_fp = (dst_w as u64 * 1_000_000) / src_w as u64;
-        let scale_y_fp = (dst_h as u64 * 1_000_000) / src_h as u64;
-        let scale_fp = scale_x_fp.max(scale_y_fp).max(1);
-        let scaled_w = (src_w as u64 * scale_fp) / 1_000_000;
-        let scaled_h = (src_h as u64 * scale_fp) / 1_000_000;
-        let ox = (dst_w as i64 - scaled_w as i64) / 2;
-        let oy = (dst_h as i64 - scaled_h as i64) / 2;
-
-        let mut row = [0u8; MAX_ROW_BYTES];
-        for file_y in 0..src_h {
-            read_exact(fd, &mut row[..row_bytes]).map_err(|_| -3)?;
-            let src_y = if bottom_up { src_h - 1 - file_y } else { file_y };
-
-            for dy in 0..dst_h {
-                let sy_fp = ((dy as i64 - oy) * 1_000_000) / scale_fp as i64;
-                if sy_fp < 0 {
-                    continue;
-                }
-                let mapped_y = (sy_fp as usize).min(src_h - 1);
-                if mapped_y != src_y {
-                    continue;
-                }
-
-                let dst_row = dy * dst_stride_pixels;
-                for dx in 0..dst_w {
-                    let sx_fp = ((dx as i64 - ox) * 1_000_000) / scale_fp as i64;
-                    if sx_fp < 0 {
-                        continue;
-                    }
-                    let sx = (sx_fp as usize).min(src_w - 1);
-                    dst[dst_row + dx] = match bpp {
-                        24 => {
-                            let off = sx * 3;
-                            let b = row[off] as u32;
-                            let g = row[off + 1] as u32;
-                            let r = row[off + 2] as u32;
-                            0xFF00_0000 | (r << 16) | (g << 8) | b
-                        }
-                        32 => {
-                            let off = sx * 4;
-                            let b = row[off] as u32;
-                            let g = row[off + 1] as u32;
-                            let r = row[off + 2] as u32;
-                            let a = row[off + 3] as u32;
-                            (a << 24) | (r << 16) | (g << 8) | b
-                        }
-                        _ => return Err(-3),
-                    };
-                }
-            }
-        }
-
-        Ok(())
-    })();
-
-    let _ = vfs_close(fd);
-    result
-}
-
-fn read_exact(fd: u32, mut buf: &mut [u8]) -> Result<(), ()> {
-    while !buf.is_empty() {
-        let n = vfs_read(fd, buf).map_err(|_| ())?;
-        if n == 0 {
-            return Err(());
-        }
-        let rest = buf;
-        buf = &mut rest[n..];
+    let mut texture = crate::bmp::load_bmp(path).ok_or(-3)?;
+    let src_w = texture.width as usize;
+    let src_h = texture.height as usize;
+    if src_w == 0 || src_h == 0 || dst_w == 0 || dst_h == 0 {
+        return Err(-3);
     }
+
+    let src_stride_pixels = (texture.stride / 4) as usize;
+    let src = texture.as_slice_mut();
+    blit_cover_nearest(dst, dst_stride_pixels, dst_w, dst_h, src, src_stride_pixels, src_w, src_h);
     Ok(())
 }

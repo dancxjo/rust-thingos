@@ -9,6 +9,7 @@ thingos/bran/bin-*
 /docs/behavior/*
 /docs/behavior/**/*
 !/docs/behavior/features
+!/docs/behavior/features/*.feature
 /freeze_logs
 
 /assets/*
