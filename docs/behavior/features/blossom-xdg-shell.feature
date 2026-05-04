@@ -68,7 +68,7 @@ Feature: blossom xdg-shell lifecycle
 
   @wayland-visible
   Scenario: first valid commit is visible above the compositor background
-    Then the Wayland hello client should be visible
+    Then the Hello client should be visible
     And the compositor should render themed window bodies
     And active window chrome button glyphs should be centered inside their buttons
     And active window chrome controls should expose 44 pixel hit targets
@@ -78,13 +78,13 @@ Feature: blossom xdg-shell lifecycle
   @pointer-debug @wayland-visible
   Scenario: higher z-order content obscures lower window chrome
     Given the client has an xdg_toplevel
-    Then the Wayland hello client should be visible
-    When I drag the Clock window over the Wayland hello title bar
+    Then the Hello client should be visible
+    When I drag the Clock window over the Hello title bar
     Then higher z-order window content should obscure lower window chrome
 
   @wayland-visible @wayland-fs
   Scenario: displayed Wayland windows are visible through the session filesystem
-    Then the Wayland hello client should be visible
+    Then the Hello client should be visible
     When I wait for the shell prompt
     And I type "find /session/wayland/windows" on the serial console
     Then the latest serial output should contain "/session/wayland/windows/index"
@@ -100,63 +100,63 @@ Feature: blossom xdg-shell lifecycle
   @pointer-debug @wayland-input
   Scenario: wl_seat delivers pointer and keyboard events to the focused client
     Given the client has an xdg_toplevel
-    Then the Wayland hello client should be visible
-    When I click inside the Wayland hello client and press A
-    Then the Wayland hello client should receive pointer and keyboard input
+    Then the Hello client should be visible
+    When I click inside the Hello client and press A
+    Then the Hello client should receive pointer and keyboard input
 
   @pointer-debug @titlebar-drag
   Scenario: dragging the titlebar moves a toplevel window
     Given the client has an xdg_toplevel
-    Then the Wayland hello client should be visible
-    When I drag the Wayland hello titlebar
+    Then the Hello client should be visible
+    When I drag the Hello titlebar
     Then the compositor should move the toplevel window
     And the dragged window should keep a stable cursor offset
 
   @pointer-debug @meta-window-drag
   Scenario: holding Meta lets any point inside a window move that window
     Given the client has an xdg_toplevel
-    Then the Wayland hello client should be visible
-    When I hold Meta and drag inside the Wayland hello client
+    Then the Hello client should be visible
+    When I hold Meta and drag inside the Hello client
     Then the compositor should move the toplevel window
     And the dragged window should keep a stable cursor offset
 
   @pointer-debug
   Scenario: dragging the frame resizes a toplevel window
     Given the client has an xdg_toplevel
-    Then the Wayland hello client should be visible
-    When I drag the Wayland hello frame
+    Then the Hello client should be visible
+    When I drag the Hello frame
     Then the compositor should resize the toplevel window
 
   @pointer-debug
   Scenario: hovering window chrome updates the cursor shape
     Given the client has an xdg_toplevel
-    Then the Wayland hello client should be visible
-    When I move the pointer over the Wayland hello titlebar
+    Then the Hello client should be visible
+    When I move the pointer over the Hello titlebar
     Then the compositor should use the move cursor
-    When I move the pointer over the Wayland hello frame
+    When I move the pointer over the Hello frame
     Then the compositor should use a resize cursor
 
   @pointer-debug
   Scenario: clicking the maximize chrome button sends a maximized configure
     Given the client has an xdg_toplevel
-    Then the Wayland hello client should be visible
-    When I click the Wayland hello maximize button
+    Then the Hello client should be visible
+    When I click the Hello maximize button
     Then the compositor should send a maximized toplevel configure
 
   @pointer-debug
   Scenario: clicking the minimize chrome button minimizes through compositor chrome
     Given the client has an xdg_toplevel
-    Then the Wayland hello client should be visible
-    When I click the Wayland hello minimize button
+    Then the Hello client should be visible
+    When I click the Hello minimize button
     Then the compositor should minimize the toplevel window
 
   @pointer-debug
   Scenario: clicking the close chrome button sends xdg_toplevel.close
     Given the client has an xdg_toplevel
-    Then the Wayland hello client should be visible
-    When I click the Wayland hello close button
+    Then the Hello client should be visible
+    When I click the Hello close button
     Then the compositor should send xdg_toplevel.close
-    And the Wayland hello client should log "explicit exit(0) call"
+    And the Hello client should log "explicit exit(0) call"
 
   # ── State updates ────────────────────────────────────────────────────────────
 
@@ -186,8 +186,8 @@ Feature: blossom xdg-shell lifecycle
 
   Scenario: crashed clients leave windows that close dramatically
     Given the client has an xdg_toplevel
-    Then the Wayland hello client should be visible
-    When I type "killall wayland_hello" on the serial console
+    Then the Hello client should be visible
+    When I type "killall hello" on the serial console
     Then the serial output should contain "requested dramatic close" within 30s
     And the serial output should contain "bloom: dramatic close started surface=" within 30s
     And the serial output should contain "bloom: dramatic close finished surface=" within 30s
@@ -203,20 +203,20 @@ Feature: blossom xdg-shell lifecycle
   @pointer-debug @wayland-popup
   Scenario: clicking outside a popup causes the compositor to send popup_done
     Given the client has an xdg_toplevel
-    Then the Wayland hello client should be visible
-    When I click inside the Wayland hello client popup area
-    Then the Wayland hello popup should be visible
-    When I click outside the Wayland hello popup
+    Then the Hello client should be visible
+    When I click inside the Hello client popup area
+    Then the Hello popup should be visible
+    When I click outside the Hello popup
     Then the compositor should send xdg_popup.popup_done
-    And the Wayland hello client should log "compositor dismissed popup"
+    And the Hello client should log "compositor dismissed popup"
 
   @pointer-debug @wayland-popup
   Scenario: clicking the close chrome button on a toplevel also dismisses any open popup
     Given the client has an xdg_toplevel
-    Then the Wayland hello client should be visible
-    When I click inside the Wayland hello client popup area
-    Then the Wayland hello popup should be visible
-    When I click the Wayland hello close button
+    Then the Hello client should be visible
+    When I click inside the Hello client popup area
+    Then the Hello popup should be visible
+    When I click the Hello close button
     Then the compositor should send xdg_popup.popup_done
     And the compositor should send xdg_toplevel.close
 

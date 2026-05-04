@@ -113,7 +113,7 @@ impl PetalsShowcase {
             app("Clock", "/applications/clock", "clock"),
             app("Calculator", "/applications/calc", "calculator"),
             app("Leaf", "/applications/leaf", "monitor"),
-            app("Wayland Hello", "/applications/wayland_hello", "sparkles"),
+            app("Hello", "/applications/hello", "sparkles"),
         ])
         .with_status("Petals + Stile components")
         .build_tree()
@@ -174,7 +174,10 @@ impl PetalsShowcase {
             PetalsEvent::SetState { node: disabled, state: State::Disabled, enabled: true },
         );
         tree.restyle(&self.stile_state_rules())?;
-        Ok((tree, StileStateDemoNodes { root, title, strip, normal, hover, active, focus, disabled }))
+        Ok((
+            tree,
+            StileStateDemoNodes { root, title, strip, normal, hover, active, focus, disabled },
+        ))
     }
 
     pub fn prepare_component(

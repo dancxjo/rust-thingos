@@ -162,7 +162,7 @@ members = [
   "thingos/utils/tree",
   "thingos/utils/uname",
   "thingos/utils/true",
-  "thingos/utils/wayland_hello",
+  "thingos/utils/hello",
   "thingos/utils/wc",
   "thingos/utils/yes",
   "thingos/utils/which",

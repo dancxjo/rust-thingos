@@ -335,7 +335,7 @@ mod tests {
 
     #[test]
     fn formats_names_and_chooses_stable_glyphs() {
-        assert_eq!(display_name_from_path("/applications/wayland_hello"), "Wayland Hello");
+        assert_eq!(display_name_from_path("/applications/hello"), "Hello");
         assert_eq!(glyph_for_application("calc"), "calculator");
         assert_eq!(glyph_for_application("unknown"), "box");
     }

@@ -16,6 +16,7 @@ pub mod pressable;
 pub mod service_loop;
 pub mod showcase;
 pub mod style;
+pub mod text;
 
 pub use calc::{
     CalcError, CalcInput, CalcKey, CalcKeyNode, CalcMode, CalcNodes, CalcState, Calculator,
@@ -43,3 +44,4 @@ pub use stile::{
     WindowStateTokens, available_themes, default_theme, find_theme_by_name, theme_by_name,
 };
 pub use taffy::TaffyError;
+pub use text::ellipsize_ascii;

@@ -230,7 +230,7 @@ April 30 was a large Wayland/compositor push:
 - Display pacing and cursor responsiveness improved through hardware cursor
   support, cursor DMA, smarter damage coalescing, opaque-region culling,
   direct-present detection, and removal of frame-count smoothing.
-- `clock`, `wayland_hello`, and desktop orchestration scenarios exercised the
+- `clock`, `hello`, and desktop orchestration scenarios exercised the
   client-visible protocol surface.
 - TCP/UDP, RTC, entropy, PCI snapshots, and scheduler/service diagnostics
   continued to improve alongside the desktop stack.

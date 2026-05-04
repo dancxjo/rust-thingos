@@ -373,7 +373,7 @@ pub fn default_programs() -> Vec<ProgramConfig> {
         ProgramConfig { name: "date", is_init: false, boot_module: true, features: vec![] },
         ProgramConfig { name: "tree", is_init: false, boot_module: true, features: vec![] },
         ProgramConfig {
-            name: "wayland_hello",
+            name: "hello",
             is_init: false,
             boot_module: true,
             features: vec![],
@@ -1277,7 +1277,7 @@ fn is_bootstrap_boot_module(name: &str) -> bool {
     is_driver(name)
         || is_bin_program(name)
         || is_service_program(name)
-        || matches!(name, "sprout" | "wayland_hello" | "clock" | "calc" | "leaf" | "themes")
+        || matches!(name, "sprout" | "hello" | "clock" | "calc" | "leaf" | "themes")
 }
 
 fn is_non_bootfb_graphics_driver(name: &str) -> bool {

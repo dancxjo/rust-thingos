@@ -2429,7 +2429,7 @@ fn draw_tree_text(
     };
     let px_size = node.style.font_size.unwrap_or(fallback_size);
     let color = node.style.color.map(color_argb).unwrap_or(fallback_color);
-    let text = ellipsize_ascii(text, text_capacity(layout.width, px_size));
+    let text = petals::ellipsize_ascii(text, text_capacity(layout.width, px_size));
     draw_overlay_text(
         pistil_draw_text,
         dst,
@@ -2453,19 +2453,6 @@ fn text_attr(node: &petals::Node) -> Option<&str> {
 fn text_capacity(width: f32, px_size: f32) -> usize {
     let advance = (px_size * 0.62).max(6.0);
     ((width / advance) as usize).max(1)
-}
-
-fn ellipsize_ascii(text: &str, capacity: usize) -> String {
-    if text.chars().count() <= capacity {
-        return String::from(text);
-    }
-    let mut out = String::new();
-    let keep = capacity.saturating_sub(1);
-    for ch in text.chars().take(keep) {
-        out.push(ch);
-    }
-    out.push('~');
-    out
 }
 
 fn color_argb(color: petals::Color) -> u32 {
@@ -2790,6 +2777,7 @@ fn glyph_rows(ch: char) -> [u8; 7] {
         '8' => [0b01110, 0b10001, 0b10001, 0b01110, 0b10001, 0b10001, 0b01110],
         '9' => [0b01110, 0b10001, 0b10001, 0b01111, 0b00001, 0b00010, 0b01100],
         ':' => [0b00000, 0b00100, 0b00100, 0b00000, 0b00100, 0b00100, 0b00000],
+        '.' => [0b00000, 0b00000, 0b00000, 0b00000, 0b00000, 0b01100, 0b01100],
         '=' => [0b00000, 0b11111, 0b00000, 0b00000, 0b11111, 0b00000, 0b00000],
         '-' => [0b00000, 0b00000, 0b00000, 0b11111, 0b00000, 0b00000, 0b00000],
         _ => [0b11111, 0b10001, 0b00010, 0b00100, 0b00100, 0b00000, 0b00100],

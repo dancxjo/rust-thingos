@@ -164,26 +164,26 @@ Feature: Bloom compositor desktop behavior
     And the serial output should contain "wl_subcompositor" within 60s
     And the serial output should contain "wl_data_device_manager" within 60s
     And the serial output should contain "wayland-server: sending us-intl XKB keymap" within 120s
-    And the serial output should contain "wayland_hello: connected to /run/wayland-0" within 60s
+    And the serial output should contain "hello: connected to /run/wayland-0" within 60s
     And the serial output should contain "wayland-server: xdg_surface obj=" within 60s
     And the serial output should contain "wayland-server: xdg_toplevel obj=" within 60s
     And the serial output should contain "wayland-server: surface " within 60s
     And the serial output should contain "wayland-server: frame callback done" within 60s
-    And the serial output should contain "wayland_hello: frame callback done" within 60s
+    And the serial output should contain "hello: frame callback done" within 60s
     And the serial output should contain "clock: running at low scheduler priority" within 60s
 
   Scenario: Wayland clients can use dmabuf, regions, clipboard, and drag-and-drop
     Given the machine is booted
     Then the serial output should contain "wayland-server: listening on /run/wayland-0" within 60s
     And the serial output should contain "zwp_linux_dmabuf_v1" within 60s
-    And the serial output should contain "wayland_hello: using zwp_linux_dmabuf_v1 buffers" within 60s
+    And the serial output should contain "hello: using zwp_linux_dmabuf_v1 buffers" within 60s
     And the serial output should contain "wayland-server: imported dmabuf wl_buffer=" within 60s
     And the serial output should contain "wayland-server: wl_compositor create_region id=" within 60s
     And the serial output should contain "wayland-server: wl_region obj=" within 60s
     And the serial output should contain "add x=" within 60s
-    And the serial output should contain "wayland_hello: wl_region smoke test: create+add+set_opaque+destroy" within 60s
+    And the serial output should contain "hello: wl_region smoke test: create+add+set_opaque+destroy" within 60s
     And the serial output should contain "commit opaque_region=Some(" within 60s
-    And the serial output should contain "wayland_hello: wl_region smoke test: create+add+set_input+destroy" within 60s
+    And the serial output should contain "hello: wl_region smoke test: create+add+set_input+destroy" within 60s
     And the serial output should contain "commit input_region=Some(" within 60s
     When I wait for the shell prompt
     And I type "wayland_clipboard_test" on the serial console

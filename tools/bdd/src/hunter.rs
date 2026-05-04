@@ -693,7 +693,7 @@ async fn drag_clock_over_hello(world: &mut ThingOsWorld, rng: &mut StdRng) -> Hu
 
 async fn launch_or_query(world: &mut ThingOsWorld, rng: &mut StdRng) -> HunterResult<()> {
     const COMMANDS: &[&str] = &[
-        "/bin/wayland_hello &",
+        "/bin/hello &",
         "/bin/clock &",
         "/bin/leaf &",
         "ps",

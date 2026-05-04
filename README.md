@@ -59,7 +59,7 @@ As of May 1, 2026:
   scan partitions, and mount read-only FAT16/FAT32 media through `fatd`.
 - The image includes a useful shell and many small utilities: `sh`, `ls`, `cat`,
   `grep`, `ps`, `top`, `cp`, `mv`, `rm`, `mkdir`, `mount`, `ping`, `nslookup`,
-  `lspci`, `lsusb`, `leaf`, `wayland_hello`, and more under `thingos/utils/`.
+  `lspci`, `lsusb`, `leaf`, `hello`, and more under `thingos/utils/`.
 - Behavior coverage is first-class. Gherkin features in
   `docs/behavior/features/` cover compositor behavior, shell pipelines,
   ServiceLoop contracts, scheduler diagnostics, USB/FAT, PCI, audio, networking,
@@ -256,7 +256,7 @@ Exercise the desktop and Wayland clients:
 
 ```sh
 leaf
-wayland_hello
+hello
 clock
 echo /share/wallpapers/flower.png > /session/desktop/wallpaper
 echo Solarized Warm > /session/desktop/theme

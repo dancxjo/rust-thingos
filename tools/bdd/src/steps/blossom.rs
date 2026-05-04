@@ -70,7 +70,7 @@ async fn read_wayland_windows(world: &mut ThingOsWorld) -> Result<Vec<WindowInfo
         tokio::time::sleep(std::time::Duration::from_millis(500)).await;
     }
     Err(StepError(format!(
-        "Could not read Wayland hello and Clock windows from /session/wayland/windows/index: {:?}",
+        "Could not read Hello and Clock windows from /session/wayland/windows/index: {:?}",
         last
     )))
 }
@@ -123,24 +123,24 @@ async fn bloom_compositor_running_with_blossom(world: &mut ThingOsWorld) -> Resu
 #[given("a Wayland client has connected via /run/wayland-0")]
 async fn wayland_client_connected(world: &mut ThingOsWorld) -> Result<(), StepError> {
     let log = world.get_serial_log().await;
-    if log.contains("wayland_hello: connected to /run/wayland-0")
+    if log.contains("hello: connected to /run/wayland-0")
         || log.contains("wayland-server: new client")
     {
         eprintln!("│  │  │      ✅ Wayland client connected via /run/wayland-0");
         return Ok(());
     }
 
-    // Sprout autolaunches wayland_hello after bloom publishes /run/wayland-0.
+    // Sprout autolaunches hello after bloom publishes /run/wayland-0.
     // This keeps the BDD coverage on the boot-time pipeline instead of using
     // the serial shell as an out-of-band launcher.
-    let _ = world.wait_for_serial("SPROUT: Spawned wayland_hello", 60.0).await;
-    let found = world.wait_for_serial("wayland_hello: connected to /run/wayland-0", 30.0).await;
+    let _ = world.wait_for_serial("SPROUT: Spawned hello", 60.0).await;
+    let found = world.wait_for_serial("hello: connected to /run/wayland-0", 30.0).await;
     if !found {
         let alt = world.wait_for_serial("wayland-server: new client", 10.0).await;
         if !alt {
             capture_failure_diagnostics(world, "wayland client connect").await;
             return Err(StepError(
-                "Autolaunched Wayland client (wayland_hello) failed to connect to /run/wayland-0"
+                "Autolaunched Wayland client (hello) failed to connect to /run/wayland-0"
                     .to_string(),
             ));
         }
@@ -152,10 +152,10 @@ async fn wayland_client_connected(world: &mut ThingOsWorld) -> Result<(), StepEr
 /// Background: `And the client has bound wl_compositor and xdg_wm_base`
 #[given("the client has bound wl_compositor and xdg_wm_base")]
 async fn client_bound_compositor_and_wm_base(world: &mut ThingOsWorld) -> Result<(), StepError> {
-    // wayland_hello binds wl_compositor, wl_shm, and xdg_wm_base immediately
+    // hello binds wl_compositor, wl_shm, and xdg_wm_base immediately
     // after connecting. Verify the client is alive.
     let log = world.get_serial_log().await;
-    if log.contains("wayland_hello: connected to /run/wayland-0")
+    if log.contains("hello: connected to /run/wayland-0")
         || log.contains("wayland-server: new client")
     {
         eprintln!("│  │  │      ✅ Client has bound wl_compositor and xdg_wm_base");
@@ -170,7 +170,7 @@ async fn client_bound_compositor_and_wm_base(world: &mut ThingOsWorld) -> Result
 /// `Given the client has created a wl_surface`
 #[given("the client has created a wl_surface")]
 async fn client_created_wl_surface(world: &mut ThingOsWorld) -> Result<(), StepError> {
-    // wayland_hello creates two surfaces (toplevel + popup).  Wait for
+    // hello creates two surfaces (toplevel + popup).  Wait for
     // bloom to have processed at least one get_xdg_surface call, which
     // implies that a wl_surface was created first.
     let found = world.wait_for_serial("wayland-server: xdg_surface obj=", 10.0).await;
@@ -180,7 +180,7 @@ async fn client_created_wl_surface(world: &mut ThingOsWorld) -> Result<(), StepE
     }
     // Accept that the surface was created even if we can't observe it directly.
     let log = world.get_serial_log().await;
-    if log.contains("wayland_hello: connected") {
+    if log.contains("hello: connected") {
         eprintln!("│  │  │      ⚠️  Client connected but xdg_surface log not yet seen");
         return Ok(());
     }
@@ -190,7 +190,7 @@ async fn client_created_wl_surface(world: &mut ThingOsWorld) -> Result<(), StepE
 /// `When the client calls xdg_wm_base.get_xdg_surface for that wl_surface`
 #[when("the client calls xdg_wm_base.get_xdg_surface for that wl_surface")]
 async fn client_calls_get_xdg_surface(world: &mut ThingOsWorld) -> Result<(), StepError> {
-    // This action is performed by wayland_hello; we just observe the log.
+    // This action is performed by hello; we just observe the log.
     let found = world.wait_for_serial("wayland-server: xdg_surface obj=", 10.0).await;
     if found {
         eprintln!("│  │  │      ✅ get_xdg_surface call observed in compositor log");
@@ -246,7 +246,7 @@ async fn client_already_called_get_xdg_surface(world: &mut ThingOsWorld) -> Resu
 /// `When the client calls get_xdg_surface again for the same wl_surface`
 #[when("the client calls get_xdg_surface again for the same wl_surface")]
 async fn client_calls_get_xdg_surface_again(world: &mut ThingOsWorld) -> Result<(), StepError> {
-    // This error path is not exercised by wayland_hello; the test will fail
+    // This error path is not exercised by hello; the test will fail
     // (intentionally) unless a dedicated error-path client is used.
     // We check if the error already appeared in the log (would require a
     // separate client that explicitly triggers the error).
@@ -452,11 +452,11 @@ async fn client_has_toplevel_with_configure(world: &mut ThingOsWorld) -> Result<
 /// `And the client has NOT yet sent ack_configure`
 #[given("the client has NOT yet sent ack_configure")]
 async fn client_has_not_sent_ack_configure(_world: &mut ThingOsWorld) {
-    // State assertion: wayland_hello DOES send ack_configure, so this scenario
-    // cannot be driven by wayland_hello. Note the precondition and continue.
+    // State assertion: hello DOES send ack_configure, so this scenario
+    // cannot be driven by hello. Note the precondition and continue.
     eprintln!(
         "│  │  │      ℹ️  Precondition 'not yet ack_configured' cannot be verified via \
-         wayland_hello (which always acks). A dedicated error-path client is needed."
+         hello (which always acks). A dedicated error-path client is needed."
     );
 }
 
@@ -469,9 +469,9 @@ async fn client_commits_without_ack(world: &mut ThingOsWorld) -> Result<(), Step
         eprintln!("│  │  │      ✅ Commit-before-ack error observed");
         return Ok(());
     }
-    // wayland_hello always acks before committing, so this error won't appear.
+    // hello always acks before committing, so this error won't appear.
     Err(StepError(
-        "The commit-before-ack-configure path is not exercised by wayland_hello. \
+        "The commit-before-ack-configure path is not exercised by hello. \
          A dedicated error-path client is needed to trigger this error."
             .to_string(),
     ))
@@ -512,7 +512,7 @@ async fn client_sends_invalid_ack_configure(world: &mut ThingOsWorld) -> Result<
         Ok(())
     } else {
         Err(StepError(
-            "The invalid-serial ack_configure path is not exercised by wayland_hello. \
+            "The invalid-serial ack_configure path is not exercised by hello. \
              A dedicated error-path client is needed."
                 .to_string(),
         ))
@@ -548,7 +548,7 @@ async fn client_has_received_configure(world: &mut ThingOsWorld) -> Result<(), S
 /// `When the client sends xdg_surface.ack_configure with that serial`
 #[when("the client sends xdg_surface.ack_configure with that serial")]
 async fn client_sends_valid_ack_configure(world: &mut ThingOsWorld) -> Result<(), StepError> {
-    // wayland_hello sends ack_configure with the received serial.
+    // hello sends ack_configure with the received serial.
     let found =
         world.wait_for_serial("wayland-server: xdg_surface.ack_configure serial=", 10.0).await;
     if found {
@@ -618,14 +618,14 @@ async fn client_has_ack_configured(world: &mut ThingOsWorld) -> Result<(), StepE
 /// `And the client has attached a valid wl_shm buffer`
 #[given("the client has attached a valid wl_shm buffer")]
 async fn client_has_attached_shm_buffer(_world: &mut ThingOsWorld) {
-    // wayland_hello attaches shm buffers; this is a precondition assertion.
-    eprintln!("│  │  │      ℹ️  wl_shm buffer attached by wayland_hello");
+    // hello attaches shm buffers; this is a precondition assertion.
+    eprintln!("│  │  │      ℹ️  wl_shm buffer attached by hello");
 }
 
 /// `When the client calls wl_surface.commit`
 #[when("the client calls wl_surface.commit")]
 async fn client_calls_wl_surface_commit(world: &mut ThingOsWorld) -> Result<(), StepError> {
-    // wayland_hello commits after ack. Check for mapping readiness.
+    // hello commits after ack. Check for mapping readiness.
     let found = world.wait_for_serial("wayland-server: surface ", 10.0).await;
     if found {
         eprintln!("│  │  │      ✅ wl_surface.commit processed by compositor");
@@ -650,8 +650,8 @@ async fn compositor_marks_surface_for_mapping(world: &mut ThingOsWorld) -> Resul
     }
 }
 
-#[then("the Wayland hello client should be visible")]
-async fn wayland_hello_client_visible(world: &mut ThingOsWorld) -> Result<(), StepError> {
+#[then("the Hello client should be visible")]
+async fn hello_client_visible(world: &mut ThingOsWorld) -> Result<(), StepError> {
     let _ = world.wait_for_serial("First frame rendered", 60.0).await;
 
     let start = std::time::Instant::now();
@@ -664,7 +664,7 @@ async fn wayland_hello_client_visible(world: &mut ThingOsWorld) -> Result<(), St
         let screenshot_path = crate::artifacts::global()
             .lock()
             .await
-            .screenshot_path(&format!("wayland_hello_visible_{}", attempt));
+            .screenshot_path(&format!("hello_visible_{}", attempt));
         let png_path = world
             .take_screenshot(&screenshot_path)
             .await
@@ -697,7 +697,7 @@ async fn wayland_hello_client_visible(world: &mut ThingOsWorld) -> Result<(), St
         last_counts = (title_pixels, body_pixels, text_pixels);
         if title_pixels > 2_000 && body_pixels > 25_000 && text_pixels > 80 {
             eprintln!(
-                "│  │  │      ✅ Wayland hello client visible (title={}, body={}, text={})",
+                "│  │  │      ✅ Hello client visible (title={}, body={}, text={})",
                 title_pixels, body_pixels, text_pixels
             );
             return Ok(());
@@ -707,7 +707,7 @@ async fn wayland_hello_client_visible(world: &mut ThingOsWorld) -> Result<(), St
     }
 
     Err(StepError(format!(
-        "Wayland hello client was not visible above the background (title={}, body={}, text={})",
+        "Hello client was not visible above the background (title={}, body={}, text={})",
         last_counts.0, last_counts.1, last_counts.2
     )))
 }
@@ -1035,8 +1035,8 @@ async fn active_window_chrome_should_include_facet_frame_focus_accents(
     )))
 }
 
-#[when("I drag the Clock window over the Wayland hello title bar")]
-async fn drag_clock_window_over_wayland_hello_title_bar(
+#[when("I drag the Clock window over the Hello title bar")]
+async fn drag_clock_window_over_hello_title_bar(
     world: &mut ThingOsWorld,
 ) -> Result<(), StepError> {
     if world.qmp_control.is_none() {
@@ -1088,7 +1088,7 @@ async fn higher_z_content_obscures_lower_window_chrome(
     };
     let overlap = intersect_test_rect(hello_title, clock_content_band).ok_or_else(|| {
         StepError(format!(
-            "Clock content did not overlap Wayland hello title bar (hello={}x{}+{},{} clock={}x{}+{},{})",
+            "Clock content did not overlap Hello title bar (hello={}x{}+{},{} clock={}x{}+{},{})",
             hello.w, hello.h, hello.x, hello.y, clock.w, clock.h, clock.x, clock.y
         ))
     })?;
@@ -1136,8 +1136,8 @@ async fn higher_z_content_obscures_lower_window_chrome(
     )))
 }
 
-#[when("I drag the Wayland hello titlebar")]
-async fn drag_wayland_hello_titlebar(world: &mut ThingOsWorld) -> Result<(), StepError> {
+#[when("I drag the Hello titlebar")]
+async fn drag_hello_titlebar(world: &mut ThingOsWorld) -> Result<(), StepError> {
     if world.qmp_control.is_none() {
         return Err(StepError("No QMP connection for titlebar drag input".to_string()));
     }
@@ -1160,8 +1160,8 @@ async fn drag_wayland_hello_titlebar(world: &mut ThingOsWorld) -> Result<(), Ste
         .map_err(|e| StepError(format!("QMP titlebar drag failed: {}", e)))
 }
 
-#[when("I hold Meta and drag inside the Wayland hello client")]
-async fn meta_drag_inside_wayland_hello_client(world: &mut ThingOsWorld) -> Result<(), StepError> {
+#[when("I hold Meta and drag inside the Hello client")]
+async fn meta_drag_inside_hello_client(world: &mut ThingOsWorld) -> Result<(), StepError> {
     if world.qmp_control.is_none() {
         return Err(StepError("No QMP connection for meta window-drag input".to_string()));
     }
@@ -1253,8 +1253,8 @@ async fn dragged_window_keeps_stable_cursor_offset(
     Ok(())
 }
 
-#[when("I click inside the Wayland hello client and press A")]
-async fn click_wayland_hello_client_and_press_a(world: &mut ThingOsWorld) -> Result<(), StepError> {
+#[when("I click inside the Hello client and press A")]
+async fn click_hello_client_and_press_a(world: &mut ThingOsWorld) -> Result<(), StepError> {
     if world.qmp_control.is_none() {
         return Err(StepError("No QMP connection for Wayland input".to_string()));
     }
@@ -1305,27 +1305,27 @@ async fn click_wayland_hello_client_and_press_a(world: &mut ThingOsWorld) -> Res
     Ok(())
 }
 
-#[then("the Wayland hello client should receive pointer and keyboard input")]
-async fn wayland_hello_receives_pointer_and_keyboard(
+#[then("the Hello client should receive pointer and keyboard input")]
+async fn hello_receives_pointer_and_keyboard(
     world: &mut ThingOsWorld,
 ) -> Result<(), StepError> {
-    if !world.wait_for_serial("wayland_hello: pointer enter", 30.0).await {
+    if !world.wait_for_serial("hello: pointer enter", 30.0).await {
         return Err(StepError("Wayland client did not receive wl_pointer.enter".to_string()));
     }
-    if !world.wait_for_serial("wayland_hello: pointer button", 30.0).await {
+    if !world.wait_for_serial("hello: pointer button", 30.0).await {
         return Err(StepError("Wayland client did not receive wl_pointer.button".to_string()));
     }
-    if !world.wait_for_serial("wayland_hello: keyboard enter", 30.0).await {
+    if !world.wait_for_serial("hello: keyboard enter", 30.0).await {
         return Err(StepError("Wayland client did not receive wl_keyboard.enter".to_string()));
     }
-    if !world.wait_for_serial("wayland_hello: keyboard key", 30.0).await {
+    if !world.wait_for_serial("hello: keyboard key", 30.0).await {
         return Err(StepError("Wayland client did not receive wl_keyboard.key".to_string()));
     }
     Ok(())
 }
 
-#[when("I drag the Wayland hello frame")]
-async fn drag_wayland_hello_frame(world: &mut ThingOsWorld) -> Result<(), StepError> {
+#[when("I drag the Hello frame")]
+async fn drag_hello_frame(world: &mut ThingOsWorld) -> Result<(), StepError> {
     if world.qmp_control.is_none() {
         return Err(StepError("No QMP connection for frame resize input".to_string()));
     }
@@ -1368,8 +1368,8 @@ async fn compositor_resizes_toplevel_window(world: &mut ThingOsWorld) -> Result<
     Ok(())
 }
 
-#[when("I move the pointer over the Wayland hello titlebar")]
-async fn move_pointer_over_wayland_hello_titlebar(
+#[when("I move the pointer over the Hello titlebar")]
+async fn move_pointer_over_hello_titlebar(
     world: &mut ThingOsWorld,
 ) -> Result<(), StepError> {
     if world.qmp_control.is_none() {
@@ -1401,8 +1401,8 @@ async fn compositor_uses_move_cursor(world: &mut ThingOsWorld) -> Result<(), Ste
     }
 }
 
-#[when("I move the pointer over the Wayland hello frame")]
-async fn move_pointer_over_wayland_hello_frame(world: &mut ThingOsWorld) -> Result<(), StepError> {
+#[when("I move the pointer over the Hello frame")]
+async fn move_pointer_over_hello_frame(world: &mut ThingOsWorld) -> Result<(), StepError> {
     if world.qmp_control.is_none() {
         return Err(StepError("No QMP connection for frame hover input".to_string()));
     }
@@ -1435,7 +1435,7 @@ async fn compositor_uses_resize_cursor(world: &mut ThingOsWorld) -> Result<(), S
     }
 }
 
-async fn click_wayland_hello_chrome_button(
+async fn click_hello_chrome_button(
     world: &mut ThingOsWorld,
     name: &str,
     _x: i32,
@@ -1475,9 +1475,9 @@ async fn click_wayland_hello_chrome_button(
         .map_err(|e| StepError(format!("QMP {} button click failed: {}", name, e)))
 }
 
-#[when("I click the Wayland hello maximize button")]
-async fn click_wayland_hello_maximize_button(world: &mut ThingOsWorld) -> Result<(), StepError> {
-    click_wayland_hello_chrome_button(world, "maximize", 424).await
+#[when("I click the Hello maximize button")]
+async fn click_hello_maximize_button(world: &mut ThingOsWorld) -> Result<(), StepError> {
+    click_hello_chrome_button(world, "maximize", 424).await
 }
 
 #[then("the compositor should send a maximized toplevel configure")]
@@ -1491,9 +1491,9 @@ async fn compositor_sends_maximized_configure(world: &mut ThingOsWorld) -> Resul
     Ok(())
 }
 
-#[when("I click the Wayland hello minimize button")]
-async fn click_wayland_hello_minimize_button(world: &mut ThingOsWorld) -> Result<(), StepError> {
-    click_wayland_hello_chrome_button(world, "minimize", 392).await
+#[when("I click the Hello minimize button")]
+async fn click_hello_minimize_button(world: &mut ThingOsWorld) -> Result<(), StepError> {
+    click_hello_chrome_button(world, "minimize", 392).await
 }
 
 #[then("the compositor should minimize the toplevel window")]
@@ -1507,9 +1507,9 @@ async fn compositor_minimizes_toplevel_window(world: &mut ThingOsWorld) -> Resul
     Ok(())
 }
 
-#[when("I click the Wayland hello close button")]
-async fn click_wayland_hello_close_button(world: &mut ThingOsWorld) -> Result<(), StepError> {
-    click_wayland_hello_chrome_button(world, "close", 456).await
+#[when("I click the Hello close button")]
+async fn click_hello_close_button(world: &mut ThingOsWorld) -> Result<(), StepError> {
+    click_hello_chrome_button(world, "close", 456).await
 }
 
 #[then("the compositor should send xdg_toplevel.close")]
@@ -1520,22 +1520,22 @@ async fn compositor_sends_toplevel_close(world: &mut ThingOsWorld) -> Result<(),
     if !world.wait_for_serial("wayland-server: sent xdg_toplevel.close", 30.0).await {
         return Err(StepError("Wayland server did not send xdg_toplevel.close".to_string()));
     }
-    if !world.wait_for_serial("wayland_hello: compositor requested close", 30.0).await {
+    if !world.wait_for_serial("hello: compositor requested close", 30.0).await {
         return Err(StepError("Wayland client did not receive xdg_toplevel.close".to_string()));
     }
     Ok(())
 }
 
-#[then(regex = r#"^the Wayland hello client should log "([^"]+)"$"#)]
-async fn wayland_hello_client_should_log(
+#[then(regex = r#"^the Hello client should log "([^"]+)"$"#)]
+async fn hello_client_should_log(
     world: &mut ThingOsWorld,
     message: String,
 ) -> Result<(), StepError> {
-    let needle = format!("wayland_hello: {}", message);
+    let needle = format!("hello: {}", message);
     if world.wait_for_serial(&needle, 30.0).await {
         Ok(())
     } else {
-        Err(StepError(format!("Wayland hello client did not log '{}'", needle)))
+        Err(StepError(format!("Hello client did not log '{}'", needle)))
     }
 }
 
@@ -1555,7 +1555,7 @@ async fn client_sends_set_title(world: &mut ThingOsWorld, title: String) -> Resu
     let pattern = format!("wayland-server: xdg_toplevel obj=");
     // Wait briefly for the log to appear before checking.
     let _ = world.wait_for_serial(&pattern, 10.0).await;
-    // wayland_hello sets title="Thing-OS XDG Demo".
+    // hello sets title="Thing-OS XDG Demo".
     let log = world.get_serial_log().await;
     if log.contains("wayland-server: xdg_toplevel obj=") && log.contains("title=") {
         eprintln!("│  │  │      ✅ set_title observed in compositor log");
@@ -1592,7 +1592,7 @@ async fn compositor_records_title(
         eprintln!("│  │  │      ✅ Compositor recorded title \"{}\"", title);
         Ok(())
     } else {
-        // wayland_hello uses "Thing-OS XDG Demo", not "My App", so this will fail.
+        // hello uses "Thing-OS XDG Demo", not "My App", so this will fail.
         Err(StepError(format!(
             "Compositor did not record title \"{}\". Found: {:?}",
             title,
@@ -1631,7 +1631,7 @@ async fn compositor_sent_ping(world: &mut ThingOsWorld) -> Result<(), StepError>
         Ok(())
     } else {
         // Ping is sent by the compositor on a timer or when it decides to.
-        // If wayland_hello is running and connected, a ping may be sent.
+        // If hello is running and connected, a ping may be sent.
         Err(StepError("No xdg_wm_base.ping observed in compositor log within 30s".to_string()))
     }
 }
@@ -1639,7 +1639,7 @@ async fn compositor_sent_ping(world: &mut ThingOsWorld) -> Result<(), StepError>
 /// `When the client responds with xdg_wm_base.pong using the same serial`
 #[when("the client responds with xdg_wm_base.pong using the same serial")]
 async fn client_responds_with_pong(world: &mut ThingOsWorld) -> Result<(), StepError> {
-    // wayland_hello sends pong in response to ping.
+    // hello sends pong in response to ping.
     let found = world.wait_for_serial("wayland-server: xdg_wm_base.pong serial=", 10.0).await;
     if found {
         eprintln!("│  │  │      ✅ xdg_wm_base.pong received by compositor");
@@ -1654,8 +1654,8 @@ async fn client_responds_with_pong(world: &mut ThingOsWorld) -> Result<(), StepE
 async fn client_sends_toplevel_destroy(world: &mut ThingOsWorld) -> Result<(), StepError> {
     // Wait briefly for any outstanding toplevel logs.
     let _ = world.wait_for_serial("wayland-server: xdg_toplevel obj=", 5.0).await;
-    // wayland_hello doesn't explicitly destroy; the compositor gets client disconnected.
-    // Check for toplevel destroy log (wayland_hello may stay running).
+    // hello doesn't explicitly destroy; the compositor gets client disconnected.
+    // Check for toplevel destroy log (hello may stay running).
     let log = world.get_serial_log().await;
     if log.contains("wayland-server: xdg_toplevel obj=") && log.contains("destroyed") {
         eprintln!("│  │  │      ✅ xdg_toplevel destroyed");
@@ -1776,7 +1776,7 @@ async fn client_registered_frame_callback(world: &mut ThingOsWorld) -> Result<()
         eprintln!("│  │  │      ✅ Frame callback registered");
         Ok(())
     } else {
-        // wayland_hello registers frame callbacks but the log may not appear until commit.
+        // hello registers frame callbacks but the log may not appear until commit.
         eprintln!("│  │  │      ⚠️  Frame callback registration log not yet seen");
         Ok(()) // Allow this to pass as a precondition — the Then step asserts the callback fires.
     }
@@ -1785,7 +1785,7 @@ async fn client_registered_frame_callback(world: &mut ThingOsWorld) -> Result<()
 /// `When the client commits the surface with a valid shm buffer`
 #[when("the client commits the surface with a valid shm buffer")]
 async fn client_commits_with_shm_buffer(world: &mut ThingOsWorld) -> Result<(), StepError> {
-    // wayland_hello attaches and commits shm buffers regularly.
+    // hello attaches and commits shm buffers regularly.
     let found = world.wait_for_serial("wayland-server: surface ", 10.0).await;
     if found {
         eprintln!("│  │  │      ✅ Surface committed with shm buffer");
@@ -1828,7 +1828,7 @@ async fn client_receives_callback_done(world: &mut ThingOsWorld) -> Result<(), S
 //
 // These steps assert the `wp_presentation` global is advertised on the
 // registry and that `wp_presentation_feedback.presented` is delivered to a
-// client that requested feedback for a committed surface. The wayland_hello
+// client that requested feedback for a committed surface. The hello
 // reference client binds `wp_presentation` and requests feedback alongside
 // each `wl_surface.frame` callback, so the corresponding compositor and
 // client logs can be observed on the serial console.
@@ -1836,9 +1836,9 @@ async fn client_receives_callback_done(world: &mut ThingOsWorld) -> Result<(), S
 /// `When the client requests the wl_registry global list`
 #[when("the client requests the wl_registry global list")]
 async fn client_requests_registry(world: &mut ThingOsWorld) -> Result<(), StepError> {
-    // wayland_hello issues `wl_display.get_registry` immediately on connect,
+    // hello issues `wl_display.get_registry` immediately on connect,
     // so by the time it has connected the global list has been requested.
-    let _ = world.wait_for_serial("wayland_hello: bound wp_presentation", 15.0).await;
+    let _ = world.wait_for_serial("hello: bound wp_presentation", 15.0).await;
     Ok(())
 }
 
@@ -1846,12 +1846,12 @@ async fn client_requests_registry(world: &mut ThingOsWorld) -> Result<(), StepEr
 #[then("wl_registry advertises wp_presentation version 1")]
 async fn registry_advertises_wp_presentation(world: &mut ThingOsWorld) -> Result<(), StepError> {
     let log = world.get_serial_log().await;
-    if log.contains("wayland_hello: bound wp_presentation") {
+    if log.contains("hello: bound wp_presentation") {
         eprintln!("│  │  │      ✅ wp_presentation advertised by wl_registry");
         Ok(())
     } else {
         Err(StepError(
-            "Expected client to bind wp_presentation (no 'wayland_hello: bound wp_presentation' log)"
+            "Expected client to bind wp_presentation (no 'hello: bound wp_presentation' log)"
                 .to_string(),
         ))
     }
@@ -1877,13 +1877,13 @@ async fn client_requested_presentation_feedback(world: &mut ThingOsWorld) -> Res
 #[then("the client receives wp_presentation_feedback.presented for that feedback object")]
 async fn client_receives_feedback_presented(world: &mut ThingOsWorld) -> Result<(), StepError> {
     let found =
-        world.wait_for_serial("wayland_hello: wp_presentation_feedback.presented", 30.0).await;
+        world.wait_for_serial("hello: wp_presentation_feedback.presented", 30.0).await;
     if found {
         eprintln!("│  │  │      ✅ wp_presentation_feedback.presented received");
         Ok(())
     } else {
         Err(StepError(
-            "Expected 'wayland_hello: wp_presentation_feedback.presented' in client log"
+            "Expected 'hello: wp_presentation_feedback.presented' in client log"
                 .to_string(),
         ))
     }

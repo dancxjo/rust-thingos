@@ -13,16 +13,16 @@ Feature: Sprout desktop session orchestration
     And the serial output should contain "First frame rendered" within 180s
     And the desktop should be ready for stress input within 180s
     And the serial output should contain "wayland-server: listening on /run/wayland-0" within 180s
-    And the serial output should contain "SPROUT: Spawned wayland_hello" within 180s
-    And the serial output should contain "wayland_hello: connected to /run/wayland-0" within 180s
-    And the serial output should contain "wayland_hello: pistil text renderer loaded with default /public/fonts/Inter-Regular.ttf" within 180s
-    And the serial output should contain "wayland_hello: service loop started" within 180s
-    And the serial output should contain "wayland_hello: petals and stile showcase rendering" within 180s
+    And the serial output should contain "SPROUT: Spawned hello" within 180s
+    And the serial output should contain "hello: connected to /run/wayland-0" within 180s
+    And the serial output should contain "hello: pistil text renderer loaded with default /public/fonts/Inter-Regular.ttf" within 180s
+    And the serial output should contain "hello: service loop started" within 180s
+    And the serial output should contain "hello: petals and stile showcase rendering" within 180s
     And the serial output should contain "wayland-server: xdg_surface obj=" within 180s
     And the serial output should contain "wayland-server: xdg_toplevel obj=" within 180s
     And the serial output should contain "wayland-server: surface " within 180s
     And the serial output should contain "wayland-server: frame callback done" within 180s
-    And the serial output should contain "wayland_hello: frame callback done" within 180s
+    And the serial output should contain "hello: frame callback done" within 180s
 
   Scenario: The default desktop apps start with clock time anchored by RTC
     Given the machine is booted

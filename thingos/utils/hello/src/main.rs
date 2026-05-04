@@ -3,7 +3,6 @@
 use core::default::Default;
 extern crate alloc;
 
-use alloc::string::String;
 use alloc::vec::Vec;
 use core::sync::atomic::{AtomicU32, Ordering};
 
@@ -109,7 +108,7 @@ struct WaylandHelloApp {
 }
 
 impl Application for WaylandHelloApp {
-    const NAME: &'static str = "wayland_hello";
+    const NAME: &'static str = "hello";
 
     fn init(
         ctx: &mut ApplicationContext,
@@ -131,18 +130,18 @@ impl Application for WaylandHelloApp {
         bind_global(fd, 4, "wl_seat", 5, SEAT_ID);
         let dmabuf_id = if let Some(name) = globals.dmabuf_name {
             bind_global(fd, name, "zwp_linux_dmabuf_v1", 3, DMABUF_ID);
-            info!("wayland_hello: using zwp_linux_dmabuf_v1 buffers");
+            info!("hello: using zwp_linux_dmabuf_v1 buffers");
             Some(DMABUF_ID)
         } else {
-            info!("wayland_hello: zwp_linux_dmabuf_v1 unavailable; using wl_shm buffers");
+            info!("hello: zwp_linux_dmabuf_v1 unavailable; using wl_shm buffers");
             None
         };
         let presentation_id = if let Some(name) = globals.presentation_name {
             bind_global(fd, name, "wp_presentation", 1, PRESENTATION_ID);
-            info!("wayland_hello: bound wp_presentation");
+            info!("hello: bound wp_presentation");
             Some(PRESENTATION_ID)
         } else {
-            info!("wayland_hello: wp_presentation unavailable");
+            info!("hello: wp_presentation unavailable");
             None
         };
         seat_get_pointer(fd, SEAT_ID, POINTER_ID);
@@ -158,7 +157,7 @@ impl Application for WaylandHelloApp {
         region_add(fd, REGION_ID, 0, 0, 480, 320);
         set_opaque_region(fd, TOP_SURFACE_ID, REGION_ID);
         region_destroy(fd, REGION_ID);
-        info!("wayland_hello: wl_region smoke test: create+add+set_opaque+destroy");
+        info!("hello: wl_region smoke test: create+add+set_opaque+destroy");
 
         // input_region smoke test: verify set_input_region lifecycle.
         // Creates a region, adds a sub-rect, sets it as the input region, then
@@ -168,12 +167,12 @@ impl Application for WaylandHelloApp {
         region_add(fd, REGION_ID, 0, 0, 480, 320);
         set_input_region(fd, TOP_SURFACE_ID, REGION_ID);
         region_destroy(fd, REGION_ID);
-        info!("wayland_hello: wl_region smoke test: create+add+set_input+destroy");
+        info!("hello: wl_region smoke test: create+add+set_input+destroy");
 
         get_xdg_surface(fd, WM_BASE_ID, TOP_XDG_SURFACE_ID, TOP_SURFACE_ID);
         get_toplevel(fd, TOP_XDG_SURFACE_ID, TOPLEVEL_ID);
         set_toplevel_title(fd, TOPLEVEL_ID, "Thing-OS Wayland Lab");
-        set_toplevel_app_id(fd, TOPLEVEL_ID, "thingos.wayland_hello");
+        set_toplevel_app_id(fd, TOPLEVEL_ID, "thingos.hello");
         commit_surface(fd, TOP_SURFACE_ID);
 
         ctx.register_window("wayland toplevel", move || close_toplevel_objects(fd));
@@ -202,7 +201,7 @@ impl Application for WaylandHelloApp {
     }
 
     fn ready(&mut self, _ctx: &mut ApplicationContext) {
-        info!("wayland_hello: service loop started");
+        info!("hello: service loop started");
     }
 
     fn timeout(&self) -> Option<Duration> {
@@ -263,25 +262,25 @@ impl WaylandHelloApp {
                     }
                 }
                 (TOPLEVEL_ID, 1) => {
-                    info!("wayland_hello: compositor requested close; exiting");
-                    vfs_write(1, b"wayland_hello: explicit exit(0) call\n").ok();
+                    info!("hello: compositor requested close; exiting");
+                    vfs_write(1, b"hello: explicit exit(0) call\n").ok();
                     return AppAction::Quit;
                 }
                 (POINTER_ID, 0) if payload.len() >= 16 => {
                     info!(
-                        "wayland_hello: pointer enter surface={} x={} y={}",
+                        "hello: pointer enter surface={} x={} y={}",
                         read_u32(payload, 4),
                         wl_fixed_to_i32(read_i32(payload, 8)),
                         wl_fixed_to_i32(read_i32(payload, 12))
                     );
                 }
                 (POINTER_ID, 1) if payload.len() >= 8 => {
-                    info!("wayland_hello: pointer leave surface={}", read_u32(payload, 4));
+                    info!("hello: pointer leave surface={}", read_u32(payload, 4));
                 }
                 (POINTER_ID, 2) if payload.len() >= 12 => {
                     if POINTER_MOTION_LOGS.fetch_add(1, Ordering::Relaxed) < 4 {
                         info!(
-                            "wayland_hello: pointer motion x={} y={}",
+                            "hello: pointer motion x={} y={}",
                             wl_fixed_to_i32(read_i32(payload, 4)),
                             wl_fixed_to_i32(read_i32(payload, 8))
                         );
@@ -289,26 +288,26 @@ impl WaylandHelloApp {
                 }
                 (POINTER_ID, 3) if payload.len() >= 16 => {
                     info!(
-                        "wayland_hello: pointer button button={} state={}",
+                        "hello: pointer button button={} state={}",
                         read_u32(payload, 8),
                         read_u32(payload, 12)
                     );
                 }
                 (KEYBOARD_ID, 1) if payload.len() >= 8 => {
-                    info!("wayland_hello: keyboard enter surface={}", read_u32(payload, 4));
+                    info!("hello: keyboard enter surface={}", read_u32(payload, 4));
                 }
                 (KEYBOARD_ID, 2) if payload.len() >= 8 => {
-                    info!("wayland_hello: keyboard leave surface={}", read_u32(payload, 4));
+                    info!("hello: keyboard leave surface={}", read_u32(payload, 4));
                 }
                 (KEYBOARD_ID, 3) if payload.len() >= 16 => {
                     info!(
-                        "wayland_hello: keyboard key key={} state={}",
+                        "hello: keyboard key key={} state={}",
                         read_u32(payload, 8),
                         read_u32(payload, 12)
                     );
                 }
                 (KEYBOARD_ID, 4) if payload.len() >= 20 => {
-                    info!("wayland_hello: keyboard modifiers depressed={}", read_u32(payload, 4));
+                    info!("hello: keyboard modifiers depressed={}", read_u32(payload, 4));
                 }
                 (POPUP_XDG_SURFACE_ID, 0) if payload.len() >= 4 => {
                     self.popup_pending.serial = Some(read_u32(payload, 0));
@@ -325,15 +324,12 @@ impl WaylandHelloApp {
                     }
                 }
                 (POPUP_ID, 1) => {
-                    info!("wayland_hello: compositor dismissed popup (popup_done)");
+                    info!("hello: compositor dismissed popup (popup_done)");
                     self.close_popup(ctx);
                 }
                 (_, 0) if self.pending_frame_callbacks.iter().any(|&id| id == object_id) => {
                     let callback_data = if payload.len() >= 4 { read_u32(payload, 0) } else { 0 };
-                    info!(
-                        "wayland_hello: frame callback done object={} data={}",
-                        object_id, callback_data
-                    );
+                    info!("hello: frame callback done object={} data={}", object_id, callback_data);
                     self.pending_frame_callbacks.retain(|&id| id != object_id);
                 }
                 (_, 1) if self.pending_presentation_feedbacks.iter().any(|&id| id == object_id) => {
@@ -345,7 +341,7 @@ impl WaylandHelloApp {
                     let refresh = if payload.len() >= 16 { read_u32(payload, 12) } else { 0 };
                     let seq_lo = if payload.len() >= 24 { read_u32(payload, 20) } else { 0 };
                     info!(
-                        "wayland_hello: wp_presentation_feedback.presented object={} tv={}.{:09} refresh_ns={} seq={}",
+                        "hello: wp_presentation_feedback.presented object={} tv={}.{:09} refresh_ns={} seq={}",
                         object_id,
                         ((tv_sec_hi as u64) << 32) | tv_sec_lo as u64,
                         tv_nsec,
@@ -355,7 +351,7 @@ impl WaylandHelloApp {
                     self.pending_presentation_feedbacks.retain(|&id| id != object_id);
                 }
                 (_, 2) if self.pending_presentation_feedbacks.iter().any(|&id| id == object_id) => {
-                    info!("wayland_hello: wp_presentation_feedback.discarded object={}", object_id);
+                    info!("hello: wp_presentation_feedback.discarded object={}", object_id);
                     self.pending_presentation_feedbacks.retain(|&id| id != object_id);
                 }
                 _ => {}
@@ -491,7 +487,7 @@ fn connect_wayland() -> u32 {
         let fd = match socket(AF_UNIX, SOCK_STREAM, 0) {
             Ok(fd) => fd,
             Err(e) => {
-                stem::error!("wayland_hello: socket(AF_UNIX) failed: {:?}", e);
+                stem::error!("hello: socket(AF_UNIX) failed: {:?}", e);
                 sleep_ms(250);
                 continue;
             }
@@ -499,7 +495,7 @@ fn connect_wayland() -> u32 {
 
         match connect(fd, "/run/wayland-0") {
             Ok(()) => {
-                info!("wayland_hello: connected to /run/wayland-0");
+                info!("hello: connected to /run/wayland-0");
                 return fd;
             }
             Err(_) => {
@@ -611,7 +607,7 @@ fn render_window(
     pixels.fill(showcase.theme.body_top);
 
     if SHOWCASE_RENDER_LOGS.fetch_add(1, Ordering::Relaxed) == 0 {
-        info!("wayland_hello: petals and stile showcase rendering");
+        info!("hello: petals and stile showcase rendering");
     }
 
     draw_text(
@@ -960,7 +956,7 @@ fn paint_tree(
                     if node.descriptions.contains(&Description::Logogram) { 22.0 } else { 12.0 },
                 );
                 let color = node.style.color.map(color_argb).unwrap_or(fallback_text);
-                let label = ellipsize_ascii(text, text_capacity(w as f32, px));
+                let label = petals::ellipsize_ascii(text, text_capacity(w as f32, px));
                 draw_text(
                     text_renderer,
                     pixels,
@@ -977,7 +973,7 @@ fn paint_tree(
             if let Some(text) = pressable_label(node.id, tree) {
                 let px = node.style.font_size.unwrap_or(12.0);
                 let color = node.style.color.map(color_argb).unwrap_or(fallback_text);
-                let label = ellipsize_ascii(text, text_capacity(w as f32, px));
+                let label = petals::ellipsize_ascii(text, text_capacity(w as f32, px));
                 draw_text(
                     text_renderer,
                     pixels,
@@ -1061,19 +1057,6 @@ fn text_capacity(width: f32, px_size: f32) -> usize {
     ((width / advance) as usize).max(1)
 }
 
-fn ellipsize_ascii(text: &str, capacity: usize) -> String {
-    if text.chars().count() <= capacity {
-        return String::from(text);
-    }
-    let keep = capacity.saturating_sub(1).max(1);
-    let mut out = String::new();
-    for ch in text.chars().take(keep) {
-        out.push(ch);
-    }
-    out.push('~');
-    out
-}
-
 fn draw_text(
     text_renderer: Option<&TextRenderer>,
     pixels: &mut [u32],
@@ -1092,7 +1075,7 @@ fn draw_text(
     let mut text_c = [0u8; 128];
     let bytes = text.as_bytes();
     if bytes.len() >= text_c.len() {
-        stem::warn!("wayland_hello: text too long for pistil text call");
+        stem::warn!("hello: text too long for pistil text call");
         return;
     }
     text_c[..bytes.len()].copy_from_slice(bytes);
@@ -1109,25 +1092,25 @@ fn draw_text(
         color,
     );
     if rc != 0 {
-        stem::warn!("wayland_hello: pistil_draw_text failed: {}", rc);
+        stem::warn!("hello: pistil_draw_text failed: {}", rc);
     }
 }
 
 fn load_text_renderer() -> Option<TextRenderer> {
     let handle = dlopen_str(PISTIL_PATH, RTLD_NOW);
     if handle.is_null() {
-        log_dlerror("wayland_hello: failed to load /lib/libpistil.so");
+        log_dlerror("hello: failed to load /lib/libpistil.so");
         return None;
     }
 
     let sym = dlsym_bytes(handle, DRAW_TEXT_SYMBOL);
     if sym.is_null() {
-        log_dlerror("wayland_hello: failed to resolve pistil_draw_text");
+        log_dlerror("hello: failed to resolve pistil_draw_text");
         return None;
     }
 
     let draw_text: DrawTextFn = unsafe { core::mem::transmute(sym) };
-    info!("wayland_hello: pistil text renderer loaded with default {}", DEFAULT_FONT_PATH);
+    info!("hello: pistil text renderer loaded with default {}", DEFAULT_FONT_PATH);
     Some(TextRenderer { _handle: handle, draw_text })
 }
 
@@ -1430,7 +1413,7 @@ fn send_string_request(fd: u32, object_id: u32, opcode: u16, value: &str) {
 
 fn send_request(fd: u32, buf: &[u8]) {
     if let Err(e) = vfs_write(fd, buf) {
-        stem::warn!("wayland_hello: write failed: {:?}", e);
+        stem::warn!("hello: write failed: {:?}", e);
     }
 }
 
@@ -1440,7 +1423,7 @@ fn send_request_with_fds(fd: u32, buf: &[u8], fds: &[u32]) {
         return;
     }
     if let Err(e) = sendmsg(fd, buf, fds) {
-        stem::warn!("wayland_hello: sendmsg failed: {:?}", e);
+        stem::warn!("hello: sendmsg failed: {:?}", e);
     }
 }
 

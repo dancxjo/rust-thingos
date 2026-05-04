@@ -14,7 +14,7 @@
 //! upper 16 bits of the second u32.  `op` is the opcode in the lower 16 bits.
 //!
 //! All integers in the payload are native-endian (host byte order), matching
-//! how `wayland_hello` encodes them.
+//! how `hello` encodes them.
 
 use alloc::vec::Vec;
 
