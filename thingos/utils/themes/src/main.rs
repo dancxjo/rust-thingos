@@ -588,9 +588,7 @@ fn write_wallpaper_name(path: &str) -> Result<(), &'static str> {
 
 fn write_theme_selection(theme: Theme) -> Result<(), &'static str> {
     write_theme_name(theme.name)?;
-    if let Some(wallpaper_path) = theme.wallpaper_path {
-        write_wallpaper_name(wallpaper_path)?;
-    }
+    write_wallpaper_name(theme.wallpaper_path)?;
     Ok(())
 }
 
