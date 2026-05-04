@@ -85,7 +85,7 @@ pub const SOLARIS_WARM_PALETTE: SolarisWarmPalette = SolarisWarmPalette {
     text_secondary: Color::rgb(0xC9, 0xB8, 0xA2),
     text_muted: Color::rgb(0x8A, 0x7A, 0x66),
     border: Color::rgb(0x4A, 0x40, 0x36),
-    shadow: Color::rgba(0, 0, 0, 102),
+    shadow: Color::rgba(0, 0, 0, 140),
 };
 
 pub const SOLARIS_WARM: Theme = Theme {
@@ -412,11 +412,11 @@ fn push_solaris_warm_window<'a>(
     }
     out.commands.push(PaintCommand::PopClip);
 
-    if active && rect.w > 8 && rect.h > 8 {
+    if rect.w > 8 && rect.h > 8 {
         out.commands.push(PaintCommand::StrokeRect {
             rect: ThemeRect::new(rect.x + 1, rect.y + 1, rect.w - 2, rect.h - 2),
             thickness: 1,
-            color: color_with_alpha(palette.accent_soft, 48),
+            color: color_with_alpha(palette.accent_soft, if active { 48 } else { 18 }),
         });
     }
 }
@@ -510,13 +510,19 @@ fn push_glass_frame<'a>(theme: Theme, request: WindowChromeRequest<'a>, out: &mu
     if active {
         push_top_glow_strip(out, rect.x + 2, rect.y, rect.w.saturating_sub(4), theme);
     }
+    // Always draw a minimal border so the window edge is visible on any
+    // background.  Hovered or active windows get the full outer_stroke; others
+    // get a dimmed version so the frame remains legible without dominating.
+    let border_color = if request.state.hovered {
+        theme.outer_stroke
+    } else {
+        let base_a = (theme.outer_stroke >> 24) & 0xFF;
+        let dim_a = (base_a * 2 / 3).max(40);
+        (dim_a << 24) | (theme.outer_stroke & 0x00FFFFFF)
+    };
+    out.commands.push(PaintCommand::StrokeRect { rect, thickness: 1, color: border_color });
     if request.state.hovered {
         let inner = if active { theme.inner_stroke } else { theme.inner_stroke_inactive };
-        out.commands.push(PaintCommand::StrokeRect {
-            rect,
-            thickness: 1,
-            color: theme.outer_stroke,
-        });
         push_content_edges(out, rect, frame, titlebar_height, inner);
     }
 }
@@ -535,11 +541,11 @@ fn push_solaris_content_edges(
     let inner_y = rect.y + titlebar_height;
     let inner_w = rect.w - frame * 2;
     let inner_h = rect.h - titlebar_height - frame;
-    let palette = SOLARIS_WARM_PALETTE;
-    out.commands.push(PaintCommand::VerticalGradient {
+    // Clear the content area so the client surface shows through unobstructed.
+    // The body overlay provides the dark background when no client is present.
+    out.commands.push(PaintCommand::FillRect {
         rect: ThemeRect::new(inner_x, inner_y, inner_w, inner_h),
-        top: color_with_alpha(palette.bg_secondary, 140),
-        bottom: color_with_alpha(palette.bg_primary, 190),
+        color: 0x00000000,
     });
     out.commands.push(PaintCommand::StrokeRect {
         rect: ThemeRect::new(inner_x - 1, inner_y, inner_w + 2, inner_h + 1),
@@ -1064,6 +1070,81 @@ mod tests {
                 );
             }
         }
+    }
+
+    #[test]
+    fn aurora_glass_always_has_visible_border() {
+        // AuroraGlass must draw at least one StrokeRect for the window border
+        // regardless of hover/active state so the window edge is always legible.
+        let theme = theme_by_name("aurora-glass");
+        let window = ThemeRect::new(0, 0, 368, 244);
+
+        for (active, hovered) in [(false, false), (false, true), (true, false), (true, true)] {
+            let mut plan = PaintList::default();
+            theme.render_window_chrome(
+                WindowChromeRequest {
+                    visual_rect: window,
+                    content_rect: ThemeRect::new(4, 44, 360, 196),
+                    frame: 4,
+                    titlebar_height: 44,
+                    controls: [None, None, None],
+                    state: ThemeState {
+                        active,
+                        hovered,
+                        primary_button_down: false,
+                        pointer_x: -1,
+                        pointer_y: -1,
+                        shaded: false,
+                        fullscreen: false,
+                    },
+                    title: None,
+                },
+                &mut plan,
+            );
+            let border_count = plan.commands.iter().filter(|cmd| {
+                matches!(cmd, PaintCommand::StrokeRect { rect, thickness: 1, .. } if *rect == window)
+            }).count();
+            assert!(
+                border_count >= 1,
+                "AuroraGlass (active={active}, hovered={hovered}) must draw at least one window border stroke"
+            );
+        }
+    }
+
+    #[test]
+    fn solaris_warm_content_area_is_transparent() {
+        // The content area of the SolarisWarm chrome overlay must be cleared to
+        // transparent so the client surface shows through unobstructed.
+        let theme = theme_by_name("solaris-warm");
+        let mut plan = PaintList::default();
+        theme.render_window_chrome(
+            WindowChromeRequest {
+                visual_rect: ThemeRect::new(0, 0, 368, 244),
+                content_rect: ThemeRect::new(4, 44, 360, 196),
+                frame: 4,
+                titlebar_height: 44,
+                controls: [None, None, None],
+                state: ThemeState {
+                    active: true,
+                    hovered: false,
+                    primary_button_down: false,
+                    pointer_x: -1,
+                    pointer_y: -1,
+                    shaded: false,
+                    fullscreen: false,
+                },
+                title: None,
+            },
+            &mut plan,
+        );
+        let has_transparent_fill = plan.commands.iter().any(|cmd| {
+            matches!(cmd, PaintCommand::FillRect { rect, color: 0x00000000 }
+                if rect.x == 4 && rect.y == 44 && rect.w == 360 && rect.h == 196)
+        });
+        assert!(
+            has_transparent_fill,
+            "SolarisWarm must punch a transparent fill over the content area for client legibility"
+        );
     }
 
     fn icon_count(plan: &PaintList<'_>) -> usize {
