@@ -59,6 +59,8 @@ const PISTIL_MAX_RETRIES: u32 = 40;
 
 /// Bytes per pixel for the wallpaper buffer (BGRA / ARGB 32-bit).
 const BYTES_PER_PIXEL: u32 = 4;
+/// VFS open flag for read-only access (O_RDONLY = 0).
+const O_RDONLY: u32 = 0;
 
 type PrepareBackgroundFn = extern "C" fn(*const u8, *mut u32, u32, u32, u32) -> i32;
 
@@ -152,7 +154,7 @@ impl WallpaperState {
         }
         let f: PrepareBackgroundFn = unsafe { core::mem::transmute(sym) };
         self.pistil = Some(f);
-        stem::debug!("Blossom: pistil background renderer loaded");
+        stem::debug!("Pistil background renderer loaded");
         true
     }
 
@@ -175,7 +177,7 @@ impl WallpaperState {
         let memfd = match memfd_create("blossom.wallpaper", total) {
             Ok(fd) => fd,
             Err(e) => {
-                stem::warn!("Blossom: wallpaper memfd failed: {:?}", e);
+                stem::warn!("Wallpaper memfd failed: {:?}", e);
                 return false;
             }
         };
@@ -191,7 +193,7 @@ impl WallpaperState {
         let resp = match vm_map(&req) {
             Ok(r) => r,
             Err(e) => {
-                stem::warn!("Blossom: wallpaper vm_map failed: {:?}", e);
+                stem::warn!("Wallpaper vm_map failed: {:?}", e);
                 let _ = vfs_close(memfd);
                 return false;
             }
@@ -214,14 +216,18 @@ impl WallpaperState {
         match handle {
             Ok(h) => h.detach(),
             Err(e) => {
-                stem::warn!("Blossom: failed to spawn decode thread: {:?}", e);
+                stem::warn!("Failed to spawn decode thread: {:?}", e);
                 let _ = vfs_close(memfd);
                 return false;
             }
         }
 
-        // Drop the previous decode memfd — the compositor has finished with it
-        // by the time a new decode starts.
+        // Drop the previous decode memfd.  Closing our fd here is safe: the
+        // compositor received its own duplicate via sendmsg(SCM_RIGHTS) when
+        // the buffer was committed, and the wl_shm_pool holds that duplicate
+        // alive until the compositor calls wl_shm_pool.destroy.  Our mapping
+        // at the old `decode_mapped` address keeps the anonymous file alive on
+        // our side until that mapping is eventually unmapped.
         if let Some(old) = self.decode_memfd.take() {
             let _ = vfs_close(old);
         }
@@ -239,7 +245,7 @@ impl WallpaperState {
     fn on_decode_done(&mut self, wayland_fd: u32, success: bool) -> bool {
         self.decode_pending = false;
         if !success {
-            stem::warn!("Blossom: wallpaper decode failed; keeping previous background");
+            stem::warn!("Wallpaper decode failed; keeping previous background");
             return false;
         }
         let Some(memfd) = self.decode_memfd else {
@@ -259,9 +265,12 @@ impl WallpaperState {
         damage_surface(wayland_fd, WP_SURFACE_ID, 0, 0, w, h);
         commit_surface(wayland_fd, WP_SURFACE_ID);
 
-        // Replace the committed memfd.  The old one is closed here; the pixel
-        // data remains valid because the kernel keeps the underlying anonymous
-        // file alive as long as the mapping exists.
+        // Replace the committed memfd.  Closing our descriptor here is safe:
+        // the compositor received a duplicate via sendmsg(SCM_RIGHTS) when the
+        // buffer was committed and holds it alive via wl_shm_pool until the
+        // pool is destroyed.  Our mapping at `decode_mapped` independently
+        // keeps the anonymous backing pages alive until that mapping is
+        // eventually released.
         if let Some(old) = self.committed_memfd.replace(memfd) {
             let _ = vfs_close(old);
         }
@@ -269,7 +278,7 @@ impl WallpaperState {
         // Only record this as the committed path once the commit is actually sent.
         self.committed_path = self.pending_path.take();
 
-        stem::info!("Blossom wallpaper ready: {}x{}", w, h);
+        stem::info!("Wallpaper ready at {}x{}", w, h);
         true
     }
 }
@@ -441,7 +450,7 @@ impl BlossomApp {
         let w = self.wallpaper.configured_w;
         let h = self.wallpaper.configured_h;
         if self.wallpaper.start_decode(&path, w, h) {
-            stem::info!("Preparing wallpaper {}", path);
+            stem::info!("Preparing wallpaper {}...", path);
             self.wallpaper.pending_path = Some(path);
         }
     }
@@ -517,8 +526,7 @@ fn setup_wallpaper_surface(fd: u32) {
 /// Read the wallpaper image path from the config file, returning the default
 /// if the file is absent or empty.
 fn read_wallpaper_target() -> String {
-    // O_RDONLY = 0; use the numeric value directly to avoid an abi import.
-    let Ok(fd) = vfs_open(WALLPAPER_CONFIG_PATH, 0) else {
+    let Ok(fd) = vfs_open(WALLPAPER_CONFIG_PATH, O_RDONLY) else {
         return String::from(DEFAULT_WALLPAPER_PATH);
     };
     let mut buf = [0u8; 512];
@@ -556,7 +564,7 @@ fn read_events(fd: u32, state: &mut ShellState, wallpaper: &mut WallpaperState) 
                     wallpaper.configured_w = w;
                     wallpaper.configured_h = h;
                     wallpaper.surface_configured = true;
-                    stem::debug!("Blossom wallpaper surface configured: {}x{}", w, h);
+                    stem::debug!("Wallpaper surface configured: {}x{}", w, h);
                 }
             }
             (SHORTCUT_LAYER_ID, 0) if payload.len() >= 12 => {
@@ -566,7 +574,7 @@ fn read_events(fd: u32, state: &mut ShellState, wallpaper: &mut WallpaperState) 
                 if !state.shortcut_mapped {
                     map_shortcut_surface(fd);
                     state.shortcut_mapped = true;
-                    info!("Blossom shortcut surface ready");
+                    info!("Shortcut surface ready");
                 }
             }
             (KEYBOARD_ID, 4) if payload.len() >= 20 => {
