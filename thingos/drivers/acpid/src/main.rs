@@ -38,6 +38,7 @@ use alloc::vec::Vec;
 
 use abi::errors::Errno;
 use abi::vfs_rpc::VfsRpcOp;
+use acpi_common::{AcpiEvent, RECORD_SIZE};
 use ipc_helpers::provider::{ProviderLoop, ProviderResponse};
 use stem::syscall::vfs::{vfs_close, vfs_mount, vfs_open, vfs_read, vfs_readdir};
 use stem::{debug, info, warn};
@@ -279,6 +280,7 @@ const INO_ROOT: u64        = 0xa000_0001;
 const INO_TABLES_DIR: u64  = 0xa000_0002;
 const INO_NS_DIR: u64      = 0xa000_0003;
 const INO_DEVICES_DIR: u64 = 0xa000_0004;
+const INO_EVENTS: u64      = 0xa000_0005;
 const INO_TABLE_BASE: u64  = 0xa000_0100;
 const INO_DEV_DIR_BASE: u64  = 0xa001_0000;
 const INO_DEV_FILE_BASE: u64 = 0xa002_0000;
@@ -288,6 +290,7 @@ const INO_DEV_FILE_BASE: u64 = 0xa002_0000;
 ///   2      → "tables/" directory
 ///   3      → "namespace/" directory
 ///   4      → "devices/" directory
+///   5      → "events" file (fan-out ACPI event stream)
 ///   100+i  → table files
 ///   1000+i → per-device directories (devices/<HID>:00/)
 ///   10000 + i*3 + 0 → devices/<HID>:00/hid
@@ -297,6 +300,7 @@ const HANDLE_ROOT: u64        = 1;
 const HANDLE_TABLES_DIR: u64  = 2;
 const HANDLE_NS_DIR: u64      = 3;
 const HANDLE_DEVICES_DIR: u64 = 4;
+const HANDLE_EVENTS: u64      = 5;
 const HANDLE_TABLE_BASE: u64  = 100;
 const HANDLE_DEV_DIR_BASE: u64  = 1000;
 const HANDLE_DEV_FILE_BASE: u64 = 10000;
@@ -307,11 +311,60 @@ const DEV_FILE_HID: u64    = 0;
 const DEV_FILE_STATUS: u64 = 1;
 const DEV_FILE_PATH: u64   = 2;
 
-fn dispatch(ctx: &AcpiContext, op: VfsRpcOp, payload: &[u8]) -> ProviderResponse {
+// ── Event bus ─────────────────────────────────────────────────────────────────
+
+/// Number of events held in the fan-out ring buffer.
+///
+/// Old events are silently overwritten once the ring is full; producers should
+/// be rare enough that this never happens in practice.
+const EVENT_RING_CAPACITY: usize = 64;
+
+/// Fan-out event ring buffer.
+///
+/// Events are stored at absolute sequence indices (0, 1, 2, …).  Each
+/// consumer independently tracks its read position via the kernel-maintained
+/// file-descriptor offset: `byte_offset / RECORD_SIZE` gives the next event
+/// sequence number to retrieve.
+struct EventBus {
+    /// Ring buffer of serialised 16-byte event records.
+    ring: [[u8; RECORD_SIZE]; EVENT_RING_CAPACITY],
+    /// Total number of events ever published (monotonically increasing).
+    seq_head: u64,
+}
+
+impl EventBus {
+    const fn new() -> Self {
+        Self { ring: [[0u8; RECORD_SIZE]; EVENT_RING_CAPACITY], seq_head: 0 }
+    }
+
+    /// Append an event to the ring, overwriting the oldest entry if full.
+    fn publish(&mut self, ev: AcpiEvent) {
+        let slot = (self.seq_head % EVENT_RING_CAPACITY as u64) as usize;
+        self.ring[slot] = ev.to_bytes();
+        self.seq_head += 1;
+    }
+
+    /// Return the serialised record at sequence `seq`, or `None` if it has
+    /// been overwritten (the consumer is too far behind).
+    fn get(&self, seq: u64) -> Option<&[u8; RECORD_SIZE]> {
+        if seq >= self.seq_head {
+            return None; // not yet available → EAGAIN
+        }
+        // Overwrite check: the ring holds the most recent EVENT_RING_CAPACITY events.
+        if self.seq_head - seq > EVENT_RING_CAPACITY as u64 {
+            return None; // overwritten → consumer skips ahead
+        }
+        let slot = (seq % EVENT_RING_CAPACITY as u64) as usize;
+        Some(&self.ring[slot])
+    }
+}
+
+fn dispatch(ctx: &AcpiContext, bus: &mut EventBus, op: VfsRpcOp, payload: &[u8]) -> ProviderResponse {
     match op {
         VfsRpcOp::Lookup     => handle_lookup(ctx, payload),
-        VfsRpcOp::Stat       => handle_stat(ctx, payload),
-        VfsRpcOp::Read       => handle_read(ctx, payload),
+        VfsRpcOp::Stat       => handle_stat(ctx, bus, payload),
+        VfsRpcOp::Read       => handle_read(ctx, bus, payload),
+        VfsRpcOp::Write      => handle_write_events(bus, payload),
         VfsRpcOp::Readdir    => handle_readdir(ctx, payload),
         VfsRpcOp::Close      => ProviderResponse::ok_empty(),
         VfsRpcOp::ReadIntoFd => handle_read_into_fd(ctx, payload),
@@ -349,6 +402,7 @@ fn handle_lookup(ctx: &AcpiContext, payload: &[u8]) -> ProviderResponse {
     if path == "tables"    { return ProviderResponse::ok_u64(HANDLE_TABLES_DIR); }
     if path == "namespace" { return ProviderResponse::ok_u64(HANDLE_NS_DIR); }
     if path == "devices"   { return ProviderResponse::ok_u64(HANDLE_DEVICES_DIR); }
+    if path == "events"    { return ProviderResponse::ok_u64(HANDLE_EVENTS); }
 
     // tables/<name>
     if let Some(name) = path.strip_prefix("tables/") {
@@ -399,7 +453,7 @@ fn handle_lookup(ctx: &AcpiContext, payload: &[u8]) -> ProviderResponse {
 
 // ── Stat ──────────────────────────────────────────────────────────────────────
 
-fn handle_stat(ctx: &AcpiContext, payload: &[u8]) -> ProviderResponse {
+fn handle_stat(ctx: &AcpiContext, bus: &EventBus, payload: &[u8]) -> ProviderResponse {
     let handle = match parse_u64_le(payload) {
         Some(h) => h,
         None => return ProviderResponse::err(Errno::EINVAL),
@@ -411,6 +465,12 @@ fn handle_stat(ctx: &AcpiContext, payload: &[u8]) -> ProviderResponse {
         HANDLE_TABLES_DIR  => ProviderResponse::ok_stat(S_IFDIR | 0o555, 0, INO_TABLES_DIR),
         HANDLE_NS_DIR      => ProviderResponse::ok_stat(S_IFDIR | 0o555, 0, INO_NS_DIR),
         HANDLE_DEVICES_DIR => ProviderResponse::ok_stat(S_IFDIR | 0o555, 0, INO_DEVICES_DIR),
+        HANDLE_EVENTS => {
+            // Readable by consumers, writable by event producers.
+            // st_size reflects the total bytes published so far.
+            let size = bus.seq_head * RECORD_SIZE as u64;
+            ProviderResponse::ok_stat(S_IFREG | 0o644, size, INO_EVENTS)
+        }
         h if h >= HANDLE_TABLE_BASE && h < HANDLE_DEV_DIR_BASE => {
             let idx = (h - HANDLE_TABLE_BASE) as usize;
             if let Some(t) = ctx.tables.get(idx) {
@@ -462,13 +522,34 @@ fn dev_file_content<'a>(ctx: &'a AcpiContext, handle: u64) -> Option<&'a [u8]> {
     })
 }
 
-fn handle_read(ctx: &AcpiContext, payload: &[u8]) -> ProviderResponse {
+fn handle_read(ctx: &AcpiContext, bus: &EventBus, payload: &[u8]) -> ProviderResponse {
     if payload.len() < 20 {
         return ProviderResponse::err(Errno::EINVAL);
     }
     let handle = u64::from_le_bytes(payload[0..8].try_into().unwrap_or([0; 8]));
-    let offset = u64::from_le_bytes(payload[8..16].try_into().unwrap_or([0; 8])) as usize;
+    let offset = u64::from_le_bytes(payload[8..16].try_into().unwrap_or([0; 8]));
     let len    = u32::from_le_bytes(payload[16..20].try_into().unwrap_or([0; 4])) as usize;
+
+    if handle == HANDLE_EVENTS {
+        // Fan-out: interpret byte offset as event-sequence * RECORD_SIZE.
+        if offset % RECORD_SIZE as u64 != 0 {
+            return ProviderResponse::err(Errno::EINVAL);
+        }
+        let seq = offset / RECORD_SIZE as u64;
+        return match bus.get(seq) {
+            Some(record) if len >= RECORD_SIZE => ProviderResponse::ok_read(record),
+            Some(_) => ProviderResponse::err(Errno::EINVAL),  // buffer too small
+            None => {
+                if seq < bus.seq_head {
+                    // Event has been overwritten.  Log so unknown events are
+                    // not silently dropped from the consumer's perspective.
+                    warn!("ACPI event bus: consumer at seq {} is behind head {}; event overwritten",
+                          seq, bus.seq_head);
+                }
+                ProviderResponse::err(Errno::EAGAIN)
+            }
+        };
+    }
 
     let data: &[u8] = if handle >= HANDLE_TABLE_BASE && handle < HANDLE_DEV_DIR_BASE {
         let idx = (handle - HANDLE_TABLE_BASE) as usize;
@@ -492,11 +573,49 @@ fn handle_read(ctx: &AcpiContext, payload: &[u8]) -> ProviderResponse {
         return ProviderResponse::err(Errno::EISDIR);
     };
 
+    let offset = offset as usize;
     if offset >= data.len() {
         return ProviderResponse::ok_read(&[]);
     }
     let end = (offset + len).min(data.len());
     ProviderResponse::ok_read(&data[offset..end])
+}
+
+// ── Write (event bus) ─────────────────────────────────────────────────────────
+
+/// Accept a 16-byte normalized [`AcpiEvent`] record written to `HANDLE_EVENTS`.
+///
+/// Only writes to the events handle are accepted; all other handles return
+/// `ENOSYS` as the rest of the `acpid` namespace is read-only.
+fn handle_write_events(bus: &mut EventBus, payload: &[u8]) -> ProviderResponse {
+    if payload.len() < 20 {
+        return ProviderResponse::err(Errno::EINVAL);
+    }
+    let handle   = u64::from_le_bytes(payload[0..8].try_into().unwrap_or([0; 8]));
+    let data_len = u32::from_le_bytes(payload[16..20].try_into().unwrap_or([0; 4])) as usize;
+    if payload.len() < 20 + data_len {
+        return ProviderResponse::err(Errno::EINVAL);
+    }
+    let data = &payload[20..20 + data_len];
+
+    if handle != HANDLE_EVENTS {
+        return ProviderResponse::err(Errno::ENOSYS);
+    }
+    if data_len < RECORD_SIZE {
+        return ProviderResponse::err(Errno::EINVAL);
+    }
+
+    match AcpiEvent::from_bytes(&data[..RECORD_SIZE]) {
+        Some(ev) => {
+            if ev.kind == acpi_common::KIND_UNKNOWN {
+                warn!("ACPI event bus: unknown event kind=0xff source={} raw=0x{:02x} — preserved",
+                      ev.source, ev.raw_code);
+            }
+            bus.publish(ev);
+            ProviderResponse::ok_written(RECORD_SIZE as u32)
+        }
+        None => ProviderResponse::err(Errno::EINVAL),
+    }
 }
 
 fn handle_read_into_fd(ctx: &AcpiContext, payload: &[u8]) -> ProviderResponse {
@@ -564,6 +683,7 @@ fn handle_readdir(ctx: &AcpiContext, payload: &[u8]) -> ProviderResponse {
                 ("tables",    DT_DIR, INO_TABLES_DIR),
                 ("namespace", DT_DIR, INO_NS_DIR),
                 ("devices",   DT_DIR, INO_DEVICES_DIR),
+                ("events",    DT_REG, INO_EVENTS),
             ];
             for (i, &(name, ft, ino)) in entries.iter().enumerate() {
                 if i < offset { continue; }
@@ -611,11 +731,12 @@ fn handle_readdir(ctx: &AcpiContext, payload: &[u8]) -> ProviderResponse {
 // ── Entry point ───────────────────────────────────────────────────────────────
 
 fn run_provider(ctx: AcpiContext, req_read: u32) -> ! {
-    let mut lp = ProviderLoop::new(req_read);
+    let mut lp  = ProviderLoop::new(req_read);
+    let mut bus = EventBus::new();
     loop {
         match lp.next_request() {
             Ok(req) => {
-                let resp = dispatch(&ctx, req.op, &req.payload);
+                let resp = dispatch(&ctx, &mut bus, req.op, &req.payload);
                 if let Err(e) = lp.send_response(&req, resp) {
                     warn!("send_response failed: {:?}", e);
                 }
@@ -786,13 +907,14 @@ mod tests {
     fn read_table_returns_correct_bytes() {
         let data = b"APICXXXXFAKEDATA";
         let ctx = make_ctx(&[("APIC", data)]);
+        let mut bus = EventBus::new();
         let handle = HANDLE_TABLE_BASE;
         let offset: u64 = 0;
         let len: u32 = 16;
         let mut payload = handle.to_le_bytes().to_vec();
         payload.extend_from_slice(&offset.to_le_bytes());
         payload.extend_from_slice(&len.to_le_bytes());
-        let resp = handle_read(&ctx, &payload);
+        let resp = handle_read(&ctx, &mut bus, &payload);
         assert_eq!(resp.status, 0);
         // ok_read prepends a u32 byte count
         let n = u32::from_le_bytes(resp.payload[..4].try_into().unwrap()) as usize;
@@ -803,13 +925,14 @@ mod tests {
     fn read_beyond_end_returns_empty() {
         let data = b"short";
         let ctx = make_ctx(&[("FACP", data)]);
+        let mut bus = EventBus::new();
         let handle = HANDLE_TABLE_BASE;
         let offset: u64 = 1000;
         let len: u32 = 100;
         let mut payload = handle.to_le_bytes().to_vec();
         payload.extend_from_slice(&offset.to_le_bytes());
         payload.extend_from_slice(&len.to_le_bytes());
-        let resp = handle_read(&ctx, &payload);
+        let resp = handle_read(&ctx, &mut bus, &payload);
         assert_eq!(resp.status, 0);
         let n = u32::from_le_bytes(resp.payload[..4].try_into().unwrap());
         assert_eq!(n, 0);
@@ -826,7 +949,7 @@ mod tests {
         payload.extend_from_slice(&max_len.to_le_bytes());
         let resp = handle_readdir(&ctx, &payload);
         assert_eq!(resp.status, 0);
-        // Check raw entry bytes contain "tables" and "devices"
+        // Check raw entry bytes contain "tables", "devices", and "events"
         let raw = &resp.payload[4..]; // skip bytes_read u32
         let raw_str = core::str::from_utf8(raw).unwrap_or("");
         assert!(
@@ -839,6 +962,176 @@ mod tests {
             "readdir should include 'devices': {:?}",
             raw_str
         );
+        assert!(
+            raw.windows(6).any(|w| w == b"events"),
+            "readdir should include 'events': {:?}",
+            raw_str
+        );
+    }
+
+    // ── Event bus ─────────────────────────────────────────────────────────────
+
+    fn make_write_payload(handle: u64, data: &[u8]) -> Vec<u8> {
+        let mut payload = handle.to_le_bytes().to_vec();
+        payload.extend_from_slice(&0u64.to_le_bytes()); // offset
+        payload.extend_from_slice(&(data.len() as u32).to_le_bytes()); // data_len
+        payload.extend_from_slice(data);
+        payload
+    }
+
+    fn make_read_payload(handle: u64, offset: u64, len: u32) -> Vec<u8> {
+        let mut payload = handle.to_le_bytes().to_vec();
+        payload.extend_from_slice(&offset.to_le_bytes());
+        payload.extend_from_slice(&len.to_le_bytes());
+        payload
+    }
+
+    fn sample_event(kind: u8, raw_code: u8) -> AcpiEvent {
+        AcpiEvent { timestamp_ms: 1000, kind, raw_code, source: acpi_common::SOURCE_EC, flags: 0, extra: 0 }
+    }
+
+    #[test]
+    fn lookup_events_returns_handle() {
+        let ctx = make_ctx(&[]);
+        let path = b"events";
+        let mut payload = (path.len() as u32).to_le_bytes().to_vec();
+        payload.extend_from_slice(path);
+        let resp = handle_lookup(&ctx, &payload);
+        assert_eq!(resp.status, 0);
+        assert_eq!(
+            u64::from_le_bytes(resp.payload[..8].try_into().unwrap()),
+            HANDLE_EVENTS
+        );
+    }
+
+    #[test]
+    fn events_eagain_when_empty() {
+        let ctx = make_ctx(&[]);
+        let bus = EventBus::new();
+        let payload = make_read_payload(HANDLE_EVENTS, 0, RECORD_SIZE as u32);
+        let resp = handle_read(&ctx, &bus, &payload);
+        assert_eq!(resp.status, Errno::EAGAIN as u8, "empty bus should return EAGAIN");
+    }
+
+    #[test]
+    fn write_event_then_read_returns_it() {
+        let ctx = make_ctx(&[]);
+        let mut bus = EventBus::new();
+
+        let ev = sample_event(acpi_common::KIND_EC_QUERY, 0x81);
+        let payload = make_write_payload(HANDLE_EVENTS, &ev.to_bytes());
+        let resp = handle_write_events(&mut bus, &payload);
+        assert_eq!(resp.status, 0, "write should succeed");
+
+        let payload = make_read_payload(HANDLE_EVENTS, 0, RECORD_SIZE as u32);
+        let resp = handle_read(&ctx, &bus, &payload);
+        assert_eq!(resp.status, 0, "read after write should succeed");
+        let n = u32::from_le_bytes(resp.payload[..4].try_into().unwrap()) as usize;
+        assert_eq!(n, RECORD_SIZE);
+        let decoded = AcpiEvent::from_bytes(&resp.payload[4..4 + n]).unwrap();
+        assert_eq!(decoded, ev);
+    }
+
+    #[test]
+    fn fan_out_two_readers_each_see_all_events() {
+        let ctx = make_ctx(&[]);
+        let mut bus = EventBus::new();
+
+        // Publish two events.
+        let ev0 = sample_event(acpi_common::KIND_EC_QUERY, 0x10);
+        let ev1 = sample_event(acpi_common::KIND_PM1_POWER_BTN, 0x00);
+        handle_write_events(&mut bus, &make_write_payload(HANDLE_EVENTS, &ev0.to_bytes()));
+        handle_write_events(&mut bus, &make_write_payload(HANDLE_EVENTS, &ev1.to_bytes()));
+
+        // Reader A — starts at offset 0
+        let r = handle_read(&ctx, &bus, &make_read_payload(HANDLE_EVENTS, 0, RECORD_SIZE as u32));
+        assert_eq!(r.status, 0);
+        let got = AcpiEvent::from_bytes(&r.payload[4..4 + RECORD_SIZE]).unwrap();
+        assert_eq!(got, ev0, "reader A should see event 0");
+
+        let r = handle_read(&ctx, &bus, &make_read_payload(HANDLE_EVENTS, RECORD_SIZE as u64, RECORD_SIZE as u32));
+        assert_eq!(r.status, 0);
+        let got = AcpiEvent::from_bytes(&r.payload[4..4 + RECORD_SIZE]).unwrap();
+        assert_eq!(got, ev1, "reader A should see event 1");
+
+        // Reader B — also starts at offset 0 (independent of reader A)
+        let r = handle_read(&ctx, &bus, &make_read_payload(HANDLE_EVENTS, 0, RECORD_SIZE as u32));
+        assert_eq!(r.status, 0);
+        let got = AcpiEvent::from_bytes(&r.payload[4..4 + RECORD_SIZE]).unwrap();
+        assert_eq!(got, ev0, "reader B should independently see event 0");
+    }
+
+    #[test]
+    fn events_eagain_when_caught_up() {
+        let ctx = make_ctx(&[]);
+        let mut bus = EventBus::new();
+
+        let ev = sample_event(acpi_common::KIND_LID_CLOSE, 0x5D);
+        handle_write_events(&mut bus, &make_write_payload(HANDLE_EVENTS, &ev.to_bytes()));
+
+        // Read the one published event.
+        let r = handle_read(&ctx, &bus, &make_read_payload(HANDLE_EVENTS, 0, RECORD_SIZE as u32));
+        assert_eq!(r.status, 0);
+
+        // Next read (offset = RECORD_SIZE) should return EAGAIN — no more events.
+        let r = handle_read(&ctx, &bus, &make_read_payload(HANDLE_EVENTS, RECORD_SIZE as u64, RECORD_SIZE as u32));
+        assert_eq!(r.status, Errno::EAGAIN as u8, "no more events should give EAGAIN");
+    }
+
+    #[test]
+    fn unknown_event_preserved_in_bus() {
+        let ctx = make_ctx(&[]);
+        let mut bus = EventBus::new();
+
+        let ev = AcpiEvent {
+            timestamp_ms: 42,
+            kind:     acpi_common::KIND_UNKNOWN,
+            raw_code: 0xFE,
+            source:   acpi_common::SOURCE_EC,
+            flags:    0,
+            extra:    0,
+        };
+        let payload = make_write_payload(HANDLE_EVENTS, &ev.to_bytes());
+        let resp = handle_write_events(&mut bus, &payload);
+        assert_eq!(resp.status, 0, "unknown event should be accepted");
+        assert_eq!(bus.seq_head, 1, "bus should have one event");
+
+        let r = handle_read(&ctx, &bus, &make_read_payload(HANDLE_EVENTS, 0, RECORD_SIZE as u32));
+        assert_eq!(r.status, 0);
+        let got = AcpiEvent::from_bytes(&r.payload[4..4 + RECORD_SIZE]).unwrap();
+        assert_eq!(got.kind, acpi_common::KIND_UNKNOWN);
+        assert_eq!(got.raw_code, 0xFE);
+    }
+
+    #[test]
+    fn write_to_non_events_handle_returns_enosys() {
+        let mut bus = EventBus::new();
+        let ev = sample_event(acpi_common::KIND_EC_QUERY, 0x00);
+        let payload = make_write_payload(HANDLE_ROOT, &ev.to_bytes());
+        let resp = handle_write_events(&mut bus, &payload);
+        assert_eq!(resp.status, Errno::ENOSYS as u8);
+    }
+
+    #[test]
+    fn ring_wraps_oldest_entry_overwritten() {
+        let ctx = make_ctx(&[]);
+        let mut bus = EventBus::new();
+
+        // Fill the ring completely + 1 to force a wrap.
+        for i in 0..EVENT_RING_CAPACITY + 1 {
+            let ev = sample_event(acpi_common::KIND_EC_QUERY, i as u8);
+            handle_write_events(&mut bus, &make_write_payload(HANDLE_EVENTS, &ev.to_bytes()));
+        }
+        assert_eq!(bus.seq_head, (EVENT_RING_CAPACITY + 1) as u64);
+
+        // Seq 0 has been overwritten — should return EAGAIN.
+        let r = handle_read(&ctx, &bus, &make_read_payload(HANDLE_EVENTS, 0, RECORD_SIZE as u32));
+        assert_eq!(r.status, Errno::EAGAIN as u8, "overwritten event should give EAGAIN");
+
+        // The newest event (seq = EVENT_RING_CAPACITY) should still be readable.
+        let offset = EVENT_RING_CAPACITY as u64 * RECORD_SIZE as u64;
+        let r = handle_read(&ctx, &bus, &make_read_payload(HANDLE_EVENTS, offset, RECORD_SIZE as u32));
+        assert_eq!(r.status, 0, "newest event should be readable after wrap");
     }
 }
 

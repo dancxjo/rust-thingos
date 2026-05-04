@@ -29,10 +29,14 @@
 #![cfg_attr(not(test), no_main)]
 extern crate alloc;
 
+use acpi_common::{
+    AcpiEvent, KIND_LID_CLOSE, KIND_LID_OPEN, KIND_PM1_POWER_BTN, KIND_PM1_SLEEP_BTN,
+    SOURCE_PM1,
+};
 use abi::errors::Errno;
 use abi::vfs_rpc::VfsRpcOp;
 use ipc_helpers::provider::{ProviderLoop, ProviderResponse};
-use stem::syscall::vfs::{vfs_close, vfs_mount, vfs_open, vfs_read};
+use stem::syscall::vfs::{vfs_close, vfs_mount, vfs_open, vfs_read, vfs_write};
 use stem::syscall::{ioport_read, ioport_write, irq_subscribe};
 use stem::{info, trace, warn};
 
@@ -121,6 +125,8 @@ pub static MANIFEST: ManifestHeader = ManifestHeader {
 // ── Constants ─────────────────────────────────────────────────────────────────
 
 const MOUNT_PATH: &str = "/run/power";
+/// Path to the normalized ACPI event bus maintained by `acpid`.
+const ACPI_EVENT_BUS: &str = "/services/acpi/events";
 const PORT_CAPACITY: usize = 4096;
 
 /// SCI IRQ vector (ACPI SCI is typically GSI 9, vector 0x29 in Thing-OS).
@@ -346,9 +352,28 @@ impl PowerState {
     }
 }
 
+// ── ACPI event bus publishing ─────────────────────────────────────────────────
+
+/// Attempt to open the normalized ACPI event bus for writing.
+fn open_acpi_bus() -> Option<u32> {
+    use abi::syscall::vfs_flags::O_WRONLY;
+    vfs_open(ACPI_EVENT_BUS, O_WRONLY).ok()
+}
+
+/// Publish one event to the ACPI event bus (best-effort, non-fatal on failure).
+fn publish_to_bus(bus_fd: Option<u32>, kind: u8, raw_code: u8) {
+    let fd = match bus_fd {
+        Some(f) => f,
+        None => return,
+    };
+    let ts_ms = stem::time::monotonic_ns() / 1_000_000;
+    let ev = AcpiEvent { timestamp_ms: ts_ms, kind, raw_code, source: SOURCE_PM1, flags: 0, extra: 0 };
+    let _ = vfs_write(fd, &ev.to_bytes());
+}
+
 // ── PM1 event polling ─────────────────────────────────────────────────────────
 
-fn poll_pm1_port(state: &mut PowerState, port: usize) {
+fn poll_pm1_port(state: &mut PowerState, port: usize, bus_fd: Option<u32>) {
     let pm1_sts = ioport_read(port, 2) as u16;
     if pm1_sts == 0 || pm1_sts == 0xFFFF {
         return;
@@ -358,23 +383,25 @@ fn poll_pm1_port(state: &mut PowerState, port: usize) {
         // Write-1-to-clear the status bit.
         ioport_write(port, PM1_PWRBTN_STS as usize, 2);
         state.enqueue(EVENT_POWER_BUTTON);
+        publish_to_bus(bus_fd, KIND_PM1_POWER_BTN, 0);
         info!("Power button pressed");
     }
 
     if pm1_sts & PM1_SLPBTN_STS != 0 {
         ioport_write(port, PM1_SLPBTN_STS as usize, 2);
         state.enqueue(EVENT_SLEEP_BUTTON);
+        publish_to_bus(bus_fd, KIND_PM1_SLEEP_BTN, 0);
         info!("Sleep button pressed");
     }
 }
 
-fn poll_pm1_events(state: &mut PowerState) {
+fn poll_pm1_events(state: &mut PowerState, bus_fd: Option<u32>) {
     // We can't hold a shared reference to state.fadt while mutably borrowing
     // state, so extract the port values first.
     let pm1a_port = state.fadt.as_ref().and_then(|f| f.pm1_sts_port());
     let pm1b_port = state.fadt.as_ref().and_then(|f| f.pm1b_sts_port());
-    if let Some(port) = pm1a_port { poll_pm1_port(state, port); }
-    if let Some(port) = pm1b_port { poll_pm1_port(state, port); }
+    if let Some(port) = pm1a_port { poll_pm1_port(state, port, bus_fd); }
+    if let Some(port) = pm1b_port { poll_pm1_port(state, port, bus_fd); }
 }
 
 // ── EC event polling ──────────────────────────────────────────────────────────
@@ -385,7 +412,7 @@ fn poll_pm1_events(state: &mut PowerState) {
 const EC_LID_CLOSE_CODES: &[u8] = &[0x80, 0x5D];
 const EC_LID_OPEN_CODES:  &[u8] = &[0x81, 0x5C];
 
-fn poll_ec_events(state: &mut PowerState, ec_fd: Option<u32>) {
+fn poll_ec_events(state: &mut PowerState, ec_fd: Option<u32>, bus_fd: Option<u32>) {
     let fd = match ec_fd {
         Some(f) => f,
         None => return,
@@ -397,11 +424,13 @@ fn poll_ec_events(state: &mut PowerState, ec_fd: Option<u32>) {
             if EC_LID_CLOSE_CODES.contains(&c) {
                 state.lid_open = false;
                 state.enqueue(EVENT_LID_CLOSE);
+                publish_to_bus(bus_fd, KIND_LID_CLOSE, c);
                 info!("Lid closed");
                 trace!("Lid closed via EC query=0x{:02x}", c);
             } else if EC_LID_OPEN_CODES.contains(&c) {
                 state.lid_open = true;
                 state.enqueue(EVENT_LID_OPEN);
+                publish_to_bus(bus_fd, KIND_LID_OPEN, c);
                 info!("Lid opened");
                 trace!("Lid opened via EC query=0x{:02x}", c);
             }
@@ -581,6 +610,12 @@ fn run_loop(req_read: u32) -> ! {
         info!("EC events stream unavailable; lid detection disabled");
     }
 
+    // Try to open the normalized ACPI event bus (non-fatal if acpid not ready).
+    let bus_fd = open_acpi_bus();
+    if bus_fd.is_some() {
+        info!("Connected to ACPI event bus");
+    }
+
     let mut lp    = ProviderLoop::new(req_read);
     let mut state = PowerState::new(fadt_opt);
 
@@ -620,10 +655,10 @@ fn run_loop(req_read: u32) -> ! {
         }
 
         // 2. Poll PM1 event status registers for fixed hardware events.
-        poll_pm1_events(&mut state);
+        poll_pm1_events(&mut state, bus_fd);
 
         // 3. Drain EC query-event codes for lid state.
-        poll_ec_events(&mut state, ec_fd);
+        poll_ec_events(&mut state, ec_fd, bus_fd);
 
         stem::time::sleep_ms(POLL_MS);
     }
