@@ -348,3 +348,31 @@ pub fn spawn_acpid() -> Option<u64> {
         }
     }
 }
+
+/// Spawn the FAT filesystem service (`/drivers/fatd`).
+///
+/// fatd waits for USB partition block devices under `/dev/block` and mounts
+/// the first FAT volume it can probe at `/media/usb`.
+pub fn spawn_fatd() -> Option<u64> {
+    let path = "/drivers/fatd";
+    let argv: [&[u8]; 1] = [path.as_bytes()];
+    let env = BTreeMap::new();
+    let null = abi::types::stdio_mode::NULL;
+    let inherit = abi::types::stdio_mode::INHERIT;
+
+    match stem::syscall::spawn_process_ex(path, &argv, &env, null, inherit, inherit, 0, &[]) {
+        Ok(resp) => {
+            let pid = resp.child_tid;
+            debug!("Spawned fatd with PID {}", pid);
+            Some(pid)
+        }
+        Err(Errno::ENOENT) => {
+            debug!("fatd binary not found; skipping FAT service");
+            None
+        }
+        Err(err) => {
+            warn!("Failed to spawn fatd: {:?}", err);
+            None
+        }
+    }
+}

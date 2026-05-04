@@ -12,8 +12,8 @@ use stem::{debug, info, warn};
 
 use crate::pipelines::{
     kernel_terminal_requested, safe_shell_requested, spawn_acpid, spawn_bloom, spawn_blossom,
-    spawn_bristle, spawn_chime, spawn_kernel_terminal_shell, spawn_netd, spawn_safe_serial_shell,
-    spawn_safe_shell, spawn_shell,
+    spawn_bristle, spawn_chime, spawn_fatd, spawn_kernel_terminal_shell, spawn_netd,
+    spawn_safe_serial_shell, spawn_safe_shell, spawn_shell,
 };
 
 const SHELL_HEADSTART_MS: u64 = 50;
@@ -64,6 +64,7 @@ impl Supervisor {
             }
             self.spawn_cambium()
         };
+        let _fatd_pid = spawn_fatd();
 
         self.activate_boot_roots();
         if !kernel_terminal {
