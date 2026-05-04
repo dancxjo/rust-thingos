@@ -340,4 +340,44 @@ mod tests {
         assert!(state_tree.node(state_nodes.hover).unwrap().states.contains_state(State::Hover));
         assert!(state_tree.node(state_nodes.active).unwrap().states.contains_state(State::Active));
     }
+
+    /// Regression: a narrow popup (236 × 70 px, matching the hello popup demo) causes
+    /// the stile state strip – which requires ~412 px for five 76 px swatches – to overflow
+    /// the container width.  `paint_tree` must clip descendants to the popup content area
+    /// so none of their pixels escape the popup surface.
+    #[test]
+    fn stile_state_strip_overflows_narrow_popup() {
+        let showcase = PetalsShowcase::default();
+        let (mut tree, nodes) =
+            showcase.stile_state_tree().expect("stile state tree must build");
+
+        // These are the exact dimensions used by render_popup → render_stile_demo
+        // for a 260 × 150 px popup surface.
+        let popup_inner_w = 236u32;
+        let popup_inner_h = 70u32;
+        showcase
+            .prepare_component(
+                &mut tree,
+                popup_inner_w,
+                popup_inner_h,
+                JustifyContent::Start,
+                AlignItems::Stretch,
+            )
+            .expect("layout must succeed");
+
+        // At least one swatch should be positioned beyond the available width,
+        // demonstrating that a clip is necessary to prevent overflow painting.
+        let container_right = popup_inner_w as f32;
+        let any_overflow =
+            [nodes.normal, nodes.hover, nodes.active, nodes.focus, nodes.disabled]
+                .iter()
+                .filter_map(|&id| tree.global_layout_box(id).ok())
+                .any(|b| b.x + b.width > container_right);
+
+        assert!(
+            any_overflow,
+            "expected at least one swatch to overflow the {popup_inner_w} px container; \
+             without a clip rect in paint_tree these pixels would escape the popup border"
+        );
+    }
 }
