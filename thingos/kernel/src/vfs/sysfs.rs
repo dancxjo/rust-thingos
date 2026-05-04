@@ -78,9 +78,7 @@ impl VfsDriver for SysFs {
                 Ok(Arc::new(StaticDirNode::new(302, &["acpi", "dtb", "hhdm", "framebuffer"])))
             }
             // /sys/firmware/acpi/ — directory with rsdp file and tables subdirectory.
-            SysPath::AcpiDir => {
-                Ok(Arc::new(StaticDirNode::new(0x5ffd, &["rsdp", "tables"])))
-            }
+            SysPath::AcpiDir => Ok(Arc::new(StaticDirNode::new(0x5ffd, &["rsdp", "tables"]))),
             SysPath::AcpiRsdpFile => {
                 if let Some(rsdp) = crate::boot_info::get().and_then(|i| i.acpi_rsdp) {
                     let text = format!("0x{:016x}\n", rsdp);
@@ -555,7 +553,8 @@ fn lookup_virtio_file(
 // ── ACPI table sysfs helpers ─────────────────────────────────────────────────
 
 /// Enumerate ACPI tables from boot_info and return them with their sysfs names.
-fn acpi_entries() -> alloc::vec::Vec<(usize, alloc::string::String, crate::acpi_tables::AcpiEntry)> {
+fn acpi_entries() -> alloc::vec::Vec<(usize, alloc::string::String, crate::acpi_tables::AcpiEntry)>
+{
     let info = match crate::boot_info::get() {
         Some(i) => i,
         None => return alloc::vec![],
@@ -566,11 +565,7 @@ fn acpi_entries() -> alloc::vec::Vec<(usize, alloc::string::String, crate::acpi_
     };
     let entries = crate::acpi_tables::enumerate(rsdp_phys, info.hhdm_offset);
     let names = crate::acpi_tables::sysfs_names(&entries);
-    names
-        .into_iter()
-        .zip(entries)
-        .map(|((idx, name), entry)| (idx, name, entry))
-        .collect()
+    names.into_iter().zip(entries).map(|((idx, name), entry)| (idx, name, entry)).collect()
 }
 
 /// Get raw bytes for a specific ACPI table by its sysfs name (e.g. `APIC`,

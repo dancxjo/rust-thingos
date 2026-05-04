@@ -703,6 +703,16 @@ pub trait BootRuntimeBase: 'static {
 
     fn phys_to_virt_offset(&self) -> u64;
 
+    /// Map a physical range into a temporary kernel virtual address.
+    /// This is used for firmware tables and other physical regions that may
+    /// not already be reachable through the direct map.
+    fn map_phys_temp(&self, _phys: u64, _size: usize) -> Result<u64, Errno> {
+        Err(Errno::NotSupported)
+    }
+
+    /// Unmap a range returned by `map_phys_temp`.
+    fn unmap_phys_temp(&self, _virt: u64, _size: usize) {}
+
     /// Read the current thread's user TLS base from hardware (FS_BASE on x86_64).
     /// Returns 0 on architectures without a dedicated user TLS register.
     fn get_user_tls_base_dyn(&self) -> u64 {

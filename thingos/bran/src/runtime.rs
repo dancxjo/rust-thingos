@@ -1,4 +1,5 @@
 use core::sync::atomic::{AtomicBool, Ordering};
+
 use kernel::{
     BootModuleDesc, BootRuntime, BootRuntimeBase, BootTasking, CpuId, FrameAllocatorHook,
     FramebufferInfo, IrqState, MapKind, MapPerms, PhysRange, UserEntry, UserTaskSpec,
@@ -522,6 +523,14 @@ impl<A: ArchRuntime + 'static> BootRuntimeBase for Runtime<A> {
 
     fn phys_to_virt_offset(&self) -> u64 {
         self.limine.phys_to_virt_offset()
+    }
+
+    fn map_phys_temp(&self, phys: u64, size: usize) -> Result<u64, abi::errors::Errno> {
+        self.arch.map_phys_temp(phys, size)
+    }
+
+    fn unmap_phys_temp(&self, virt: u64, size: usize) {
+        self.arch.unmap_phys_temp(virt, size)
     }
 
     fn get_user_tls_base_dyn(&self) -> u64 {
