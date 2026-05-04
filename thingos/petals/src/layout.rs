@@ -3,7 +3,7 @@ use alloc::vec::Vec;
 
 use stile::{
     AlignItems as StileAlignItems, FlexDirection as StileFlexDirection, FontWeight,
-    JustifyContent as StileJustifyContent, ResolvedStyle, Rule,
+    JustifyContent as StileJustifyContent, Overflow as StileOverflow, ResolvedStyle, Rule,
 };
 use taffy::prelude::*;
 pub use taffy::prelude::{AvailableSpace, Size};
@@ -229,6 +229,40 @@ impl UiTree {
         }
     }
 
+    /// Returns the declared overflow mode for the given node.
+    ///
+    /// When no explicit overflow is set, containers default to [`StileOverflow::Clip`] so
+    /// that the renderer always has a well-defined policy.  Non-container nodes return
+    /// `None` to indicate that they carry no overflow intent of their own.
+    pub fn overflow_intent(&self, id: NodeId) -> Option<StileOverflow> {
+        let node = self.nodes.get(id as usize)?;
+        let is_container = node.descriptions.iter().any(|d| {
+            matches!(
+                d,
+                Description::Container
+                    | Description::ScrollContainer
+                    | Description::WindowChrome
+                    | Description::WindowContent
+                    | Description::ApplicationGrid
+                    | Description::ApplicationRow
+            )
+        });
+        if !is_container {
+            return None;
+        }
+        Some(node.style.overflow.unwrap_or(StileOverflow::Clip))
+    }
+
+    /// Creates a scroll container node: a [`Description::Container`] +
+    /// [`Description::ScrollContainer`] node with [`Overflow::Scroll`] pre-applied.
+    pub fn scroll_container(&mut self) -> Result<NodeId, taffy::TaffyError> {
+        let id = self.add_node(&[Description::Container, Description::ScrollContainer])?;
+        if let Some(node) = self.node_mut(id) {
+            node.style.overflow = Some(StileOverflow::Scroll);
+        }
+        Ok(id)
+    }
+
     fn parent_of(&self, id: NodeId) -> Option<NodeId> {
         self.nodes
             .iter()
@@ -308,6 +342,11 @@ pub fn apply_style_to_taffy(style: &ResolvedStyle) -> Style {
     let length = |value: f32| LengthPercentage::from_length(value);
     let length_auto = |value: f32| LengthPercentageAuto::from_length(value);
 
+    let flex_wrap = match style.overflow {
+        Some(StileOverflow::Wrap) => FlexWrap::Wrap,
+        _ => FlexWrap::NoWrap,
+    };
+
     Style {
         display: Display::Flex,
         size: Size {
@@ -332,6 +371,7 @@ pub fn apply_style_to_taffy(style: &ResolvedStyle) -> Style {
         flex_direction: map_flex_direction(
             style.flex_direction.unwrap_or(StileFlexDirection::Column),
         ),
+        flex_wrap,
         flex_basis: style.flex_basis.map(Dimension::from_length).unwrap_or(Dimension::AUTO),
         flex_grow: style.flex_grow.unwrap_or(0.0),
         flex_shrink: style.flex_shrink.unwrap_or(1.0),
@@ -374,6 +414,7 @@ fn default_stylable_for(descriptions: &[Description]) -> Stylable {
                 | Description::Titlebar
                 | Description::WindowContent
                 | Description::ResizeEdge
+                | Description::ScrollContainer
         )
     }) {
         stylable.properties.push(StyleProperty::BackgroundColor);
@@ -428,7 +469,7 @@ fn map_align_items(value: StileAlignItems) -> AlignItems {
 
 #[cfg(test)]
 mod tests {
-    use stile::{AlignItems, Color, Declaration, FlexDirection, JustifyContent, Selector};
+    use stile::{AlignItems, Color, Declaration, FlexDirection, JustifyContent, Overflow, Selector};
 
     use super::*;
 
@@ -540,6 +581,58 @@ mod tests {
         assert_eq!(tree.layout_box(tree.root()).unwrap().width, 80.0);
     }
 
+    #[test]
+    fn container_defaults_to_clip_overflow_when_no_policy_set() {
+        let tree = UiTree::new().unwrap();
+        // Root node is a Container; it should report Clip when no overflow is declared.
+        assert_eq!(tree.overflow_intent(tree.root()), Some(Overflow::Clip));
+    }
+
+    #[test]
+    fn container_reports_declared_overflow_policy() {
+        let mut tree = UiTree::new().unwrap();
+        let rules = alloc::vec![Rule::new(
+            Selector::has(Description::Container),
+            alloc::vec![Declaration::Overflow(Overflow::Scroll)],
+        )];
+        tree.restyle(&rules).unwrap();
+        assert_eq!(tree.overflow_intent(tree.root()), Some(Overflow::Scroll));
+    }
+
+    #[test]
+    fn non_container_node_has_no_overflow_intent() {
+        let mut tree = UiTree::new().unwrap();
+        let label = tree.text("hello").unwrap();
+        tree.add_child(tree.root(), label).unwrap();
+        // Textual nodes carry no overflow intent.
+        assert_eq!(tree.overflow_intent(label), None);
+    }
+
+    #[test]
+    fn scroll_container_factory_creates_scroll_node() {
+        let mut tree = UiTree::new().unwrap();
+        let sc = tree.scroll_container().unwrap();
+        // The factory node must report Scroll.
+        assert_eq!(tree.overflow_intent(sc), Some(Overflow::Scroll));
+        // It must carry the ScrollContainer description.
+        let node = tree.node(sc).unwrap();
+        assert!(node.descriptions.contains(&Description::ScrollContainer));
+    }
+
+    #[test]
+    fn overflow_wrap_enables_flex_wrap_in_taffy_style() {
+        let style = ResolvedStyle { overflow: Some(Overflow::Wrap), ..ResolvedStyle::default() };
+        let taffy_style = apply_style_to_taffy(&style);
+        assert_eq!(taffy_style.flex_wrap, FlexWrap::Wrap);
+    }
+
+    #[test]
+    fn overflow_clip_and_scroll_do_not_enable_flex_wrap() {
+        for overflow in [Overflow::Clip, Overflow::Scroll] {
+            let style = ResolvedStyle { overflow: Some(overflow), ..ResolvedStyle::default() };
+            let taffy_style = apply_style_to_taffy(&style);
+            assert_eq!(taffy_style.flex_wrap, FlexWrap::NoWrap);
+        }
     /// A `list_row_pressable` should expand to fill the full container width
     /// when the parent container uses `align_items: Stretch`.
     ///

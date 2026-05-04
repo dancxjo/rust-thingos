@@ -95,6 +95,19 @@ pub enum StyleProperty {
     FontFamily,
     FontSize,
     FontWeight,
+    Overflow,
+}
+
+/// How a container handles content that extends beyond its bounds.
+#[derive(Clone, Copy, Debug, Default, PartialEq, Eq, Hash)]
+pub enum Overflow {
+    /// Content is clipped to the container's bounds (default).
+    #[default]
+    Clip,
+    /// Flex items are allowed to wrap onto the next line.
+    Wrap,
+    /// Overflow content is reachable via scrolling.
+    Scroll,
 }
 
 #[derive(Clone, Debug, Default, PartialEq)]
@@ -124,6 +137,7 @@ impl Stylable {
                 StyleProperty::FlexDirection,
                 StyleProperty::JustifyContent,
                 StyleProperty::AlignItems,
+                StyleProperty::Overflow,
             ],
             states: Vec::new(),
             controls: Vec::new(),
@@ -194,4 +208,5 @@ pub struct ResolvedStyle {
     pub font_family: Option<String>,
     pub font_size: Option<f32>,
     pub font_weight: Option<FontWeight>,
+    pub overflow: Option<Overflow>,
 }

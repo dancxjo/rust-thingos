@@ -56,6 +56,7 @@ pub enum Description {
     ShowcaseStateStrip,
     Desktop,
     Wallpaper,
+    ScrollContainer,
     /// A full-width pressable list row.  Nodes with this description expand
     /// to fill the container's cross-axis when the parent uses
     /// `align_items: Stretch` (e.g. a `flex-direction: column` list where
