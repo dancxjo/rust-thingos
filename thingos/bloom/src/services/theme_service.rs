@@ -62,10 +62,18 @@ pub fn ensure_theme_config(config_path: &str) -> String {
 /// previous value.  Called by `apply_theme` and bloom's startup to keep the
 /// wallpaper config in sync with the active theme.
 pub fn write_themed_wallpaper(config_path: &str, wallpaper_path: &str) {
-    if let Ok(fd) = vfs_open(config_path, O_CREAT | O_TRUNC | O_RDWR) {
-        let _ = vfs_write(fd, wallpaper_path.as_bytes());
-        let _ = vfs_write(fd, b"\n");
-        let _ = vfs_close(fd);
+    match vfs_open(config_path, O_CREAT | O_TRUNC | O_RDWR) {
+        Ok(fd) => {
+            let ok = vfs_write(fd, wallpaper_path.as_bytes()).is_ok()
+                && vfs_write(fd, b"\n").is_ok();
+            let _ = vfs_close(fd);
+            if !ok {
+                stem::warn!("Failed to write wallpaper config {}", config_path);
+            }
+        }
+        Err(e) => {
+            stem::warn!("Could not open wallpaper config {}: {:?}", config_path, e);
+        }
     }
 }
 
