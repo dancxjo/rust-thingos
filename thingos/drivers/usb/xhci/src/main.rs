@@ -33,7 +33,7 @@ use ipc_helpers::service_provider::{ServiceProviderEvent, ServiceProviderLoop};
 use spin::Mutex;
 use stem::abi::module_manifest::{MANIFEST_MAGIC, ManifestHeader, ModuleKind, device_kind_bytes};
 use stem::device::device_enable_msi;
-use stem::syscall::vfs::{vfs_close, vfs_mkdir, vfs_mount, vfs_open, vfs_read, vfs_symlink};
+use stem::syscall::vfs::{vfs_mkdir, vfs_mount, vfs_symlink};
 use stem::syscall::{
     device_alloc_dma, device_claim, device_dma_phys, device_irq_subscribe, device_irq_wait,
     device_map_mmio, port_create,
@@ -1917,33 +1917,24 @@ fn run_partition_provider(
     }
 }
 
-fn scan_mbr_partitions_from_vfs(
-    path: &str,
+fn scan_mbr_partitions_from_provider(
+    provider: &SharedUsbBlockProvider,
     disk_sectors: u64,
     sector_size: usize,
 ) -> Vec<MbrPartition> {
-    let fd = match vfs_open(path, abi::syscall::vfs_flags::O_RDONLY) {
-        Ok(fd) => fd,
-        Err(e) => {
-            warn!("USB partition scan failed to open {}: {:?}.", path, e);
-            return Vec::new();
-        }
+    let sector_size = sector_size.max(1);
+    let sectors_to_read = (512usize.saturating_add(sector_size - 1) / sector_size).max(1) as u64;
+    let mut mbr_buf = vec![0u8; sectors_to_read as usize * sector_size];
+    let read_result = {
+        let mut provider = provider.lock();
+        let UsbBlockProvider { controller, storage } = &mut *provider;
+        storage.read_sectors(controller, 0, sectors_to_read, &mut mbr_buf)
     };
-    let mut mbr_buf = vec![0u8; sector_size.max(512)];
-    let n = match vfs_read(fd, &mut mbr_buf) {
-        Ok(n) => n,
-        Err(e) => {
-            warn!("USB partition scan failed to read {} LBA 0: {:?}.", path, e);
-            let _ = vfs_close(fd);
-            return Vec::new();
-        }
-    };
-    let _ = vfs_close(fd);
-    if n < 512 {
-        warn!("USB partition scan read only {} bytes from {}.", n, path);
+    if let Err(e) = read_result {
+        warn!("USB partition scan failed to read LBA 0: {}", e);
         return Vec::new();
     }
-    trace!("USB partition scan read {} LBA 0", path);
+    trace!("USB partition scan read LBA 0");
     parse_mbr_partitions(&mbr_buf, disk_sectors)
 }
 
@@ -2002,10 +1993,10 @@ fn serve_usb_block(controller: XhciController, storage: UsbMassStorage) -> ! {
     let provider = Arc::new(Mutex::new(provider));
     spawn_whole_disk_provider(provider.clone(), ProviderLoop::new(v_r));
 
-    // Scan partitions through the mounted block provider so /dev/block/usb0 is
-    // already live if userland probes the whole disk while partition discovery
-    // is still in progress.
-    let parts = scan_mbr_partitions_from_vfs("/dev/block/usb0", disk_sectors, sector_size);
+    // Scan partitions directly through the in-process provider.  Opening our
+    // freshly mounted VFS node here races the provider worker startup and can
+    // self-timeout before the worker has registered with the scheduler.
+    let parts = scan_mbr_partitions_from_provider(&provider, disk_sectors, sector_size);
 
     // Mount a provider for each discovered MBR partition.  Keep the first
     // partition on the original xHCI task so the hot USB-FAT path uses the
