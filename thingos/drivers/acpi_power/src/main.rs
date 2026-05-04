@@ -34,7 +34,7 @@ use abi::vfs_rpc::VfsRpcOp;
 use ipc_helpers::provider::{ProviderLoop, ProviderResponse};
 use stem::syscall::vfs::{vfs_close, vfs_mount, vfs_open, vfs_read};
 use stem::syscall::{ioport_read, ioport_write, irq_subscribe};
-use stem::{debug, info, warn};
+use stem::{info, trace, warn};
 
 // ── Driver manifest glue (mirrors acpi_ec) ───────────────────────────────────
 
@@ -202,7 +202,7 @@ impl Gas {
     /// platform reset on systems that implement the ACPI reset register.
     fn write_io(&self, value: u8) {
         if self.space_id == 1 && self.address != 0 {
-            let width = if self.bit_width == 0 { 1 } else { (self.bit_width / 8).max(1) as usize };
+            let width = if self.bit_width == 0 { 1 } else { ((self.bit_width + 7) / 8).max(1) as usize };
             ioport_write(self.address as usize, value as usize, width);
         }
     }
@@ -331,7 +331,7 @@ impl PowerState {
     fn enqueue(&mut self, code: u8) {
         let next = (self.ev_tail + 1) % EVENTS_CAP;
         if next == self.ev_head {
-            warn!("Power event buffer full, dropping code=0x{:02x}", code);
+            warn!("Event buffer full, dropping code=0x{:02x}", code);
             return;
         }
         self.events[self.ev_tail] = code;
@@ -358,13 +358,13 @@ fn poll_pm1_port(state: &mut PowerState, port: usize) {
         // Write-1-to-clear the status bit.
         ioport_write(port, PM1_PWRBTN_STS as usize, 2);
         state.enqueue(EVENT_POWER_BUTTON);
-        debug!("Power button pressed");
+        info!("Power button pressed");
     }
 
     if pm1_sts & PM1_SLPBTN_STS != 0 {
         ioport_write(port, PM1_SLPBTN_STS as usize, 2);
         state.enqueue(EVENT_SLEEP_BUTTON);
-        debug!("Sleep button pressed");
+        info!("Sleep button pressed");
     }
 }
 
@@ -397,11 +397,13 @@ fn poll_ec_events(state: &mut PowerState, ec_fd: Option<u32>) {
             if EC_LID_CLOSE_CODES.contains(&c) {
                 state.lid_open = false;
                 state.enqueue(EVENT_LID_CLOSE);
-                debug!("Lid closed (EC query=0x{:02x})", c);
+                info!("Lid closed");
+                trace!("Lid closed via EC query=0x{:02x}", c);
             } else if EC_LID_OPEN_CODES.contains(&c) {
                 state.lid_open = true;
                 state.enqueue(EVENT_LID_OPEN);
-                debug!("Lid opened (EC query=0x{:02x})", c);
+                info!("Lid opened");
+                trace!("Lid opened via EC query=0x{:02x}", c);
             }
         }
         _ => {}
@@ -564,18 +566,18 @@ fn run_loop(req_read: u32) -> ! {
 
     match &fadt_opt {
         Some(f) if f.pm1a_evt_blk != 0 => {
-            debug!("PM1a event block at port 0x{:04x} (half={} bytes)",
+            trace!("PM1a event block at port 0x{:04x} (half={} bytes)",
                    f.pm1a_evt_blk, f.pm1_evt_half);
         }
-        _ => debug!("FADT not available; PM1 polling disabled"),
+        _ => info!("PM1 polling disabled (FADT not available)"),
     }
 
     // Try to open the EC events stream.
     let ec_fd = open_ec_events();
     if ec_fd.is_some() {
-        debug!("EC events stream opened");
+        info!("EC events stream opened");
     } else {
-        debug!("EC events stream unavailable; lid detection disabled");
+        info!("EC events stream unavailable; lid detection disabled");
     }
 
     let mut lp    = ProviderLoop::new(req_read);
@@ -634,8 +636,8 @@ fn main(_raw_arg: usize) -> ! {
 
     // Subscribe to the ACPI SCI so we wake promptly on fixed hardware events.
     match irq_subscribe(SCI_VECTOR) {
-        Ok(()) => debug!("Subscribed to SCI vector 0x{:02x}", SCI_VECTOR),
-        Err(_) => debug!("SCI IRQ unavailable; relying on polling"),
+        Ok(()) => trace!("Subscribed to SCI vector 0x{:02x}", SCI_VECTOR),
+        Err(_) => info!("SCI IRQ unavailable; relying on polling"),
     }
 
     let (req_write, req_read) = match stem::syscall::port::port_create(PORT_CAPACITY) {
@@ -650,7 +652,7 @@ fn main(_raw_arg: usize) -> ! {
     if let Err(e) = vfs_mount(req_write, MOUNT_PATH) {
         warn!("Mount at {} failed: {:?}", MOUNT_PATH, e);
     } else {
-        debug!("Mounted at {}", MOUNT_PATH);
+        info!("Mounted at {}", MOUNT_PATH);
     }
 
     run_loop(req_read)
