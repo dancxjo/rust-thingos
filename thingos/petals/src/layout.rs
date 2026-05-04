@@ -2,8 +2,8 @@ use alloc::string::String;
 use alloc::vec::Vec;
 
 use stile::{
-    AlignItems as StileAlignItems, Declaration, FlexDirection as StileFlexDirection, FontWeight,
-    JustifyContent as StileJustifyContent, ResolvedStyle, Rule, Selector,
+    AlignItems as StileAlignItems, FlexDirection as StileFlexDirection, FontWeight,
+    JustifyContent as StileJustifyContent, ResolvedStyle, Rule,
 };
 use taffy::prelude::*;
 pub use taffy::prelude::{AvailableSpace, Size};
@@ -151,11 +151,8 @@ impl UiTree {
     }
 
     pub fn restyle(&mut self, rules: &[Rule<Description>]) -> Result<(), taffy::TaffyError> {
-        // Built-in rules are prepended so user-supplied rules take precedence.
-        let mut all_rules = built_in_rules();
-        all_rules.extend_from_slice(rules);
         for id in 0..self.nodes.len() {
-            let style = stile::compute_for(&self.nodes[id], &all_rules);
+            let style = stile::compute_for(&self.nodes[id], rules);
             self.apply_style(id as NodeId, style)?;
         }
         Ok(())
@@ -427,17 +424,6 @@ fn map_align_items(value: StileAlignItems) -> AlignItems {
         StileAlignItems::End => AlignItems::End,
         StileAlignItems::Stretch => AlignItems::Stretch,
     }
-}
-
-/// Built-in default rules that are prepended to every [`UiTree::restyle`]
-/// call so that semantic node types have sensible layout defaults without
-/// requiring every caller to repeat them.  User-supplied rules are appended
-/// after these, so they win in cascade order.
-fn built_in_rules() -> Vec<Rule<Description>> {
-    // Currently empty — future built-in defaults can be added here.
-    // Users wanting full-width list rows should set `align-items: Stretch` on
-    // the parent container (cross-axis fill for column layouts).
-    alloc::vec![]
 }
 
 #[cfg(test)]
