@@ -532,6 +532,19 @@ impl DriverReadyV1 {
     }
 }
 
+/// Theme-changed notification — broadcast by the `themes` program to its process
+/// group whenever the user selects a new desktop theme.  Recipients should
+/// re-read `/session/desktop/theme` and apply the new theme immediately.
+///
+/// The payload is the UTF-8 theme name (no NUL terminator, no trailing newline)
+/// so that receivers can apply the theme without re-reading the file.
+///
+/// The constant value is a randomly generated UUID v4:
+/// `a3f2c1b4-7e8d-4a5f-9c0e-1d2b3a4c5e6f`.
+pub const KIND_ID_THINGOS_UI_THEME_CHANGED: [u8; 16] = [
+    0xa3, 0xf2, 0xc1, 0xb4, 0x7e, 0x8d, 0x4a, 0x5f, 0x9c, 0x0e, 0x1d, 0x2b, 0x3a, 0x4c, 0x5e, 0x6f,
+];
+
 /// Shutdown request — sent by a supervisor to a service inbox when the system
 /// is moving toward poweroff and the service should stop spawning work,
 /// quiesce children, and report when it is ready for final halt.

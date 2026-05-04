@@ -198,6 +198,11 @@ impl Application for ClockApp {
                 return AppAction::Quit;
             }
             ServiceEvent::Timeout => self.tick_and_render(),
+            ServiceEvent::Message { kind, .. }
+                if kind.0 == stem::kinds::KIND_ID_THINGOS_UI_THEME_CHANGED =>
+            {
+                self.tick_and_render();
+            }
             ServiceEvent::Message { .. } | ServiceEvent::Ready { .. } => {}
             ServiceEvent::InboxClosed => return AppAction::Quit,
         }
