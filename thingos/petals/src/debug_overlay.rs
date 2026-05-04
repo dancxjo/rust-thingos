@@ -21,7 +21,7 @@ use crate::UiTree;
 
 /// Per-depth border colors (ARGB).  The palette cycles for trees deeper than 8
 /// levels.
-const DEPTH_COLORS: [u32; 8] = [
+pub const DEPTH_COLORS: [u32; 8] = [
     0xCC4488FF, // depth 0 – blue
     0xCC00DDAA, // depth 1 – cyan-green
     0xCCFFCC00, // depth 2 – amber
@@ -33,7 +33,7 @@ const DEPTH_COLORS: [u32; 8] = [
 ];
 
 /// Bright border for hit-testable (Pressable / ResizeEdge) nodes.
-const HIT_REGION_COLOR: u32 = 0xEEFFEE00;
+pub const HIT_REGION_COLOR: u32 = 0xEEFFEE00;
 
 /// Faint tint fill for container / clip nodes.
 const CLIP_FILL_COLOR: u32 = 0x220066CC;

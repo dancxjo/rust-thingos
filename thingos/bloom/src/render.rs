@@ -1730,7 +1730,7 @@ fn draw_chrome_layout_debug(
     theme: Theme,
 ) {
     let title = entry.title.as_deref().unwrap_or("");
-    let Ok((mut tree, _nodes)) = petals::window_chrome_tree(title) else {
+    let Ok((mut tree, _)) = petals::window_chrome_tree(title) else {
         return;
     };
     let rules = petals::window_chrome_rules_for_theme(theme);
@@ -2355,10 +2355,11 @@ fn draw_runbox_overlay(
     );
 
     if layout_debug {
-        // Run dialog doesn't use a petals tree, so draw known hit regions manually.
-        // Layout bound: full dialog.
-        draw_debug_border_argb(dst, width, height, 0, 0, width, height, 0xCC4488FF);
-        // Text input field (layout bound + hit region).
+        // Run dialog doesn't use a petals tree, so draw known hit regions manually
+        // using the same color palette as `petals::debug_overlay`.
+        // Layout bound: full dialog (depth 0 color).
+        draw_debug_border_argb(dst, width, height, 0, 0, width, height, petals::DEPTH_COLORS[0]);
+        // Text input field (depth 1 color – layout bound + hit region).
         draw_debug_border_argb(
             dst,
             width,
@@ -2367,9 +2368,9 @@ fn draw_runbox_overlay(
             field_y,
             field_w,
             field_h,
-            0xCC00DDAA,
+            petals::DEPTH_COLORS[1],
         );
-        // Run button (hit region).
+        // Run button (hit region color).
         draw_debug_border_argb(
             dst,
             width,
@@ -2378,7 +2379,7 @@ fn draw_runbox_overlay(
             button_y,
             button_w,
             button_h,
-            0xEEFFEE00,
+            petals::HIT_REGION_COLOR,
         );
     }
 }
