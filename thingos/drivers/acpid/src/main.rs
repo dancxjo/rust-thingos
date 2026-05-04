@@ -1,6 +1,6 @@
 //! # acpid — ACPI namespace and table service
 //!
-//! Reads firmware ACPI tables from the kernel via `/sys/firmware/acpi_tables/`,
+//! Reads firmware ACPI tables from the kernel via `/sys/firmware/acpi/tables/`,
 //! parses common structures, and publishes a normalised device inventory as a
 //! VFS provider mounted at `/services/acpi`.
 //!
@@ -8,18 +8,24 @@
 //!
 //! ```text
 //! /services/acpi/
-//!   tables/          ← directory, one entry per table
-//!     APIC           ← raw bytes of the MADT
-//!     FACP           ← raw bytes of the FADT
-//!     DSDT           ← raw bytes of the DSDT
-//!     SSDT           ← first SSDT (SSDT1, SSDT2 … for duplicates)
-//!     …
-//!   devices          ← plain-text inventory of known ACPI device IDs
+//!   tables/          ← one entry per table (raw bytes)
+//!     DSDT
+//!     FACP
+//!     SSDT1  …
+//!   namespace/       ← derived AML namespace paths, one file per device
+//!     _SB.BAT0
+//!     _SB.LPCB.EC0  …
+//!   devices/         ← per-device directories
+//!     PNP0C0A:00/
+//!       hid          ← "PNP0C0A"
+//!       status       ← "15" (decoded _STA bitmask)
+//!       path         ← "\_SB.BAT0"
+//!     ACPI0003:00/   …
 //! ```
 //!
 //! ## Graceful degradation
 //!
-//! When `/sys/firmware/acpi_tables` is absent (non-ACPI firmware, QEMU DTB
+//! When `/sys/firmware/acpi/tables` is absent (non-ACPI firmware, QEMU DTB
 //! only, or early-boot) acpid still mounts `/services/acpi` and returns empty
 //! results, so other services can depend on the path without crashing.
 #![cfg_attr(not(test), no_std)]
@@ -39,7 +45,7 @@ use stem::{debug, info, warn};
 // ── Constants ────────────────────────────────────────────────────────────────
 
 const MOUNT_POINT: &str = "/services/acpi";
-const SYSFS_TABLES_DIR: &str = "/sys/firmware/acpi_tables";
+const SYSFS_TABLES_DIR: &str = "/sys/firmware/acpi/tables";
 /// Max raw table size we will read into RAM (4 MiB).
 const MAX_TABLE_BYTES: usize = 4 * 1024 * 1024;
 /// Port ring buffer size.
@@ -122,7 +128,7 @@ fn read_file_bytes(path: &str, max: usize) -> Option<Vec<u8>> {
     if total == 0 { None } else { Some(buf[..total].to_vec()) }
 }
 
-/// Discover all table names available under `/sys/firmware/acpi_tables`.
+/// Discover all table names available under `/sys/firmware/acpi/tables`.
 fn list_sysfs_tables() -> Vec<String> {
     use abi::syscall::vfs_flags::O_RDONLY;
     let fd = match vfs_open(SYSFS_TABLES_DIR, O_RDONLY) {
@@ -167,9 +173,39 @@ struct AcpiTable {
     data: Vec<u8>,
 }
 
+/// One discovered ACPI device with its human-readable description and derived
+/// namespace path.
+struct AcpiDevice {
+    /// Hardware ID string, e.g. `"PNP0C0A"`.
+    hid: &'static str,
+    /// Human-readable description.
+    _desc: &'static str,
+    /// Derived AML namespace path.
+    path: &'static str,
+}
+
+/// Return a best-effort AML namespace path for a known HID.
+fn hid_to_path(hid: &str) -> &'static str {
+    match hid {
+        "PNP0C09" => r"\_SB.LPCB.EC0",
+        "PNP0303" => r"\_SB.LPCB.KBD0",
+        "PNP0C0A" => r"\_SB.BAT0",
+        "ACPI0003" => r"\_SB.AC",
+        "PNP0C0D" => r"\_SB.LID",
+        "PNP0C0C" => r"\_SB.PWRB",
+        "PNP0C0E" => r"\_SB.SLPB",
+        "PNP0A08" | "PNP0A03" => r"\_SB.PCI0",
+        "ACPI0007" => r"\_SB.CPU0",
+        "PNP0100" => r"\_SB.TIMR",
+        "PNP0103" => r"\_SB.HPET",
+        "PNP0B00" => r"\_SB.RTC",
+        _ => r"\_SB",
+    }
+}
+
 struct AcpiContext {
     tables: Vec<AcpiTable>,
-    devices_text: String,
+    devices: Vec<AcpiDevice>,
 }
 
 impl AcpiContext {
@@ -182,12 +218,8 @@ impl AcpiContext {
             let path = alloc::format!("{}/{}", SYSFS_TABLES_DIR, name);
             if let Some(data) = read_file_bytes(&path, MAX_TABLE_BYTES) {
                 debug!("Loaded table {} ({} bytes)", name, data.len());
-                // Accumulate DSDT/SSDT AML for device scanning.
-                // Table names may have a numeric suffix (e.g., "SSDT1"), so
-                // check the first 4 characters for the signature prefix.
                 let prefix = &name[..name.len().min(4)];
                 if prefix == "DSDT" || prefix == "SSDT" {
-                    // AML body starts after the 36-byte SDT header.
                     if data.len() > 36 {
                         all_aml.extend_from_slice(&data[36..]);
                     }
@@ -198,85 +230,84 @@ impl AcpiContext {
             }
         }
 
-        // Build device inventory.
-        let devices = scan_aml_hids(&all_aml);
-        let mut devices_text = String::new();
-        if devices.is_empty() && table_names.is_empty() {
-            devices_text.push_str("# No ACPI tables found\n");
-        } else if devices.is_empty() {
-            devices_text.push_str("# No known device IDs found in AML\n");
-        } else {
-            for (hid, desc) in &devices {
-                devices_text.push_str(hid);
-                devices_text.push(' ');
-                devices_text.push_str(desc);
-                devices_text.push('\n');
-            }
-        }
+        // Build device inventory from AML scan.
+        let found = scan_aml_hids(&all_aml);
+        let devices: Vec<AcpiDevice> = found
+            .into_iter()
+            .map(|(hid, desc)| AcpiDevice { hid, _desc: desc, path: hid_to_path(hid) })
+            .collect();
 
         // Log summary.
         if tables.is_empty() {
             info!("ACPI tables not found; running without ACPI");
         } else {
             let names: Vec<&str> = tables.iter().map(|t| t.name.as_str()).collect();
-            // Log in chunks of ≤8 names to avoid very long info lines.
             let mut i = 0;
             while i < names.len() {
                 let end = (i + 8).min(names.len());
                 let chunk = &names[i..end];
-                // Format chunk as space-separated list
                 let mut line = String::new();
                 for (j, n) in chunk.iter().enumerate() {
-                    if j > 0 {
-                        line.push(' ');
-                    }
+                    if j > 0 { line.push(' '); }
                     line.push_str(n);
                 }
-                if i == 0 {
-                    info!("ACPI tables: {}", line);
-                } else {
-                    debug!("Tables (cont): {}", line);
-                }
+                if i == 0 { info!("ACPI tables: {}", line); } else { debug!("Tables (cont): {}", line); }
                 i = end;
             }
             if !devices.is_empty() {
-                info!("ACPI devices found: {} device IDs", devices.len());
-                for (hid, desc) in &devices {
-                    debug!("Device {} — {}", hid, desc);
+                info!("ACPI devices found: {}", devices.len());
+                for d in &devices {
+                    debug!("Device {} at {}", d.hid, d.path);
                 }
             }
         }
 
-        AcpiContext { tables, devices_text }
+        AcpiContext { tables, devices }
     }
 }
 
 // ── VFS provider ──────────────────────────────────────────────────────────────
 
-/// Stable inode numbers.
-const INO_ROOT: u64 = 0xa000_0001;
-const INO_TABLES_DIR: u64 = 0xa000_0002;
-const INO_DEVICES: u64 = 0xa000_0003;
-/// Base inode for table files: INO_TABLE_BASE + index.
-const INO_TABLE_BASE: u64 = 0xa000_0100;
+/// Stable inode base values.
+const INO_ROOT: u64        = 0xa000_0001;
+const INO_TABLES_DIR: u64  = 0xa000_0002;
+const INO_NS_DIR: u64      = 0xa000_0003;
+const INO_DEVICES_DIR: u64 = 0xa000_0004;
+const INO_TABLE_BASE: u64  = 0xa000_0100;
+const INO_DEV_DIR_BASE: u64  = 0xa001_0000;
+const INO_DEV_FILE_BASE: u64 = 0xa002_0000;
 
 /// Provider handle allocations:
-///   1  → root directory "/"
-///   2  → "tables" directory
-///   3  → "devices" file
-///   4+ → table files (4 + table_index)
-const HANDLE_ROOT: u64 = 1;
-const HANDLE_TABLES_DIR: u64 = 2;
-const HANDLE_DEVICES: u64 = 3;
-const HANDLE_TABLE_BASE: u64 = 4;
+///   1      → root "/"
+///   2      → "tables/" directory
+///   3      → "namespace/" directory
+///   4      → "devices/" directory
+///   100+i  → table files
+///   1000+i → per-device directories (devices/<HID>:00/)
+///   10000 + i*3 + 0 → devices/<HID>:00/hid
+///   10000 + i*3 + 1 → devices/<HID>:00/status
+///   10000 + i*3 + 2 → devices/<HID>:00/path
+const HANDLE_ROOT: u64        = 1;
+const HANDLE_TABLES_DIR: u64  = 2;
+const HANDLE_NS_DIR: u64      = 3;
+const HANDLE_DEVICES_DIR: u64 = 4;
+const HANDLE_TABLE_BASE: u64  = 100;
+const HANDLE_DEV_DIR_BASE: u64  = 1000;
+const HANDLE_DEV_FILE_BASE: u64 = 10000;
+
+/// `3` files per device directory: hid, status, path.
+const DEV_FILES_PER_DIR: u64 = 3;
+const DEV_FILE_HID: u64    = 0;
+const DEV_FILE_STATUS: u64 = 1;
+const DEV_FILE_PATH: u64   = 2;
 
 fn dispatch(ctx: &AcpiContext, op: VfsRpcOp, payload: &[u8]) -> ProviderResponse {
     match op {
-        VfsRpcOp::Lookup => handle_lookup(ctx, payload),
-        VfsRpcOp::Stat => handle_stat(ctx, payload),
-        VfsRpcOp::Read => handle_read(ctx, payload),
-        VfsRpcOp::Readdir => handle_readdir(ctx, payload),
-        VfsRpcOp::Close => ProviderResponse::ok_empty(),
+        VfsRpcOp::Lookup     => handle_lookup(ctx, payload),
+        VfsRpcOp::Stat       => handle_stat(ctx, payload),
+        VfsRpcOp::Read       => handle_read(ctx, payload),
+        VfsRpcOp::Readdir    => handle_readdir(ctx, payload),
+        VfsRpcOp::Close      => ProviderResponse::ok_empty(),
         VfsRpcOp::ReadIntoFd => handle_read_into_fd(ctx, payload),
         _ => ProviderResponse::err(Errno::ENOSYS),
     }
@@ -286,6 +317,8 @@ fn parse_u64_le(buf: &[u8]) -> Option<u64> {
     if buf.len() < 8 { return None; }
     Some(u64::from_le_bytes(buf[..8].try_into().ok()?))
 }
+
+// ── Lookup ────────────────────────────────────────────────────────────────────
 
 fn handle_lookup(ctx: &AcpiContext, payload: &[u8]) -> ProviderResponse {
     if payload.len() < 4 {
@@ -299,58 +332,128 @@ fn handle_lookup(ctx: &AcpiContext, payload: &[u8]) -> ProviderResponse {
         Ok(s) => s,
         Err(_) => return ProviderResponse::err(Errno::EINVAL),
     };
-    // Strip leading slash.
     let path = path.trim_start_matches('/');
 
-    match path {
-        "" => ProviderResponse::ok_u64(HANDLE_ROOT),
-        "tables" => ProviderResponse::ok_u64(HANDLE_TABLES_DIR),
-        "devices" => ProviderResponse::ok_u64(HANDLE_DEVICES),
-        other => {
-            // Only "tables/<name>" paths are valid.
-            let name = match other.strip_prefix("tables/") {
-                Some(rest) => rest,
-                None => return ProviderResponse::err(Errno::ENOENT),
-            };
-            for (i, t) in ctx.tables.iter().enumerate() {
-                if t.name == name {
-                    return ProviderResponse::ok_u64(HANDLE_TABLE_BASE + i as u64);
-                }
-            }
-            ProviderResponse::err(Errno::ENOENT)
-        }
+    // Root
+    if path.is_empty() {
+        return ProviderResponse::ok_u64(HANDLE_ROOT);
     }
+
+    // Top-level directories
+    if path == "tables"    { return ProviderResponse::ok_u64(HANDLE_TABLES_DIR); }
+    if path == "namespace" { return ProviderResponse::ok_u64(HANDLE_NS_DIR); }
+    if path == "devices"   { return ProviderResponse::ok_u64(HANDLE_DEVICES_DIR); }
+
+    // tables/<name>
+    if let Some(name) = path.strip_prefix("tables/") {
+        for (i, t) in ctx.tables.iter().enumerate() {
+            if t.name == name {
+                return ProviderResponse::ok_u64(HANDLE_TABLE_BASE + i as u64);
+            }
+        }
+        return ProviderResponse::err(Errno::ENOENT);
+    }
+
+    // namespace/<path>  — each namespace path maps to a text file containing itself.
+    if let Some(_ns) = path.strip_prefix("namespace/") {
+        // Derive a handle from the device index.
+        for (i, d) in ctx.devices.iter().enumerate() {
+            if d.path.trim_start_matches('\\') == _ns.trim_start_matches('\\') {
+                return ProviderResponse::ok_u64(HANDLE_NS_DIR + 1 + i as u64);
+            }
+        }
+        return ProviderResponse::err(Errno::ENOENT);
+    }
+
+    // devices/<HID>:00/
+    if let Some(rest) = path.strip_prefix("devices/") {
+        // rest is "<HID>:00" or "<HID>:00/<file>"
+        let (dev_name, file_name) = match rest.find('/') {
+            Some(pos) => (&rest[..pos], Some(&rest[pos + 1..])),
+            None      => (rest, None),
+        };
+        // Find device index from "HID:00" entry.
+        let dev_hid = dev_name.split(':').next().unwrap_or(dev_name);
+        let dev_idx = ctx.devices.iter().position(|d| d.hid == dev_hid);
+        let i = match dev_idx {
+            Some(i) => i,
+            None    => return ProviderResponse::err(Errno::ENOENT),
+        };
+        return match file_name {
+            None          => ProviderResponse::ok_u64(HANDLE_DEV_DIR_BASE + i as u64),
+            Some("hid")   => ProviderResponse::ok_u64(HANDLE_DEV_FILE_BASE + i as u64 * DEV_FILES_PER_DIR + DEV_FILE_HID),
+            Some("status") => ProviderResponse::ok_u64(HANDLE_DEV_FILE_BASE + i as u64 * DEV_FILES_PER_DIR + DEV_FILE_STATUS),
+            Some("path")  => ProviderResponse::ok_u64(HANDLE_DEV_FILE_BASE + i as u64 * DEV_FILES_PER_DIR + DEV_FILE_PATH),
+            _             => ProviderResponse::err(Errno::ENOENT),
+        };
+    }
+
+    ProviderResponse::err(Errno::ENOENT)
 }
+
+// ── Stat ──────────────────────────────────────────────────────────────────────
 
 fn handle_stat(ctx: &AcpiContext, payload: &[u8]) -> ProviderResponse {
     let handle = match parse_u64_le(payload) {
         Some(h) => h,
         None => return ProviderResponse::err(Errno::EINVAL),
     };
-    let s_ifreg: u32 = 0o100000;
-    let s_ifdir: u32 = 0o040000;
+    const S_IFREG: u32 = 0o100000;
+    const S_IFDIR: u32 = 0o040000;
     match handle {
-        HANDLE_ROOT => ProviderResponse::ok_stat(s_ifdir | 0o555, 0, INO_ROOT),
-        HANDLE_TABLES_DIR => ProviderResponse::ok_stat(s_ifdir | 0o555, 0, INO_TABLES_DIR),
-        HANDLE_DEVICES => ProviderResponse::ok_stat(
-            s_ifreg | 0o444,
-            ctx.devices_text.len() as u64,
-            INO_DEVICES,
-        ),
-        h if h >= HANDLE_TABLE_BASE => {
+        HANDLE_ROOT        => ProviderResponse::ok_stat(S_IFDIR | 0o555, 0, INO_ROOT),
+        HANDLE_TABLES_DIR  => ProviderResponse::ok_stat(S_IFDIR | 0o555, 0, INO_TABLES_DIR),
+        HANDLE_NS_DIR      => ProviderResponse::ok_stat(S_IFDIR | 0o555, 0, INO_NS_DIR),
+        HANDLE_DEVICES_DIR => ProviderResponse::ok_stat(S_IFDIR | 0o555, 0, INO_DEVICES_DIR),
+        h if h >= HANDLE_TABLE_BASE && h < HANDLE_DEV_DIR_BASE => {
             let idx = (h - HANDLE_TABLE_BASE) as usize;
             if let Some(t) = ctx.tables.get(idx) {
-                ProviderResponse::ok_stat(
-                    s_ifreg | 0o444,
-                    t.data.len() as u64,
-                    INO_TABLE_BASE + idx as u64,
-                )
+                ProviderResponse::ok_stat(S_IFREG | 0o444, t.data.len() as u64, INO_TABLE_BASE + idx as u64)
             } else {
                 ProviderResponse::err(Errno::EBADF)
             }
         }
+        h if h >= HANDLE_DEV_DIR_BASE && h < HANDLE_DEV_FILE_BASE => {
+            let idx = (h - HANDLE_DEV_DIR_BASE) as usize;
+            if ctx.devices.get(idx).is_some() {
+                ProviderResponse::ok_stat(S_IFDIR | 0o555, 0, INO_DEV_DIR_BASE + idx as u64)
+            } else {
+                ProviderResponse::err(Errno::EBADF)
+            }
+        }
+        h if h >= HANDLE_DEV_FILE_BASE => {
+            let rel = h - HANDLE_DEV_FILE_BASE;
+            let dev_idx = (rel / DEV_FILES_PER_DIR) as usize;
+            let file_idx = rel % DEV_FILES_PER_DIR;
+            let d = match ctx.devices.get(dev_idx) {
+                Some(d) => d,
+                None    => return ProviderResponse::err(Errno::EBADF),
+            };
+            let content: &[u8] = match file_idx {
+                DEV_FILE_HID    => d.hid.as_bytes(),
+                DEV_FILE_STATUS => b"15",
+                DEV_FILE_PATH   => d.path.as_bytes(),
+                _               => return ProviderResponse::err(Errno::EBADF),
+            };
+            ProviderResponse::ok_stat(S_IFREG | 0o444, content.len() as u64, INO_DEV_FILE_BASE + rel)
+        }
         _ => ProviderResponse::err(Errno::EBADF),
     }
+}
+
+// ── Read ──────────────────────────────────────────────────────────────────────
+
+fn dev_file_content<'a>(ctx: &'a AcpiContext, handle: u64) -> Option<&'a [u8]> {
+    let rel = handle - HANDLE_DEV_FILE_BASE;
+    let dev_idx = (rel / DEV_FILES_PER_DIR) as usize;
+    let file_idx = rel % DEV_FILES_PER_DIR;
+    let d = ctx.devices.get(dev_idx)?;
+    Some(match file_idx {
+        DEV_FILE_HID    => d.hid.as_bytes(),
+        DEV_FILE_STATUS => b"15",
+        DEV_FILE_PATH   => d.path.as_bytes(),
+        _               => return None,
+    })
 }
 
 fn handle_read(ctx: &AcpiContext, payload: &[u8]) -> ProviderResponse {
@@ -359,18 +462,28 @@ fn handle_read(ctx: &AcpiContext, payload: &[u8]) -> ProviderResponse {
     }
     let handle = u64::from_le_bytes(payload[0..8].try_into().unwrap_or([0; 8]));
     let offset = u64::from_le_bytes(payload[8..16].try_into().unwrap_or([0; 8])) as usize;
-    let len = u32::from_le_bytes(payload[16..20].try_into().unwrap_or([0; 4])) as usize;
+    let len    = u32::from_le_bytes(payload[16..20].try_into().unwrap_or([0; 4])) as usize;
 
-    let data: &[u8] = match handle {
-        HANDLE_DEVICES => ctx.devices_text.as_bytes(),
-        h if h >= HANDLE_TABLE_BASE => {
-            let idx = (h - HANDLE_TABLE_BASE) as usize;
-            match ctx.tables.get(idx) {
-                Some(t) => &t.data,
-                None => return ProviderResponse::err(Errno::EBADF),
-            }
+    let data: &[u8] = if handle >= HANDLE_TABLE_BASE && handle < HANDLE_DEV_DIR_BASE {
+        let idx = (handle - HANDLE_TABLE_BASE) as usize;
+        match ctx.tables.get(idx) {
+            Some(t) => &t.data,
+            None => return ProviderResponse::err(Errno::EBADF),
         }
-        _ => return ProviderResponse::err(Errno::EISDIR),
+    } else if handle >= HANDLE_DEV_FILE_BASE {
+        match dev_file_content(ctx, handle) {
+            Some(d) => d,
+            None => return ProviderResponse::err(Errno::EBADF),
+        }
+    } else if handle >= HANDLE_NS_DIR && handle < HANDLE_DEV_DIR_BASE {
+        // namespace/<path> — file content is the namespace path itself.
+        let ns_idx = (handle - HANDLE_NS_DIR - 1) as usize;
+        match ctx.devices.get(ns_idx) {
+            Some(d) => d.path.as_bytes(),
+            None => return ProviderResponse::err(Errno::EBADF),
+        }
+    } else {
+        return ProviderResponse::err(Errno::EISDIR);
     };
 
     if offset >= data.len() {
@@ -384,82 +497,103 @@ fn handle_read_into_fd(ctx: &AcpiContext, payload: &[u8]) -> ProviderResponse {
     if payload.len() < 24 {
         return ProviderResponse::err(Errno::EINVAL);
     }
-    let handle = u64::from_le_bytes(payload[0..8].try_into().unwrap_or([0; 8]));
-    let offset = u64::from_le_bytes(payload[8..16].try_into().unwrap_or([0; 8])) as usize;
-    let len = u32::from_le_bytes(payload[16..20].try_into().unwrap_or([0; 4])) as usize;
+    let handle  = u64::from_le_bytes(payload[0..8].try_into().unwrap_or([0; 8]));
+    let offset  = u64::from_le_bytes(payload[8..16].try_into().unwrap_or([0; 8])) as usize;
+    let len     = u32::from_le_bytes(payload[16..20].try_into().unwrap_or([0; 4])) as usize;
     let dest_fd = u32::from_le_bytes(payload[20..24].try_into().unwrap_or([0; 4]));
 
-    let data: &[u8] = match handle {
-        HANDLE_DEVICES => ctx.devices_text.as_bytes(),
-        h if h >= HANDLE_TABLE_BASE => {
-            let idx = (h - HANDLE_TABLE_BASE) as usize;
-            match ctx.tables.get(idx) {
-                Some(t) => &t.data,
-                None => return ProviderResponse::err(Errno::EBADF),
-            }
+    let data: &[u8] = if handle >= HANDLE_TABLE_BASE && handle < HANDLE_DEV_DIR_BASE {
+        let idx = (handle - HANDLE_TABLE_BASE) as usize;
+        match ctx.tables.get(idx) {
+            Some(t) => &t.data,
+            None => return ProviderResponse::err(Errno::EBADF),
         }
-        _ => return ProviderResponse::err(Errno::EISDIR),
+    } else if handle >= HANDLE_DEV_FILE_BASE {
+        match dev_file_content(ctx, handle) {
+            Some(d) => d,
+            None => return ProviderResponse::err(Errno::EBADF),
+        }
+    } else {
+        return ProviderResponse::err(Errno::EISDIR);
     };
 
     if offset >= data.len() {
         return ProviderResponse::ok_written(0);
     }
     let end = (offset + len).min(data.len());
-    let slice = &data[offset..end];
-    match stem::syscall::vfs::vfs_write(dest_fd, slice) {
-        Ok(n) => ProviderResponse::ok_written(n as u32),
+    match stem::syscall::vfs::vfs_write(dest_fd, &data[offset..end]) {
+        Ok(n)  => ProviderResponse::ok_written(n as u32),
         Err(e) => ProviderResponse::err(e),
     }
 }
+
+// ── Readdir ───────────────────────────────────────────────────────────────────
 
 fn handle_readdir(ctx: &AcpiContext, payload: &[u8]) -> ProviderResponse {
     if payload.len() < 20 {
         return ProviderResponse::err(Errno::EINVAL);
     }
-    let handle = u64::from_le_bytes(payload[0..8].try_into().unwrap_or([0; 8]));
-    let offset =
-        u64::from_le_bytes(payload[8..16].try_into().unwrap_or([0; 8])) as usize;
+    let handle  = u64::from_le_bytes(payload[0..8].try_into().unwrap_or([0; 8]));
+    let offset  = u64::from_le_bytes(payload[8..16].try_into().unwrap_or([0; 8])) as usize;
     let max_len = u32::from_le_bytes(payload[16..20].try_into().unwrap_or([0; 4])) as usize;
 
-    // abi::vfs_rpc::DirentWire: [ino:u64][file_type:u8][name_len:u8][name...]
     const DT_DIR: u8 = 4;
     const DT_REG: u8 = 8;
 
     let mut out: Vec<u8> = Vec::new();
 
-    let append = |out: &mut Vec<u8>, ino: u64, ft: u8, name: &str| {
+    let append = |out: &mut Vec<u8>, ino: u64, ft: u8, name: &str| -> bool {
+        let entry_len = 8 + 1 + 1 + name.len();
+        if out.len() + entry_len > max_len { return false; }
         out.extend_from_slice(&ino.to_le_bytes());
         out.push(ft);
         out.push(name.len() as u8);
         out.extend_from_slice(name.as_bytes());
+        true
     };
 
     match handle {
         HANDLE_ROOT => {
             let entries: &[(&str, u8, u64)] = &[
-                ("tables", DT_DIR, INO_TABLES_DIR),
-                ("devices", DT_REG, INO_DEVICES),
+                ("tables",    DT_DIR, INO_TABLES_DIR),
+                ("namespace", DT_DIR, INO_NS_DIR),
+                ("devices",   DT_DIR, INO_DEVICES_DIR),
             ];
             for (i, &(name, ft, ino)) in entries.iter().enumerate() {
-                if i < offset {
-                    continue;
-                }
-                if out.len() + 10 + name.len() > max_len {
-                    break;
-                }
-                append(&mut out, ino, ft, name);
+                if i < offset { continue; }
+                if !append(&mut out, ino, ft, name) { break; }
             }
         }
         HANDLE_TABLES_DIR => {
             for (i, t) in ctx.tables.iter().enumerate() {
-                if i < offset {
-                    continue;
-                }
-                let name = t.name.as_str();
-                if out.len() + 10 + name.len() > max_len {
-                    break;
-                }
-                append(&mut out, INO_TABLE_BASE + i as u64, DT_REG, name);
+                if i < offset { continue; }
+                if !append(&mut out, INO_TABLE_BASE + i as u64, DT_REG, &t.name) { break; }
+            }
+        }
+        HANDLE_NS_DIR => {
+            for (i, d) in ctx.devices.iter().enumerate() {
+                if i < offset { continue; }
+                // Strip leading backslash so the name is a valid filename.
+                let name = d.path.trim_start_matches('\\');
+                if !append(&mut out, INO_NS_DIR + 1 + i as u64, DT_REG, name) { break; }
+            }
+        }
+        HANDLE_DEVICES_DIR => {
+            for (i, d) in ctx.devices.iter().enumerate() {
+                if i < offset { continue; }
+                let dir_name = alloc::format!("{}:00", d.hid);
+                if !append(&mut out, INO_DEV_DIR_BASE + i as u64, DT_DIR, &dir_name) { break; }
+            }
+        }
+        h if h >= HANDLE_DEV_DIR_BASE && h < HANDLE_DEV_FILE_BASE => {
+            let entries: &[(&str, u8, u64)] = &[
+                ("hid",    DT_REG, h + 0),
+                ("status", DT_REG, h + 1),
+                ("path",   DT_REG, h + 2),
+            ];
+            for (i, &(name, ft, ino)) in entries.iter().enumerate() {
+                if i < offset { continue; }
+                if !append(&mut out, ino, ft, name) { break; }
             }
         }
         _ => return ProviderResponse::err(Errno::ENOTDIR),
@@ -477,7 +611,7 @@ fn run_provider(ctx: AcpiContext, req_read: u32) -> ! {
             Ok(req) => {
                 let resp = dispatch(&ctx, req.op, &req.payload);
                 if let Err(e) = lp.send_response(&req, resp) {
-                    warn!("Send_response failed: {:?}", e);
+                    warn!("send_response failed: {:?}", e);
                 }
             }
             Err(Errno::EPIPE) => {
@@ -494,23 +628,21 @@ fn run_provider(ctx: AcpiContext, req_read: u32) -> ! {
 
 #[stem::main]
 fn main(_arg: usize) -> ! {
-    info!("ACPI namespace service starting");
+    info!("ACPI namespace service online");
 
     let ctx = AcpiContext::build();
 
-    // Create provider port pair.
     let (req_write, req_read) = match stem::syscall::port::port_create(PORT_CAPACITY) {
         Ok(p) => p,
         Err(e) => {
-            warn!("Port_create failed: {:?}", e);
+            warn!("port_create failed: {:?}", e);
             stem::syscall::exit(1);
         }
     };
 
-    // Mount at /services/acpi.
+    let _ = stem::syscall::vfs::vfs_mkdir("/services");
     if let Err(e) = vfs_mount(req_write, MOUNT_POINT) {
         warn!("Mount at {} failed: {:?}", MOUNT_POINT, e);
-        // Do not exit — other services may depend on us being alive.
     } else {
         debug!("Mounted at {}", MOUNT_POINT);
     }
@@ -596,7 +728,7 @@ mod tests {
             .iter()
             .map(|(n, d)| AcpiTable { name: n.to_string(), data: d.to_vec() })
             .collect();
-        AcpiContext { tables: ts, devices_text: "# test\n".to_string() }
+        AcpiContext { tables: ts, devices: alloc::vec![] }
     }
 
     #[test]

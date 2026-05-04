@@ -82,7 +82,7 @@ name = "acpi_ec"
 version = "0.1.0"
 dependencies = [
  "abi",
- "acpi_common",
+ "ipc_helpers",
  "stem",
 ]
 

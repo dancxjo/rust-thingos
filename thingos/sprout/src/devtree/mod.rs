@@ -36,7 +36,7 @@ pub fn init() -> Result<DevTreeCtx, ()> {
     let mut acpi_rsdp = None;
     let mut dtb_ptr = None;
 
-    if let Ok(val) = read_sys_u64("/sys/firmware/acpi") {
+    if let Ok(val) = read_sys_u64("/sys/firmware/acpi/rsdp") {
         acpi_rsdp = Some(val as usize);
     }
 

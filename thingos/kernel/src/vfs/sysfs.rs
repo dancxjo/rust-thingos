@@ -75,9 +75,13 @@ impl VfsDriver for SysFs {
                 Ok(Arc::new(node))
             }
             SysPath::Firmware => {
-                Ok(Arc::new(StaticDirNode::new(302, &["acpi", "dtb", "hhdm", "framebuffer", "acpi_tables"])))
+                Ok(Arc::new(StaticDirNode::new(302, &["acpi", "dtb", "hhdm", "framebuffer"])))
             }
-            SysPath::FirmwareFile("acpi") => {
+            // /sys/firmware/acpi/ — directory with rsdp file and tables subdirectory.
+            SysPath::AcpiDir => {
+                Ok(Arc::new(StaticDirNode::new(0x5ffd, &["rsdp", "tables"])))
+            }
+            SysPath::AcpiRsdpFile => {
                 if let Some(rsdp) = crate::boot_info::get().and_then(|i| i.acpi_rsdp) {
                     let text = format!("0x{:016x}\n", rsdp);
                     Ok(Arc::new(StaticTextNode::new(text.into_bytes(), 303)))
@@ -134,6 +138,10 @@ enum SysPath<'a> {
     VirtioFile(&'a str, &'a str),
     Firmware,
     FirmwareFile(&'a str),
+    /// `/sys/firmware/acpi/` — directory node.
+    AcpiDir,
+    /// `/sys/firmware/acpi/rsdp` — hex RSDP physical address.
+    AcpiRsdpFile,
     AcpiTablesDir,
     AcpiTableFile(&'a str),
 }
@@ -157,6 +165,14 @@ impl<'a> SysPath<'a> {
             }
             (Some("devices"), Some(dev), Some(file), None) => Ok(Self::DeviceFile(dev, file)),
             (Some("firmware"), None, None, None) => Ok(Self::Firmware),
+            // New canonical path: /sys/firmware/acpi/{rsdp,tables/…}
+            (Some("firmware"), Some("acpi"), None, None) => Ok(Self::AcpiDir),
+            (Some("firmware"), Some("acpi"), Some("rsdp"), None) => Ok(Self::AcpiRsdpFile),
+            (Some("firmware"), Some("acpi"), Some("tables"), None) => Ok(Self::AcpiTablesDir),
+            (Some("firmware"), Some("acpi"), Some("tables"), Some(name)) => {
+                Ok(Self::AcpiTableFile(name))
+            }
+            // Legacy alias kept for compatibility: /sys/firmware/acpi_tables/…
             (Some("firmware"), Some("acpi_tables"), None, None) => Ok(Self::AcpiTablesDir),
             (Some("firmware"), Some("acpi_tables"), Some(name), None) => {
                 Ok(Self::AcpiTableFile(name))
