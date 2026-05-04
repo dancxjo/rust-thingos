@@ -1851,7 +1851,7 @@ fn execute_blossom_chrome_plan(
             PaintCommand::PushClip { rect } => {
                 clip_stack.push(clip);
                 clip = match clip {
-                    Some(current) => intersect_theme_rect(current, *rect),
+                    Some(current) => current.intersect(*rect),
                     None => clipped_rect(*rect, None),
                 };
             }
@@ -1914,17 +1914,13 @@ fn clipped_rect(rect: ThemeRect, clip: Option<ThemeRect>) -> Option<ThemeRect> {
         return None;
     }
     match clip {
-        Some(clip) => intersect_theme_rect(rect, clip),
+        Some(clip) => rect.intersect(clip),
         None => Some(rect),
     }
 }
 
 fn intersect_theme_rect(a: ThemeRect, b: ThemeRect) -> Option<ThemeRect> {
-    let x0 = a.x.max(b.x);
-    let y0 = a.y.max(b.y);
-    let x1 = a.x.saturating_add(a.w).min(b.x.saturating_add(b.w));
-    let y1 = a.y.saturating_add(a.h).min(b.y.saturating_add(b.h));
-    if x1 <= x0 || y1 <= y0 { None } else { Some(ThemeRect::new(x0, y0, x1 - x0, y1 - y0)) }
+    a.intersect(b)
 }
 
 fn draw_theme_shadow(
