@@ -5,7 +5,7 @@
 /// Fixed-size (16-byte) normalized ACPI event record.
 ///
 /// Produced by ACPI event sources (acpi_ec, acpi_power) and consumed by
-/// subscribers via `/services/acpi/events`.  The file uses simple fan-out
+/// subscribers via `/sys/firmware/acpi/events`.  The file uses simple fan-out
 /// semantics: each reader tracks its own file position (in bytes), which the
 /// kernel maintains per file-descriptor.  Position `N` corresponds to event
 /// sequence `N / RECORD_SIZE`; the provider returns `EAGAIN` when the reader

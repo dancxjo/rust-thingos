@@ -267,11 +267,11 @@ fn open_ec_read() -> Option<u32> {
 
 /// Check if a given HID device directory exists in the acpid namespace.
 ///
-/// Reads `/services/acpi/devices/<HID>:00/hid` and returns true if the file
+/// Reads `/sys/firmware/acpi/devices/<HID>:00/hid` and returns true if the file
 /// is readable.  Does not retry — called once at startup after acpid is up.
 fn acpi_device_present(hid: &str) -> bool {
     use abi::syscall::vfs_flags::O_RDONLY;
-    let mut path = alloc::string::String::from("/services/acpi/devices/");
+    let mut path = alloc::string::String::from("/sys/firmware/acpi/devices/");
     path.push_str(hid);
     path.push_str(":00/hid");
     if let Ok(fd) = vfs_open(&path, O_RDONLY) {
@@ -287,7 +287,7 @@ fn probe_acpi_devices(state: &mut BatteryState) {
     // Give acpid time to mount.
     for _ in 0..SERVICE_WAIT_RETRIES {
         use abi::syscall::vfs_flags::O_RDONLY;
-        if vfs_open("/services/acpi/devices", O_RDONLY)
+        if vfs_open("/sys/firmware/acpi/devices", O_RDONLY)
             .map(|fd| { let _ = vfs_close(fd); })
             .is_ok()
         {

@@ -126,7 +126,7 @@ pub static MANIFEST: ManifestHeader = ManifestHeader {
 
 const MOUNT_PATH: &str = "/run/power";
 /// Path to the normalized ACPI event bus maintained by `acpid`.
-const ACPI_EVENT_BUS: &str = "/services/acpi/events";
+const ACPI_EVENT_BUS: &str = "/sys/firmware/acpi/events";
 const PORT_CAPACITY: usize = 4096;
 
 /// SCI IRQ vector (ACPI SCI is typically GSI 9, vector 0x29 in Thing-OS).
@@ -270,7 +270,7 @@ impl FadtInfo {
 /// is shorter than `FADT_MIN_LEN` bytes (pre-ACPI 2.0 or non-ACPI hardware).
 fn read_fadt() -> Option<FadtInfo> {
     use abi::syscall::vfs_flags::O_RDONLY;
-    let path = "/services/acpi/tables/FACP";
+    let path = "/sys/firmware/acpi/tables/FACP";
     let fd = vfs_open(path, O_RDONLY).ok()?;
     let mut buf = [0u8; FADT_READ_SIZE];
     let mut total = 0usize;

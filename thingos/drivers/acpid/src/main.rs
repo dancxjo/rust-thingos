@@ -2,12 +2,12 @@
 //!
 //! Reads firmware ACPI tables from the kernel via `/sys/firmware/acpi/tables/`,
 //! parses common structures, and publishes a normalised device inventory as a
-//! VFS provider mounted at `/services/acpi`.
+//! VFS provider mounted at `/sys/firmware/acpi`.
 //!
 //! ## VFS layout
 //!
 //! ```text
-//! /services/acpi/
+//! /sys/firmware/acpi/
 //!   tables/          ← one entry per table (raw bytes)
 //!     DSDT
 //!     FACP
@@ -21,12 +21,13 @@
 //!       status       ← "15" (decoded _STA bitmask)
 //!       path         ← "\_SB.BAT0"
 //!     ACPI0003:00/   …
+//!   events           ← normalized ACPI event stream (fan-out, 16 bytes/record)
 //! ```
 //!
 //! ## Graceful degradation
 //!
 //! When `/sys/firmware/acpi/tables` is absent (non-ACPI firmware, QEMU DTB
-//! only, or early-boot) acpid still mounts `/services/acpi` and returns empty
+//! only, or early-boot) acpid still mounts `/sys/firmware/acpi` and returns empty
 //! results, so other services can depend on the path without crashing.
 #![cfg_attr(not(test), no_std)]
 #![cfg_attr(not(test), no_main)]
@@ -45,7 +46,7 @@ use stem::{debug, info, warn};
 
 // ── Constants ────────────────────────────────────────────────────────────────
 
-const MOUNT_POINT: &str = "/services/acpi";
+const MOUNT_POINT: &str = "/sys/firmware/acpi";
 const SYSFS_TABLES_DIR: &str = "/sys/firmware/acpi/tables";
 /// Max raw table size we will read into RAM (4 MiB).
 const MAX_TABLE_BYTES: usize = 4 * 1024 * 1024;
@@ -770,7 +771,7 @@ fn main(_arg: usize) -> ! {
         }
     };
 
-    let _ = stem::syscall::vfs::vfs_mkdir("/services");
+    let _ = stem::syscall::vfs::vfs_mkdir("/sys/firmware/acpi");
     if let Err(e) = vfs_mount(req_write, MOUNT_POINT) {
         warn!("Mount at {} failed: {:?}", MOUNT_POINT, e);
     } else {

@@ -64,7 +64,7 @@ const SCI_VECTOR: u8 = 0x29;
 
 const MOUNT_PATH: &str = "/services/ec";
 /// Path to the normalized ACPI event bus maintained by `acpid`.
-const ACPI_EVENT_BUS: &str = "/services/acpi/events";
+const ACPI_EVENT_BUS: &str = "/sys/firmware/acpi/events";
 const PORT_CAPACITY: usize = 4096;
 
 const HANDLE_ROOT: u64   = 1;
