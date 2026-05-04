@@ -1,11 +1,12 @@
 use alloc::vec::Vec;
 
+use stile::typography::{SCALE_BODY, SPACE_MD, SPACE_SM};
+
 use crate::{
     AlignItems, Color, Declaration, Description, FlexDirection, FontWeight, JustifyContent, NodeId,
     PetalsEvent, PetalsService, Rule, Selector, ServiceAction, TaffyError, Theme, UiTree,
     default_theme,
 };
-use stile::typography::{SCALE_BODY, SPACE_MD, SPACE_SM};
 
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub struct WindowChromeNodes {
@@ -109,8 +110,7 @@ pub fn window_chrome_rules_for_theme(theme: Theme) -> Vec<Rule<Description>> {
         Rule::new(
             Selector::has(Description::Title),
             alloc::vec![
-                Declaration::Width(160.0),
-                Declaration::Height(20.0),
+                Declaration::MinWidth(160.0),
                 Declaration::FontSize(SCALE_BODY),
                 Declaration::FontWeight(FontWeight::Bold),
                 Declaration::Color(color_from_argb(theme.chrome_text)),
@@ -128,7 +128,7 @@ pub fn window_chrome_rules_for_theme(theme: Theme) -> Vec<Rule<Description>> {
         Rule::new(
             Selector::has(Description::WindowContent),
             alloc::vec![
-                Declaration::Height(66.0),
+                Declaration::MinHeight(66.0),
                 Declaration::BackgroundColor(color_from_argb(theme.body_top)),
             ],
         ),

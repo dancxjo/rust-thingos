@@ -4,6 +4,7 @@ use alloc::vec::Vec;
 use core::str::FromStr;
 
 use abi::hid::Key;
+use stile::typography::{SCALE_BODY, SCALE_DISPLAY, SCALE_H3, SPACE_LG, SPACE_MD, SPACE_SM};
 use taffy::TaffyError;
 
 use crate::{
@@ -11,7 +12,6 @@ use crate::{
     JustifyContent, NodeId, PetalsEvent, PetalsService, Rule, Selector, ServiceAction, State,
     Theme, UiTree, default_theme,
 };
-use stile::typography::{SCALE_BODY, SCALE_DISPLAY, SCALE_H3, SPACE_LG, SPACE_MD, SPACE_SM};
 
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub enum CalcMode {
@@ -275,7 +275,7 @@ impl Calculator {
                     Declaration::JustifyContent(JustifyContent::Center),
                     Declaration::Padding(SPACE_LG),
                     Declaration::Gap(SPACE_SM),
-                    Declaration::Height(112.0),
+                    Declaration::MinHeight(112.0),
                     Declaration::BackgroundColor(color_from_argb(theme.inactive.title_bottom)),
                 ],
             ),
@@ -285,8 +285,6 @@ impl Calculator {
                 Selector::has(Description::Textual),
                 alloc::vec![
                     Declaration::FontSize(SCALE_H3),
-                    Declaration::Width(64.0),
-                    Declaration::Height(20.0),
                     Declaration::Color(color_from_argb(theme.chrome_text)),
                 ],
             ),
@@ -294,8 +292,7 @@ impl Calculator {
             Rule::new(
                 Selector::has(Description::ExpressionLine),
                 alloc::vec![
-                    Declaration::Width(320.0),
-                    Declaration::Height(20.0),
+                    Declaration::MinHeight(20.0),
                     Declaration::FontSize(SCALE_BODY),
                     Declaration::Color(color_from_argb(theme.chrome_text_inactive)),
                 ],
@@ -304,8 +301,7 @@ impl Calculator {
             Rule::new(
                 Selector::has(Description::ResultLine),
                 alloc::vec![
-                    Declaration::Width(320.0),
-                    Declaration::Height(56.0),
+                    Declaration::MinHeight(56.0),
                     Declaration::FontSize(SCALE_DISPLAY),
                     Declaration::FontWeight(FontWeight::Normal),
                     Declaration::Color(color_from_argb(theme.chrome_text)),
@@ -327,14 +323,14 @@ impl Calculator {
                     Declaration::AlignItems(AlignItems::Stretch),
                     Declaration::JustifyContent(JustifyContent::Start),
                     Declaration::Gap(SPACE_SM),
-                    Declaration::Height(72.0),
+                    Declaration::MinHeight(72.0),
                 ],
             ),
             Rule::new(
                 Selector::has(Description::CalcKey),
                 alloc::vec![
-                    Declaration::Width(72.0),
-                    Declaration::Height(72.0),
+                    Declaration::MinWidth(72.0),
+                    Declaration::MinHeight(72.0),
                     Declaration::Padding(0.0),
                     Declaration::FlexDirection(FlexDirection::Row),
                     Declaration::AlignItems(AlignItems::Center),
@@ -372,8 +368,8 @@ impl Calculator {
             Rule::new(
                 Selector::has(Description::ModeToggle),
                 alloc::vec![
-                    Declaration::Height(32.0),
-                    Declaration::Width(144.0),
+                    Declaration::MinHeight(32.0),
+                    Declaration::MinWidth(144.0),
                     Declaration::Padding(SPACE_SM),
                     Declaration::FlexDirection(FlexDirection::Row),
                     Declaration::AlignItems(AlignItems::Center),

@@ -1,14 +1,14 @@
 use alloc::string::{String, ToString};
 use alloc::vec::Vec;
 
+use stile::typography::{
+    SCALE_CAPTION, SCALE_H2, SCALE_H3, SCALE_LABEL, SPACE_LG, SPACE_MD, SPACE_SM,
+};
 use taffy::TaffyError;
 
 use crate::{
     AlignItems, AttrValue, Color, Declaration, Description, FlexDirection, FontWeight,
     JustifyContent, NodeId, PetalsEvent, PetalsService, Rule, Selector, ServiceAction, UiTree,
-};
-use stile::typography::{
-    SCALE_CAPTION, SCALE_H2, SCALE_H3, SCALE_LABEL, SPACE_LG, SPACE_MD, SPACE_SM,
 };
 
 #[derive(Clone, Debug, PartialEq, Eq)]
@@ -148,7 +148,6 @@ impl ApplicationLauncher {
             Rule::new(
                 Selector::has(Description::ApplicationTitle),
                 alloc::vec![
-                    Declaration::Height(24.0),
                     Declaration::FontSize(SCALE_H2),
                     Declaration::FontWeight(FontWeight::Bold),
                     Declaration::Color(Color::rgb(0xf1, 0xf4, 0xf8)),
@@ -180,8 +179,8 @@ impl ApplicationLauncher {
                     Declaration::JustifyContent(JustifyContent::Center),
                     Declaration::Gap(SPACE_SM),
                     Declaration::Padding(SPACE_SM),
-                    Declaration::Width(128.0),
-                    Declaration::Height(96.0),
+                    Declaration::MinWidth(128.0),
+                    Declaration::MinHeight(96.0),
                     Declaration::BackgroundColor(Color::rgb(0x24, 0x29, 0x33)),
                     Declaration::BorderWidth(1.0),
                 ],
@@ -218,8 +217,6 @@ impl ApplicationLauncher {
             Rule::new(
                 Selector::has(Description::ApplicationName),
                 alloc::vec![
-                    Declaration::Width(108.0),
-                    Declaration::Height(20.0),
                     Declaration::FontSize(SCALE_H3),
                     Declaration::FontWeight(FontWeight::Bold),
                     Declaration::Color(Color::rgb(0xf1, 0xf4, 0xf8)),
@@ -228,8 +225,6 @@ impl ApplicationLauncher {
             Rule::new(
                 Selector::has(Description::ApplicationPath),
                 alloc::vec![
-                    Declaration::Width(108.0),
-                    Declaration::Height(SPACE_LG),
                     Declaration::FontSize(SCALE_CAPTION),
                     Declaration::Color(Color::rgb(0x9d, 0xa8, 0xb7)),
                 ],
@@ -237,8 +232,6 @@ impl ApplicationLauncher {
             Rule::new(
                 Selector::has(Description::ApplicationStatus),
                 alloc::vec![
-                    Declaration::Width(360.0),
-                    Declaration::Height(SPACE_LG),
                     Declaration::FontSize(SCALE_LABEL),
                     Declaration::Color(Color::rgb(0xad, 0xb7, 0xc7)),
                 ],
@@ -342,7 +335,10 @@ mod tests {
         assert!(
             tree.node(nodes.tiles[0].icon).unwrap().descriptions.contains(&Description::Logogram)
         );
-        assert_eq!(tree.global_layout_box(nodes.tiles[0].node).unwrap().width, 128.0);
+        let tile_box = tree.global_layout_box(nodes.tiles[0].node).unwrap();
+        let label_box = tree.global_layout_box(nodes.tiles[0].label).unwrap();
+        assert!(tile_box.width >= 128.0);
+        assert!(tile_box.width >= label_box.width);
     }
 
     #[test]

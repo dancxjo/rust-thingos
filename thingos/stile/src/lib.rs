@@ -30,8 +30,8 @@ pub use theme::{
     find_theme_by_name, theme_by_name,
 };
 pub use typography::{
-    SCALE_BODY, SCALE_CAPTION, SCALE_DISPLAY, SCALE_H1, SCALE_H2, SCALE_H3, SCALE_LABEL,
-    SPACE_LG, SPACE_MD, SPACE_SM, SPACE_XL, SPACE_XS,
+    SCALE_BODY, SCALE_CAPTION, SCALE_DISPLAY, SCALE_H1, SCALE_H2, SCALE_H3, SCALE_LABEL, SPACE_LG,
+    SPACE_MD, SPACE_SM, SPACE_XL, SPACE_XS,
 };
 pub use values::{
     AlignItems, Color, Control, FlexDirection, FontWeight, JustifyContent, ResolvedStyle, State,

@@ -2,13 +2,13 @@ use alloc::format;
 use alloc::string::String;
 use alloc::vec::Vec;
 
+use stile::typography::{SCALE_BODY, SCALE_H1, SCALE_LABEL, SPACE_MD, SPACE_SM, SPACE_XS};
 use taffy::TaffyError;
 
 use crate::{
     AlignItems, Color, Declaration, Description, FlexDirection, FontWeight, JustifyContent, NodeId,
     PetalsEvent, PetalsService, Rule, Selector, ServiceAction, Theme, UiTree, default_theme,
 };
-use stile::typography::{SCALE_BODY, SCALE_H1, SCALE_LABEL, SPACE_LG, SPACE_MD, SPACE_SM, SPACE_XS};
 
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub struct Clock {
@@ -155,14 +155,13 @@ impl Clock {
                     Declaration::AlignItems(AlignItems::Center),
                     Declaration::JustifyContent(JustifyContent::Center),
                     Declaration::Gap(SPACE_SM),
-                    Declaration::Height(40.0),
+                    Declaration::MinHeight(40.0),
                 ],
             ),
             Rule::new(
                 Selector::has(Description::ClockTime),
                 alloc::vec![
-                    Declaration::Width(if self.format_12h { 92.0 } else { 104.0 }),
-                    Declaration::Height(40.0),
+                    Declaration::MinHeight(40.0),
                     Declaration::FontSize(SCALE_H1),
                     Declaration::FontWeight(FontWeight::Normal),
                     Declaration::Color(color_from_argb(theme.chrome_text)),
@@ -171,8 +170,6 @@ impl Clock {
             Rule::new(
                 Selector::has(Description::ClockAmPm),
                 alloc::vec![
-                    Declaration::Width(if self.format_12h { 24.0 } else { 0.0 }),
-                    Declaration::Height(SPACE_LG),
                     Declaration::FontSize(SCALE_LABEL),
                     Declaration::Color(color_from_argb(theme.control_icon_inactive)),
                 ],
@@ -183,8 +180,6 @@ impl Clock {
             rules.push(Rule::new(
                 Selector::has(Description::ClockDate),
                 alloc::vec![
-                    Declaration::Width(136.0),
-                    Declaration::Height(SPACE_LG),
                     Declaration::FontSize(SCALE_BODY),
                     Declaration::Color(color_from_argb(theme.chrome_text_inactive)),
                 ],

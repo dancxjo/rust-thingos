@@ -1,7 +1,8 @@
+use alloc::string::String;
 use alloc::vec::Vec;
 
 use stile::{
-    AlignItems as StileAlignItems, FlexDirection as StileFlexDirection,
+    AlignItems as StileAlignItems, FlexDirection as StileFlexDirection, FontWeight,
     JustifyContent as StileJustifyContent, ResolvedStyle, Rule,
 };
 use taffy::prelude::*;
@@ -22,7 +23,19 @@ pub struct LayoutBox {
 pub struct UiTree {
     nodes: Vec<Node>,
     root: NodeId,
-    taffy: TaffyTree<()>,
+    taffy: TaffyTree<LayoutContext>,
+}
+
+#[derive(Clone, Debug, PartialEq)]
+enum LayoutContext {
+    Text(TextMeasure),
+}
+
+#[derive(Clone, Debug, PartialEq)]
+struct TextMeasure {
+    text: String,
+    font_size: f32,
+    font_weight: FontWeight,
 }
 
 impl UiTree {
@@ -122,8 +135,36 @@ impl UiTree {
         &mut self,
         available_space: Size<AvailableSpace>,
     ) -> Result<(), taffy::TaffyError> {
+        self.sync_layout_contexts()?;
         let root_layout = self.nodes[self.root as usize].layout;
-        self.taffy.compute_layout(root_layout, available_space)
+        self.taffy.compute_layout_with_measure(
+            root_layout,
+            available_space,
+            |known_dimensions, available_space, _node_id, context, _style| {
+                measure_layout_context(known_dimensions, available_space, context)
+            },
+        )
+    }
+
+    pub fn compute_content_fit_layout(
+        &mut self,
+        max_width: f32,
+        max_height: f32,
+    ) -> Result<Size<f32>, taffy::TaffyError> {
+        self.compute_layout(Size::MAX_CONTENT)?;
+        let preferred = self.layout_box(self.root)?;
+        let width = if preferred.width > max_width { max_width } else { preferred.width };
+        let height = if preferred.height > max_height { max_height } else { preferred.height };
+
+        let mut root_style = self.nodes[self.root as usize].style.clone();
+        root_style.width = Some(width);
+        root_style.height = Some(height);
+        self.apply_style(self.root, root_style)?;
+        self.compute_layout(Size {
+            width: AvailableSpace::Definite(width),
+            height: AvailableSpace::Definite(height),
+        })?;
+        Ok(Size { width, height })
     }
 
     pub fn layout_box(&self, id: NodeId) -> Result<LayoutBox, taffy::TaffyError> {
@@ -167,6 +208,73 @@ impl UiTree {
             .find(|node| node.children.iter().any(|child| *child == id))
             .map(|node| node.id)
     }
+
+    fn sync_layout_contexts(&mut self) -> Result<(), taffy::TaffyError> {
+        for node in &self.nodes {
+            self.taffy.set_node_context(node.layout, layout_context_for(node))?;
+        }
+        Ok(())
+    }
+}
+
+fn layout_context_for(node: &Node) -> Option<LayoutContext> {
+    if !(node.descriptions.contains(&Description::Textual)
+        || node.descriptions.contains(&Description::Title)
+        || node.descriptions.contains(&Description::Logogram)
+        || node.descriptions.contains(&Description::Pressable))
+    {
+        return None;
+    }
+
+    let text = text_like_attr(node)?;
+    Some(LayoutContext::Text(TextMeasure {
+        text: String::from(text),
+        font_size: node.style.font_size.unwrap_or(14.0),
+        font_weight: node.style.font_weight.unwrap_or(FontWeight::Normal),
+    }))
+}
+
+fn text_like_attr(node: &Node) -> Option<&str> {
+    match node
+        .attrs
+        .get("text")
+        .or_else(|| node.attrs.get("label"))
+        .or_else(|| node.attrs.get("glyph"))
+    {
+        Some(AttrValue::Str(value)) => Some(value.as_str()),
+        _ => None,
+    }
+}
+
+fn measure_layout_context(
+    known_dimensions: Size<Option<f32>>,
+    _available_space: Size<AvailableSpace>,
+    context: Option<&mut LayoutContext>,
+) -> Size<f32> {
+    if let Size { width: Some(width), height: Some(height) } = known_dimensions {
+        return Size { width, height };
+    }
+
+    match context {
+        Some(LayoutContext::Text(text)) => measure_text(known_dimensions, text),
+        None => Size::ZERO,
+    }
+}
+
+fn measure_text(known_dimensions: Size<Option<f32>>, text: &TextMeasure) -> Size<f32> {
+    let px_size = text.font_size.max(1.0);
+    let weight_factor = match text.font_weight {
+        FontWeight::Normal => 0.62,
+        FontWeight::Bold => 0.66,
+    };
+    let advance = (px_size * weight_factor).max(1.0);
+    let natural_width = text.text.chars().count() as f32 * advance;
+    let natural_height = px_size * 1.2;
+
+    Size {
+        width: known_dimensions.width.unwrap_or(natural_width),
+        height: known_dimensions.height.unwrap_or(natural_height),
+    }
 }
 
 pub fn apply_style_to_taffy(style: &ResolvedStyle) -> Style {
@@ -179,6 +287,14 @@ pub fn apply_style_to_taffy(style: &ResolvedStyle) -> Style {
             width: style.width.map(Dimension::from_length).unwrap_or(Dimension::AUTO),
             height: style.height.map(Dimension::from_length).unwrap_or(Dimension::AUTO),
         },
+        min_size: Size {
+            width: style.min_width.map(Dimension::from_length).unwrap_or(Dimension::AUTO),
+            height: style.min_height.map(Dimension::from_length).unwrap_or(Dimension::AUTO),
+        },
+        max_size: Size {
+            width: style.max_width.map(Dimension::from_length).unwrap_or(Dimension::AUTO),
+            height: style.max_height.map(Dimension::from_length).unwrap_or(Dimension::AUTO),
+        },
         margin: rect_all_auto(length_auto(style.margin.unwrap_or(0.0))),
         padding: rect_all(length(style.padding.unwrap_or(0.0))),
         border: rect_all(length(style.border_width.unwrap_or(0.0))),
@@ -189,6 +305,9 @@ pub fn apply_style_to_taffy(style: &ResolvedStyle) -> Style {
         flex_direction: map_flex_direction(
             style.flex_direction.unwrap_or(StileFlexDirection::Column),
         ),
+        flex_basis: style.flex_basis.map(Dimension::from_length).unwrap_or(Dimension::AUTO),
+        flex_grow: style.flex_grow.unwrap_or(0.0),
+        flex_shrink: style.flex_shrink.unwrap_or(1.0),
         justify_content: style.justify_content.map(map_justify_content),
         align_items: style.align_items.map(map_align_items),
         ..Style::default()
@@ -310,17 +429,13 @@ mod tests {
                     Declaration::BorderWidth(2.0),
                     Declaration::FlexDirection(FlexDirection::Row),
                     Declaration::JustifyContent(JustifyContent::Center),
-                    Declaration::Width(120.0),
-                    Declaration::Height(40.0),
+                    Declaration::MinWidth(120.0),
+                    Declaration::MinHeight(40.0),
                 ],
             ),
             Rule::new(
                 Selector::has(Description::Textual),
-                alloc::vec![
-                    Declaration::FontSize(14.0),
-                    Declaration::Width(64.0),
-                    Declaration::Height(16.0)
-                ],
+                alloc::vec![Declaration::FontSize(14.0)],
             ),
         ];
 
@@ -332,5 +447,69 @@ mod tests {
         assert!(root_box.width >= button_box.width);
         assert_eq!(button_box.width, 120.0);
         assert_eq!(button_box.height, 40.0);
+    }
+
+    #[test]
+    fn text_intrinsic_size_expands_parent_past_minimum() {
+        let mut tree = UiTree::new().unwrap();
+        let button = tree.pressable("Launch very long application").unwrap();
+        let label = tree.text("Launch very long application").unwrap();
+        tree.add_child(tree.root(), button).unwrap();
+        tree.add_child(button, label).unwrap();
+
+        let rules = alloc::vec![
+            Rule::new(
+                Selector::has(Description::Container),
+                alloc::vec![
+                    Declaration::FlexDirection(FlexDirection::Column),
+                    Declaration::AlignItems(AlignItems::Start),
+                ],
+            ),
+            Rule::new(
+                Selector::has(Description::Pressable),
+                alloc::vec![
+                    Declaration::Padding(8.0),
+                    Declaration::FlexDirection(FlexDirection::Row),
+                    Declaration::MinWidth(40.0),
+                    Declaration::MinHeight(24.0),
+                ],
+            ),
+            Rule::new(
+                Selector::has(Description::Textual),
+                alloc::vec![Declaration::FontSize(14.0)],
+            ),
+        ];
+
+        tree.restyle(&rules).unwrap();
+        tree.compute_layout(Size::MAX_CONTENT).unwrap();
+
+        let label_box = tree.layout_box(label).unwrap();
+        let button_box = tree.layout_box(button).unwrap();
+        assert!(label_box.width > 40.0);
+        assert!(button_box.width > label_box.width);
+        assert!(button_box.width > 40.0);
+    }
+
+    #[test]
+    fn content_fit_layout_prefers_content_then_clamps_to_bounds() {
+        let mut tree = UiTree::new().unwrap();
+        let label = tree.text("A very wide label").unwrap();
+        tree.add_child(tree.root(), label).unwrap();
+
+        let rules = alloc::vec![
+            Rule::new(
+                Selector::has(Description::Container),
+                alloc::vec![Declaration::AlignItems(AlignItems::Start)],
+            ),
+            Rule::new(
+                Selector::has(Description::Textual),
+                alloc::vec![Declaration::FontSize(20.0)],
+            ),
+        ];
+
+        tree.restyle(&rules).unwrap();
+        let fitted = tree.compute_content_fit_layout(80.0, 200.0).unwrap();
+        assert_eq!(fitted.width, 80.0);
+        assert_eq!(tree.layout_box(tree.root()).unwrap().width, 80.0);
     }
 }

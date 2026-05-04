@@ -1,6 +1,7 @@
 use alloc::string::String;
 use alloc::vec::Vec;
 
+use stile::typography::{SCALE_H3, SPACE_MD, SPACE_SM};
 use taffy::TaffyError;
 
 use crate::{
@@ -11,7 +12,6 @@ use crate::{
     WindowChromeNodes, WindowChromeService, default_theme, render_window_chrome,
     window_chrome_rules_for_theme,
 };
-use stile::typography::{SCALE_H3, SPACE_MD, SPACE_SM};
 
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub enum ShowcaseComponent {
@@ -224,7 +224,6 @@ impl PetalsShowcase {
             Rule::new(
                 Selector::has(Description::ShowcaseHeader),
                 alloc::vec![
-                    Declaration::Height(20.0),
                     Declaration::FontSize(SCALE_H3),
                     Declaration::FontWeight(FontWeight::Bold),
                     Declaration::Color(color_from_argb(theme.chrome_text)),
@@ -243,8 +242,8 @@ impl PetalsShowcase {
             Rule::new(
                 Selector::has(Description::ShowcaseSwatch),
                 alloc::vec![
-                    Declaration::Width(76.0),
-                    Declaration::Height(36.0),
+                    Declaration::MinWidth(76.0),
+                    Declaration::MinHeight(36.0),
                     Declaration::Padding(SPACE_SM),
                     Declaration::BackgroundColor(color_from_argb(theme.button_top)),
                     Declaration::Color(color_from_argb(theme.chrome_text)),
