@@ -1138,7 +1138,7 @@ mod tests {
             &mut plan,
         );
         let has_transparent_fill = plan.commands.iter().any(|cmd| {
-            matches!(cmd, PaintCommand::FillRect { rect, color: 0 }
+            matches!(cmd, PaintCommand::FillRect { rect, color: 0x00000000 }
                 if rect.x == 4 && rect.y == 44 && rect.w == 360 && rect.h == 196)
         });
         assert!(

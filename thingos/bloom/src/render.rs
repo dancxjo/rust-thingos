@@ -2109,7 +2109,8 @@ fn draw_contact_shadow(
     const LAYERS: u32 = 5;
     for layer in 0..LAYERS {
         let expand = (LAYERS - 1 - layer) as i32;
-        let alpha = (base_alpha as u32) * (layer + 1) / LAYERS;
+        // Round to nearest to avoid truncation banding across layers.
+        let alpha = (base_alpha as u32 * (layer + 1) + LAYERS / 2) / LAYERS;
         fill_rect_i32(
             dst,
             stride,
