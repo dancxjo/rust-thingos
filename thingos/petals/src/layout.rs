@@ -544,10 +544,10 @@ mod tests {
     /// when the parent container uses `align_items: Stretch`.
     ///
     /// In a `flex-direction: column` parent, the cross axis is horizontal.
-    /// Setting `align_items: Stretch` on the parent makes each child fill the
-    /// full container width — that is the intended hit-region mechanism for
-    /// list rows, not `flex_grow` (which affects height, not width, in
-    /// column direction).
+    /// `align_items: Stretch` on the parent makes each child fill the full
+    /// container width — that is the intended mechanism for full-row hit areas.
+    /// (`flex_grow` controls expansion along the main axis, which is vertical
+    /// in a column layout, and does not affect width.)
     #[test]
     fn list_row_pressable_fills_container_width() {
         let container_width = 360.0_f32;
@@ -593,10 +593,10 @@ mod tests {
         assert!(node.descriptions.contains(&Description::ListRow));
     }
 
-    /// `flex_grow` can be explicitly set on a `ListRow` when height expansion
-    /// is desired (e.g. the row should fill remaining vertical space).
+    /// Explicit `Width` and `Height` rules on a `ListRow` node are respected
+    /// even when the parent uses `align_items: Start` (no cross-axis stretch).
     #[test]
-    fn list_row_pressable_flex_grow_can_be_overridden() {
+    fn list_row_pressable_explicit_dimensions_are_respected() {
         let container_width = 300.0_f32;
         let mut tree = UiTree::new().unwrap();
         let row = tree.list_row_pressable("Item").unwrap();
