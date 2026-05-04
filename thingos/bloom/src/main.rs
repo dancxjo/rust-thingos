@@ -241,7 +241,11 @@ fn main(_arg: usize) -> ! {
     }
 
     // Theme watch → ThemeService
-    bloom_loop.add_service(alloc::boxed::Box::new(ThemeService::new(theme_watch_fd, THEME_PATH)));
+    bloom_loop.add_service(alloc::boxed::Box::new(ThemeService::new(
+        theme_watch_fd,
+        THEME_PATH,
+        Some(WP_PATH),
+    )));
 
     // ── Spawn Wayland server thread + wire IPC ports ──────────────────────────
     // cmd port: Wayland → Main (surface operations)

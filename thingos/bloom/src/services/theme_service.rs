@@ -10,7 +10,7 @@ use abi::syscall::vfs_flags::{O_CREAT, O_RDONLY, O_RDWR, O_TRUNC};
 use stem::syscall::vfs::{vfs_close, vfs_open, vfs_read, vfs_stat, vfs_write};
 
 use crate::loop_types::{BloomService, Interest, LoopAction, LoopEvent};
-use crate::theme::DEFAULT_THEME_NAME;
+use crate::theme::{DEFAULT_THEME_NAME, theme_by_name};
 use crate::world::BloomWorld;
 
 pub const DEFAULT_THEME_CONFIG_PATH: &str = "/session/desktop/theme";
@@ -70,17 +70,39 @@ fn theme_config_stamp(config_path: &str) -> Option<ThemeStamp> {
     })
 }
 
+fn write_wallpaper_target(config_path: &str, wallpaper_path: &str) -> bool {
+    if let Ok(fd) = vfs_open(config_path, O_CREAT | O_TRUNC | O_RDWR) {
+        let wrote_path = vfs_write(fd, wallpaper_path.as_bytes()).is_ok();
+        let wrote_newline = vfs_write(fd, b"\n").is_ok();
+        let _ = vfs_close(fd);
+        wrote_path && wrote_newline
+    } else {
+        false
+    }
+}
+
 pub struct ThemeService {
     fd: Option<u32>,
     config_path: &'static str,
+    wallpaper_config_path: Option<&'static str>,
     last_stamp: Option<ThemeStamp>,
     interests: Vec<Interest>,
 }
 
 impl ThemeService {
-    pub fn new(fd: Option<u32>, config_path: &'static str) -> Self {
+    pub fn new(
+        fd: Option<u32>,
+        config_path: &'static str,
+        wallpaper_config_path: Option<&'static str>,
+    ) -> Self {
         let interests = if let Some(fd) = fd { vec![Interest::FdReadable(fd)] } else { Vec::new() };
-        Self { fd, config_path, last_stamp: theme_config_stamp(config_path), interests }
+        Self {
+            fd,
+            config_path,
+            wallpaper_config_path,
+            last_stamp: theme_config_stamp(config_path),
+            interests,
+        }
     }
 
     fn arm_fallback_poll_timer() -> LoopAction {
@@ -104,8 +126,16 @@ impl ThemeService {
     fn apply_theme(&mut self, world: &mut BloomWorld) {
         self.last_stamp = theme_config_stamp(self.config_path);
         let requested = theme_target_or_default(self.config_path);
+        let theme = theme_by_name(&requested);
         let applied = world.visuals.set_theme_by_name(&requested);
         stem::info!("Applying theme {}", applied);
+        if let (Some(config_path), Some(wallpaper_path)) =
+            (self.wallpaper_config_path, theme.wallpaper_path)
+        {
+            let _ = write_wallpaper_target(config_path, wallpaper_path);
+            stem::info!("Applying theme wallpaper {}", wallpaper_path);
+            world.visuals.start_background_load(&world.display, wallpaper_path);
+        }
         world.damage.mark_full(world.primary.width, world.primary.height);
     }
 

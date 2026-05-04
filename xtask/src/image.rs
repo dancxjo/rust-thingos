@@ -29,12 +29,14 @@ struct WallpaperSpec {
     variant: u8,
 }
 
-const DEFAULT_WALLPAPERS: [WallpaperSpec; 5] = [
+const DEFAULT_WALLPAPERS: [WallpaperSpec; 7] = [
     WallpaperSpec { file_name: "flower.bmp", variant: 0 },
     WallpaperSpec { file_name: "flower.png", variant: 0 },
     WallpaperSpec { file_name: "clouds.bmp", variant: 1 },
     WallpaperSpec { file_name: "leather.bmp", variant: 2 },
     WallpaperSpec { file_name: "linen.bmp", variant: 3 },
+    WallpaperSpec { file_name: "nocturne_iris.bmp", variant: 4 },
+    WallpaperSpec { file_name: "nocturne_iris.png", variant: 4 },
 ];
 
 const ISO_ROOT_DIRS: &[&str] = &[
@@ -263,6 +265,45 @@ fn wallpaper_pixel(variant: u8, x: u32, y: u32, width: u32, height: u32) -> (u8,
         2 => {
             let grain = ((x * 17 + y * 31 + (x ^ y) * 7) % 55) as u8;
             (82 + grain, 53 + grain / 2, 38 + grain / 3)
+        }
+        4 => {
+            let xi = x as i32;
+            let yi = y as i32;
+            let cx = width as i32 / 2;
+            let cy = height as i32 / 2 + 12;
+            let dx = xi - cx;
+            let dy = yi - cy;
+            let dist2 = (dx * dx + dy * dy).max(1) as u32;
+            let vignette = (dist2 / 280).min(70) as u8;
+            let mut r = 5u8.saturating_add((x * 10 / width) as u8).saturating_sub(vignette / 5);
+            let mut g = 6u8.saturating_add((y * 8 / height) as u8).saturating_sub(vignette / 6);
+            let mut b = 14u8.saturating_add((x * 18 / width) as u8).saturating_sub(vignette / 4);
+
+            for (px, py, rx, ry, tilt) in [
+                (-54, -18, 34, 82, -3),
+                (-24, -36, 38, 88, -1),
+                (18, -36, 40, 90, 1),
+                (54, -18, 34, 82, 3),
+                (0, 34, 48, 70, 0),
+            ] {
+                let lx = xi - (cx + px);
+                let ly = yi - (cy + py);
+                let skew = lx + ly * tilt / 8;
+                let petal = (skew * skew * 100) / (rx * rx) + (ly * ly * 100) / (ry * ry);
+                if petal < 100 {
+                    let edge = ((100 - petal) as u8).min(80);
+                    let vein = ((skew.abs() * 7 + ly.abs() * 3) % 34) as u8;
+                    r = r.saturating_add(38 + edge / 2).saturating_sub(vein / 4);
+                    g = g.saturating_add(16 + edge / 6).saturating_sub(vein / 6);
+                    b = b.saturating_add(88 + edge).saturating_sub(vein / 3);
+                }
+            }
+
+            if dx.abs() < 8 && dy > 24 {
+                g = g.saturating_add(22);
+                b = b.saturating_add(12);
+            }
+            (r, g, b)
         }
         _ => {
             let weave = (((x / 6) + (y / 4)) % 2) as u8 * 18;
@@ -1521,6 +1562,21 @@ mod tests {
         assert!(!PUBLIC_ASSET_DIRS.iter().any(|(_, dst)| dst.starts_with("assets")));
         assert!(!PUBLIC_ASSET_DIRS.iter().any(|(_, dst)| dst.starts_with("icons/chicago95")));
         assert!(!PUBLIC_ASSET_DIRS.iter().any(|(_, dst)| dst.starts_with("pci")));
+    }
+
+    #[test]
+    fn nocturne_iris_wallpaper_is_generated_for_runtime_assets() {
+        assert!(
+            DEFAULT_WALLPAPERS
+                .iter()
+                .any(|spec| spec.file_name == "nocturne_iris.png" && spec.variant == 4)
+        );
+        assert!(
+            DEFAULT_WALLPAPERS
+                .iter()
+                .any(|spec| spec.file_name == "nocturne_iris.bmp" && spec.variant == 4)
+        );
+        assert_ne!(wallpaper_pixel(4, 0, 0, 320, 180), wallpaper_pixel(4, 160, 90, 320, 180));
     }
 
     #[test]

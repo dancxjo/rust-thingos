@@ -268,6 +268,7 @@ values; Blossom builds the Petals chrome plan; Bloom executes it with Pistil:
 
 ```sh
 echo "Ghost Flower" > /session/desktop/theme
+echo NocturneIris > /session/desktop/theme
 echo "Solar Warm Spine" > /session/desktop/theme
 echo "Leather Grain" > /session/desktop/theme
 echo "Linen Light" > /session/desktop/theme
@@ -279,6 +280,7 @@ Stile palette:
 
 ```sh
 echo flower.png > /session/desktop/theme
+echo nocturne_iris.png > /session/desktop/theme
 echo flower.bmp > /session/desktop/theme
 echo leather.bmp > /session/desktop/theme
 echo linen.bmp > /session/desktop/theme

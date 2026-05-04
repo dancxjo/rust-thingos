@@ -63,6 +63,10 @@ Feature: Bloom compositor desktop behavior
     And I type "echo aurora-glass > /session/desktop/theme" on the serial console
     Then the serial output should contain "Applying theme Aurora Glass" within 60s
     And the serial output should contain "clock: applying theme Aurora Glass" within 60s
+    And I type "echo nocturne_iris > /session/desktop/theme" on the serial console
+    Then the serial output should contain "Applying theme NocturneIris" within 60s
+    And the serial output should contain "Applying theme wallpaper /public/wallpapers/nocturne_iris.png" within 60s
+    And the serial output should contain "clock: applying theme NocturneIris" within 60s
     When I type "echo obsidian-bloom > /session/desktop/theme" on the serial console
     Then the serial output should contain "Applying theme Obsidian Bloom" within 60s
     And the serial output should contain "clock: applying theme Obsidian Bloom" within 60s
@@ -73,6 +77,7 @@ Feature: Bloom compositor desktop behavior
     When I wait for the shell prompt
     And I type "themes --list" on the serial console
     Then the command output should contain "SolarisWarm"
+    And the command output should contain "NocturneIris"
     And the command output should contain "Aurora Glass"
     And the command output should contain "Obsidian Bloom"
     When I type "themes --set aurora-glass" on the serial console

@@ -25,9 +25,9 @@ pub use paint::{
 pub use rule::{Declaration, Rule};
 pub use selector::{Selector, StylableSurface};
 pub use theme::{
-    AURORA_GLASS, DEFAULT_THEME_NAME, OBSIDIAN_BLOOM, SOLARIS_WARM, SOLARIS_WARM_PALETTE,
-    SolarisWarmPalette, Theme, ThemeRenderer, WindowStateTokens, available_themes, default_theme,
-    find_theme_by_name, theme_by_name,
+    AURORA_GLASS, DEFAULT_THEME_NAME, NOCTURNE_IRIS, OBSIDIAN_BLOOM, SOLARIS_WARM,
+    SOLARIS_WARM_PALETTE, SolarisWarmPalette, Theme, ThemeRenderer, WindowStateTokens,
+    available_themes, default_theme, find_theme_by_name, theme_by_name,
 };
 pub use typography::{
     SCALE_BODY, SCALE_CAPTION, SCALE_DISPLAY, SCALE_H1, SCALE_H2, SCALE_H3, SCALE_LABEL, SPACE_LG,

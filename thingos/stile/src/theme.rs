@@ -11,6 +11,7 @@ pub const DEFAULT_THEME_NAME: &str = "SolarisWarm";
 pub struct Theme {
     pub name: &'static str,
     pub renderer: ThemeRenderer,
+    pub wallpaper_path: Option<&'static str>,
     pub active: WindowStateTokens,
     pub inactive: WindowStateTokens,
     pub titlebar_height: u32,
@@ -52,6 +53,7 @@ pub enum ThemeRenderer {
     SolarisWarm,
     ObsidianFacet,
     AuroraGlass,
+    NocturneIris,
 }
 
 #[derive(Clone, Copy)]
@@ -91,6 +93,7 @@ pub const SOLARIS_WARM_PALETTE: SolarisWarmPalette = SolarisWarmPalette {
 pub const SOLARIS_WARM: Theme = Theme {
     name: DEFAULT_THEME_NAME,
     renderer: ThemeRenderer::SolarisWarm,
+    wallpaper_path: None,
     active: WindowStateTokens {
         border: color_argb(SOLARIS_WARM_PALETTE.border),
         title_top: color_argb(SOLARIS_WARM_PALETTE.bg_secondary),
@@ -138,6 +141,7 @@ pub const SOLARIS_WARM: Theme = Theme {
 pub const OBSIDIAN_BLOOM: Theme = Theme {
     name: "Obsidian Bloom",
     renderer: ThemeRenderer::ObsidianFacet,
+    wallpaper_path: None,
     active: WindowStateTokens {
         border: 0xFF11131D,
         title_top: 0xFF2A3147,
@@ -185,6 +189,7 @@ pub const OBSIDIAN_BLOOM: Theme = Theme {
 pub const AURORA_GLASS: Theme = Theme {
     name: "Aurora Glass",
     renderer: ThemeRenderer::AuroraGlass,
+    wallpaper_path: None,
     active: WindowStateTokens {
         border: 0x8A174A5A,
         title_top: 0x70406B87,
@@ -229,6 +234,54 @@ pub const AURORA_GLASS: Theme = Theme {
     contact_shadow: 0x8A000000,
 };
 
+pub const NOCTURNE_IRIS: Theme = Theme {
+    name: "NocturneIris",
+    renderer: ThemeRenderer::NocturneIris,
+    wallpaper_path: Some("/public/wallpapers/nocturne_iris.png"),
+    active: WindowStateTokens {
+        border: 0x996F55D9,
+        title_top: 0x702E2158,
+        title_bottom: 0x24141020,
+    },
+    inactive: WindowStateTokens {
+        border: 0x553B346F,
+        title_top: 0x341D1730,
+        title_bottom: 0x140B0E14,
+    },
+    titlebar_height: 44,
+    frame_thickness: 4,
+    corner_radius: 8,
+    chrome_text: 0xFFEDE9FF,
+    chrome_text_inactive: 0xCCA9A3C9,
+    control_icon: 0xFFE8C36A,
+    control_icon_inactive: 0xB8C9A44F,
+    close_icon: 0xFFFFD785,
+    title_rule_active: 0x667C5CFF,
+    title_rule_inactive: 0x334B3FA3,
+    body_top: 0xA6141020,
+    button_top: 0x187C5CFF,
+    outer_stroke: 0xA06F55D9,
+    inner_stroke: 0x40B9A7FF,
+    inner_stroke_inactive: 0x244B3FA3,
+    frame_fill: 0xA6141020,
+    frame_fill_inactive: 0x80110E1C,
+    frame_fill_bottom: 0x900B0E14,
+    frame_fill_bottom_inactive: 0x600B0E14,
+    frame_bevel_light: 0x66B9A7FF,
+    frame_bevel_light_inactive: 0x334B3FA3,
+    frame_bevel_shadow: 0x66000000,
+    title_sheen: 0x557C5CFF,
+    facet: 0x303C2A78,
+    facet_inactive: 0x18140F24,
+    focus_accent: 0x997C5CFF,
+    hover_tint: 0x2E7C5CFF,
+    edge_light: 0xCCB9A7FF,
+    edge_dark: 0xB00B0E14,
+    content_edge: 0x24B9A7FF,
+    grid_line: 0x00000000,
+    contact_shadow: 0x407C5CFF,
+};
+
 impl Theme {
     pub fn render_window_chrome<'a>(
         self,
@@ -242,6 +295,10 @@ impl Theme {
         match self.renderer {
             ThemeRenderer::SolarisWarm => {
                 push_solaris_warm_window(self, request, out);
+                return;
+            }
+            ThemeRenderer::NocturneIris => {
+                push_nocturne_iris_window(self, request, out);
                 return;
             }
             ThemeRenderer::ObsidianFacet => push_facet_frame(self, request, out),
@@ -261,7 +318,8 @@ pub fn default_theme() -> Theme {
     SOLARIS_WARM
 }
 
-pub static AVAILABLE_THEMES: [Theme; 3] = [SOLARIS_WARM, AURORA_GLASS, OBSIDIAN_BLOOM];
+pub static AVAILABLE_THEMES: [Theme; 4] =
+    [SOLARIS_WARM, NOCTURNE_IRIS, AURORA_GLASS, OBSIDIAN_BLOOM];
 
 pub fn available_themes() -> &'static [Theme] {
     &AVAILABLE_THEMES
@@ -271,6 +329,8 @@ pub fn find_theme_by_name(name: &str) -> Option<Theme> {
     let trimmed = name.trim();
     if matches_solaris_warm(trimmed) {
         Some(SOLARIS_WARM)
+    } else if matches_nocturne_iris(trimmed) {
+        Some(NOCTURNE_IRIS)
     } else if matches_aurora_glass(trimmed) {
         Some(AURORA_GLASS)
     } else if matches_obsidian_bloom(trimmed) {
@@ -300,10 +360,112 @@ fn matches_aurora_glass(trimmed: &str) -> bool {
         || trimmed.eq_ignore_ascii_case("glass")
 }
 
+fn matches_nocturne_iris(trimmed: &str) -> bool {
+    trimmed.eq_ignore_ascii_case("nocturneiris")
+        || trimmed.eq_ignore_ascii_case("nocturne iris")
+        || trimmed.eq_ignore_ascii_case("nocturne-iris")
+        || trimmed.eq_ignore_ascii_case("nocturne_iris")
+        || trimmed.eq_ignore_ascii_case("nocturne_iris.stile")
+        || trimmed.eq_ignore_ascii_case("nocturne_iris.png")
+        || trimmed.eq_ignore_ascii_case("nocturne_iris.bmp")
+        || trimmed.eq_ignore_ascii_case("iris")
+}
+
 fn matches_obsidian_bloom(trimmed: &str) -> bool {
     trimmed.eq_ignore_ascii_case("obsidian bloom")
         || trimmed.eq_ignore_ascii_case("obsidian-bloom")
         || trimmed.eq_ignore_ascii_case("obsidian_bloom")
+}
+
+fn push_nocturne_iris_window<'a>(
+    theme: Theme,
+    request: WindowChromeRequest<'a>,
+    out: &mut PaintList<'a>,
+) {
+    let rect = request.visual_rect;
+    let frame = request.frame.max(1);
+    let titlebar_height = request.titlebar_height.min(theme.titlebar_height as i32);
+    let active = request.state.active;
+    let state = if active { theme.active } else { theme.inactive };
+
+    out.commands.push(PaintCommand::Shadow {
+        rect,
+        offset_x: 0,
+        offset_y: 8,
+        blur_radius: 32,
+        color: if active { theme.contact_shadow } else { 0x26000000 },
+    });
+    out.commands.push(PaintCommand::PushClip { rect });
+    out.commands.push(PaintCommand::VerticalGradient {
+        rect,
+        top: if active { theme.frame_fill } else { theme.frame_fill_inactive },
+        bottom: if active { theme.frame_fill_bottom } else { theme.frame_fill_bottom_inactive },
+    });
+
+    if titlebar_height > 0 {
+        let titlebar = ThemeRect::new(rect.x, rect.y, rect.w, titlebar_height);
+        out.commands.push(PaintCommand::VerticalGradient {
+            rect: titlebar,
+            top: state.title_top,
+            bottom: state.title_bottom,
+        });
+        if rect.w > frame * 2 {
+            out.commands.push(PaintCommand::HorizontalGradient {
+                rect: ThemeRect::new(
+                    rect.x + frame,
+                    rect.y + titlebar_height - 1,
+                    rect.w - frame * 2,
+                    1,
+                ),
+                left: color_with_alpha(Color::rgb(0x7C, 0x5C, 0xFF), 0),
+                center: if active { theme.title_rule_active } else { theme.title_rule_inactive },
+                right: color_with_alpha(Color::rgb(0x7C, 0x5C, 0xFF), 0),
+            });
+        }
+        if active && rect.w > frame * 2 {
+            out.commands.push(PaintCommand::HorizontalGradient {
+                rect: ThemeRect::new(rect.x + frame, rect.y + 1, rect.w - frame * 2, 2),
+                left: 0x007C5CFF,
+                center: theme.title_sheen,
+                right: 0x007C5CFF,
+            });
+        }
+    }
+
+    if rect.w > frame * 2 && rect.h > titlebar_height + frame {
+        let body = ThemeRect::new(
+            rect.x + frame,
+            rect.y + titlebar_height,
+            rect.w - frame * 2,
+            rect.h - titlebar_height - frame,
+        );
+        out.commands.push(PaintCommand::VerticalGradient {
+            rect: body,
+            top: 0x121E1538,
+            bottom: 0x080B0E14,
+        });
+    }
+
+    out.commands.push(PaintCommand::StrokeRect {
+        rect,
+        thickness: 1,
+        color: if active { theme.outer_stroke } else { theme.inactive.border },
+    });
+    out.commands.push(PaintCommand::StrokeRect {
+        rect: ThemeRect::new(rect.x + 1, rect.y + 1, rect.w - 2, rect.h - 2),
+        thickness: 1,
+        color: if active { theme.inner_stroke } else { theme.inner_stroke_inactive },
+    });
+
+    if request.titlebar_height > 0 {
+        push_titlebar_grip(theme, request, out);
+        push_nocturne_controls(theme, request, out);
+        if let Some(title) = request.title {
+            push_title(theme, request, title, out);
+        }
+    }
+
+    out.commands.push(PaintCommand::PopClip);
 }
 
 fn push_solaris_warm_window<'a>(
@@ -816,6 +978,68 @@ fn push_controls<'a>(theme: Theme, request: WindowChromeRequest<'a>, out: &mut P
     }
 }
 
+fn push_nocturne_controls<'a>(
+    theme: Theme,
+    request: WindowChromeRequest<'a>,
+    out: &mut PaintList<'a>,
+) {
+    for control in request.controls.iter().flatten() {
+        let hovered = contains(control.rect, request.state.pointer_x, request.state.pointer_y);
+        let pressed = hovered && request.state.primary_button_down;
+        let halo = centered_square(control.rect, if hovered { 34 } else { 28 });
+        let icon = control_icon(control.control, request.state.shaded, request.state.fullscreen);
+        let base = if matches!(control.control, ThemeControl::Close) {
+            theme.close_icon
+        } else if request.state.active {
+            theme.control_icon
+        } else {
+            theme.control_icon_inactive
+        };
+        let icon_color = if pressed {
+            theme.chrome_text
+        } else if hovered {
+            if matches!(control.control, ThemeControl::Close) {
+                theme.close_icon
+            } else {
+                theme.edge_light
+            }
+        } else {
+            base
+        };
+        if hovered {
+            out.commands.push(PaintCommand::Shadow {
+                rect: halo,
+                offset_x: 0,
+                offset_y: 0,
+                blur_radius: 12,
+                color: if matches!(control.control, ThemeControl::Close) {
+                    0x4DE8C36A
+                } else {
+                    0x4D7C5CFF
+                },
+            });
+            out.commands.push(PaintCommand::FillRect {
+                rect: halo,
+                color: if pressed { 0x267C5CFF } else { theme.hover_tint },
+            });
+            out.commands.push(PaintCommand::StrokeRect {
+                rect: halo,
+                thickness: 1,
+                color: if matches!(control.control, ThemeControl::Close) {
+                    0x66E8C36A
+                } else {
+                    theme.inner_stroke
+                },
+            });
+            out.commands.push(PaintCommand::FillRect {
+                rect: centered_square(control.rect, 8),
+                color: if pressed { 0x40E8C36A } else { 0x267C5CFF },
+            });
+        }
+        out.commands.push(PaintCommand::Icon { rect: control.rect, icon, color: icon_color });
+    }
+}
+
 fn push_titlebar_grip<'a>(theme: Theme, request: WindowChromeRequest<'a>, out: &mut PaintList<'a>) {
     if request.titlebar_height < 28 {
         return;
@@ -956,8 +1180,14 @@ mod tests {
     #[test]
     fn bundled_theme_names_resolve_to_theme_system() {
         assert_eq!(default_theme().name, SOLARIS_WARM.name);
-        assert_eq!(available_themes().len(), 3);
+        assert_eq!(available_themes().len(), 4);
         assert_eq!(theme_by_name("solaris-warm").name, SOLARIS_WARM.name);
+        assert_eq!(theme_by_name("nocturne-iris").name, NOCTURNE_IRIS.name);
+        assert_eq!(theme_by_name("nocturne_iris.stile").name, NOCTURNE_IRIS.name);
+        assert_eq!(
+            theme_by_name("iris").wallpaper_path,
+            Some("/public/wallpapers/nocturne_iris.png")
+        );
         assert_eq!(theme_by_name("aurora-glass").name, AURORA_GLASS.name);
         assert_eq!(theme_by_name("obsidian-bloom").name, OBSIDIAN_BLOOM.name);
         assert_eq!(find_theme_by_name("obsidian_bloom").unwrap().name, OBSIDIAN_BLOOM.name);

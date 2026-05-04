@@ -15,12 +15,12 @@ use stem::application::{
     AppAction, Application, ApplicationContext, ServiceLooper, run_application,
 };
 use stem::info;
+use stem::kinds::KIND_ID_THINGOS_UI_THEME_CHANGED;
 use stem::service_loop::ServiceEvent;
+use stem::syscall::message::{KindId, msg_broadcast};
 use stem::syscall::socket::{connect, sendmsg, socket};
 use stem::syscall::socket_domain::AF_UNIX;
 use stem::syscall::socket_type::SOCK_STREAM;
-use stem::kinds::KIND_ID_THINGOS_UI_THEME_CHANGED;
-use stem::syscall::message::{KindId, msg_broadcast};
 use stem::syscall::{
     argv_get, exit, getpgrp, memfd_create, sleep_ms, vfs_close, vfs_mkdir, vfs_open, vfs_read,
     vfs_write, vm_map,
@@ -41,6 +41,7 @@ const XDG_SURFACE_ID: u32 = 11;
 const TOPLEVEL_ID: u32 = 12;
 
 const THEME_PATH: &str = "/session/desktop/theme";
+const WALLPAPER_PATH: &str = "/session/desktop/wallpaper";
 const PISTIL_PATH: &str = "/lib/libpistil.so";
 const DRAW_TEXT_SYMBOL: &[u8] = b"pistil_draw_text";
 const IDLE_SLEEP_MS: u64 = 16;
@@ -115,7 +116,7 @@ fn set_theme_cli(name: &str) -> ! {
         exit(1);
     };
 
-    match write_theme_name(theme.name) {
+    match write_theme_selection(theme) {
         Ok(()) => {
             broadcast_theme_changed(theme.name);
             print(&alloc::format!("Selected theme {}\n", theme.name));
@@ -409,7 +410,7 @@ fn read_events(
 
 fn apply_theme_index(index: usize) {
     if let Some(theme) = available_themes().get(index) {
-        if write_theme_name(theme.name).is_ok() {
+        if write_theme_selection(*theme).is_ok() {
             broadcast_theme_changed(theme.name);
             info!("Selected theme {}", theme.name);
         } else {
@@ -570,6 +571,27 @@ fn write_theme_name(name: &str) -> Result<(), &'static str> {
     let ok = vfs_write(fd, line.as_bytes()).is_ok();
     let _ = vfs_close(fd);
     if ok { Ok(()) } else { Err("could not write /session/desktop/theme") }
+}
+
+fn write_wallpaper_name(path: &str) -> Result<(), &'static str> {
+    let _ = vfs_mkdir("/session");
+    let _ = vfs_mkdir("/session/desktop");
+    let fd =
+        vfs_open(WALLPAPER_PATH, vfs_flags::O_WRONLY | vfs_flags::O_CREAT | vfs_flags::O_TRUNC)
+            .map_err(|_| "could not open /session/desktop/wallpaper")?;
+    let mut line = path.to_string();
+    line.push('\n');
+    let ok = vfs_write(fd, line.as_bytes()).is_ok();
+    let _ = vfs_close(fd);
+    if ok { Ok(()) } else { Err("could not write /session/desktop/wallpaper") }
+}
+
+fn write_theme_selection(theme: Theme) -> Result<(), &'static str> {
+    write_theme_name(theme.name)?;
+    if let Some(wallpaper_path) = theme.wallpaper_path {
+        write_wallpaper_name(wallpaper_path)?;
+    }
+    Ok(())
 }
 
 fn broadcast_theme_changed(name: &str) {
