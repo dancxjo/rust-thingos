@@ -33,8 +33,10 @@ use scene::Scene;
 use services::busy_spinner::BusySpinnerService;
 use services::input_service::InputService;
 use services::resources::ResourceRetryService;
-use services::theme_service::{DEFAULT_THEME_CONFIG_PATH, ThemeService, ensure_theme_config};
-use services::wallpaper::{WallpaperService, ensure_wallpaper_config};
+use services::theme_service::{
+    DEFAULT_THEME_CONFIG_PATH, WALLPAPER_CONFIG_PATH, ThemeService, ensure_theme_config,
+    write_themed_wallpaper,
+};
 use services::wayland::WaylandService;
 use services::wayland_cmd::WaylandCommandService;
 use stem::syscall::port_create;
@@ -46,7 +48,6 @@ use wayland::WaylandThreadArgs;
 use world::BloomWorld;
 
 const SERVICE_PATH: &str = "/run/services/bloom";
-const WP_PATH: &str = "/session/desktop/wallpaper";
 const THEME_PATH: &str = DEFAULT_THEME_CONFIG_PATH;
 
 #[stem::main]
@@ -132,12 +133,11 @@ fn main(_arg: usize) -> ! {
     stem::debug!("bloom: initial theme configured {}", applied_theme);
     visuals.prepare_solid_background(&display, 0xFF0B0A10);
 
-    stem::debug!("bloom.phase=load_wallpaper");
+    // Write the theme's wallpaper path so blossom has it before it first paints.
     if !minimal_mode {
-        let initial_wallpaper = ensure_wallpaper_config(WP_PATH);
-        stem::debug!("bloom: initial wallpaper configured {}", initial_wallpaper);
-    } else {
-        stem::debug!("bloom: skipping wallpaper load (minimal mode)");
+        let theme_obj = crate::theme::theme_by_name(&initial_theme);
+        write_themed_wallpaper(WALLPAPER_CONFIG_PATH, theme_obj.wallpaper_path);
+        stem::debug!("bloom: initial wallpaper path set to {}", theme_obj.wallpaper_path);
     }
 
     stem::debug!("bloom.phase=init_cursor");
@@ -160,23 +160,6 @@ fn main(_arg: usize) -> ! {
     // sink from the service loop after startup so first paint is independent
     // from Bristle readiness.
     let bristle_pair = port_create(65536).ok();
-
-    // ── Wallpaper watch FD ────────────────────────────────────────────────────
-    let wp_watch_fd = if !minimal_mode {
-        match vfs_watch_path(WP_PATH, abi::vfs_watch::mask::ALL_EVENTS, 0) {
-            Ok(fd) => {
-                stem::debug!("bloom: watching wallpaper config {}", WP_PATH);
-                Some(fd)
-            }
-            Err(e) => {
-                warn!("bloom: failed to watch wallpaper config {}: {:?}", WP_PATH, e);
-                None
-            }
-        }
-    } else {
-        stem::debug!("bloom: skipping wallpaper watch (minimal mode)");
-        None
-    };
 
     // ── Theme watch FD ────────────────────────────────────────────────────────
     let theme_watch_fd = if !minimal_mode {
@@ -227,15 +210,9 @@ fn main(_arg: usize) -> ! {
         }
     }
 
-    // Wallpaper watch → WallpaperService
-    bloom_loop.add_service(alloc::boxed::Box::new(WallpaperService::new(wp_watch_fd, WP_PATH)));
-
-    // Deferred fonts / wallpaper / cursor → ResourceRetryService
-    let resource_wallpaper_path = if minimal_mode { None } else { Some(WP_PATH) };
-    bloom_loop.add_service(alloc::boxed::Box::new(ResourceRetryService::new(
-        resource_wallpaper_path,
-        !minimal_mode,
-    )));
+    // Wallpaper watch → blossom (wallpaper is now managed by blossom).
+    // Deferred fonts / cursor → ResourceRetryService
+    bloom_loop.add_service(alloc::boxed::Box::new(ResourceRetryService::new(None, !minimal_mode)));
     if !minimal_mode {
         bloom_loop.add_service(alloc::boxed::Box::new(BusySpinnerService::new()));
     }

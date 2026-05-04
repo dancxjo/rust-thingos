@@ -19,3 +19,4 @@ petals = { path = "../petals" }
 stile = { path = "../stile" }
 abi = { path = "../abi" }
 stem = { path = "../stem", features = ["rt", "global-alloc"] }
+libdl = { path = "../utils/libdl" }

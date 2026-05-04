@@ -14,6 +14,7 @@ use crate::theme::{DEFAULT_THEME_NAME, theme_by_name};
 use crate::world::BloomWorld;
 
 pub const DEFAULT_THEME_CONFIG_PATH: &str = "/session/desktop/theme";
+pub const WALLPAPER_CONFIG_PATH: &str = "/session/desktop/wallpaper";
 const THEME_FALLBACK_POLL_TIMER: u64 = 11;
 const THEME_FALLBACK_POLL_MS: u64 = 1000;
 
@@ -55,6 +56,25 @@ pub fn ensure_theme_config(config_path: &str) -> String {
     }
 
     DEFAULT_THEME_NAME.to_string()
+}
+
+/// Write `wallpaper_path` to the wallpaper config file, overwriting any
+/// previous value.  Called by `apply_theme` and bloom's startup to keep the
+/// wallpaper config in sync with the active theme.
+pub fn write_themed_wallpaper(config_path: &str, wallpaper_path: &str) {
+    match vfs_open(config_path, O_CREAT | O_TRUNC | O_RDWR) {
+        Ok(fd) => {
+            let ok = vfs_write(fd, wallpaper_path.as_bytes()).is_ok()
+                && vfs_write(fd, b"\n").is_ok();
+            let _ = vfs_close(fd);
+            if !ok {
+                stem::warn!("Failed to write wallpaper config {}", config_path);
+            }
+        }
+        Err(e) => {
+            stem::warn!("Could not open wallpaper config {}: {:?}", config_path, e);
+        }
+    }
 }
 
 fn theme_config_stamp(config_path: &str) -> Option<ThemeStamp> {
@@ -137,6 +157,9 @@ impl ThemeService {
             world.visuals.start_background_load(&world.display, wallpaper_path);
         }
         world.damage.mark_full(world.primary.width, world.primary.height);
+        // Write the theme's wallpaper path so blossom picks it up via its watch.
+        let theme = theme_by_name(&requested);
+        write_themed_wallpaper(WALLPAPER_CONFIG_PATH, theme.wallpaper_path);
     }
 
     fn poll_config(&mut self, world: &mut BloomWorld) -> bool {

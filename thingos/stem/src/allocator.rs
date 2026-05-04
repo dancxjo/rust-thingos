@@ -59,13 +59,19 @@ unsafe impl GlobalAlloc for VmHeapAllocator {
         }
 
         let layout = heap_layout(layout);
-        let ptr = GlobalAlloc::alloc(&self.heap, layout);
-        if !ptr.is_null() {
-            return ptr;
-        }
 
-        if crate::heap::grow_heap(layout.size()).is_ok() {
-            return GlobalAlloc::alloc(&self.heap, layout);
+        // Retry loop: a concurrent thread may grow the heap and allocate from
+        // the fresh region before this thread retries, so one attempt is not
+        // enough.  Three attempts are sufficient for any practical concurrency
+        // level without risking unbounded spinning.
+        for _ in 0..3 {
+            let ptr = GlobalAlloc::alloc(&self.heap, layout);
+            if !ptr.is_null() {
+                return ptr;
+            }
+            if crate::heap::grow_heap(layout.size()).is_err() {
+                return ptr::null_mut();
+            }
         }
 
         ptr::null_mut()

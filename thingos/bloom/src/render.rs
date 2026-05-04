@@ -357,10 +357,10 @@ impl CompositorVisuals {
 
     /// Decode and import a wallpaper after the service loop is live.
     ///
-    /// This intentionally runs on the compositor thread for now. The current
-    /// user allocator is fragile under concurrent wallpaper decoding, and the
-    /// bundled BMP assets are small enough that an inline decode is safer than
-    /// risking heap corruption during startup.
+    /// Wallpaper decoding has moved to blossom, which runs the decode in a
+    /// background thread and presents the result via a wl_shm layer surface.
+    /// This method is retained for minimal-mode fallback and direct-use tests,
+    /// but is no longer called from the normal boot path.
     ///
     /// The call is a no-op when the requested path matches the path of the
     /// wallpaper that is already loaded, avoiding redundant decode+import work

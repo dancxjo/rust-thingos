@@ -9,6 +9,7 @@ pub mod chrome;
 pub mod clock;
 pub mod debug_overlay;
 pub mod description;
+pub mod desktop;
 pub mod launcher;
 pub mod layout;
 pub mod logogram;
@@ -30,6 +31,9 @@ pub use chrome::{
 pub use clock::{Clock, ClockNodes, ClockService, ClockState};
 pub use debug_overlay::{DEPTH_COLORS, HIT_REGION_COLOR, draw_layout_debug};
 pub use description::Description;
+pub use desktop::{
+    DesktopNodes, desktop_rules_for_theme, desktop_tree_for_theme, wallpaper_path_for_theme,
+};
 pub use launcher::{
     ApplicationEntry, ApplicationLauncher, ApplicationLauncherNodes, ApplicationLauncherService,
     ApplicationTileNode, display_name_from_path, glyph_for_application,
