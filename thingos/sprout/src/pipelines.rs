@@ -317,3 +317,34 @@ pub fn spawn_blossom() -> Option<u64> {
         }
     }
 }
+
+/// Spawn the ACPI namespace service (`/drivers/acpid`).
+///
+/// acpid parses firmware ACPI tables and mounts a device inventory at
+/// `/services/acpi`.  It is spawned early, before cambium, so that driver
+/// probing can consume the namespace on first boot.
+///
+/// Missing binary is non-fatal — non-ACPI platforms simply skip this step.
+pub fn spawn_acpid() -> Option<u64> {
+    let path = "/drivers/acpid";
+    let argv: [&[u8]; 1] = [path.as_bytes()];
+    let env = BTreeMap::new();
+    let null = abi::types::stdio_mode::NULL;
+    let inherit = abi::types::stdio_mode::INHERIT;
+
+    match stem::syscall::spawn_process_ex(path, &argv, &env, null, inherit, inherit, 0, &[]) {
+        Ok(resp) => {
+            let pid = resp.child_tid;
+            debug!("Spawned acpid with PID {}", pid);
+            Some(pid)
+        }
+        Err(Errno::ENOENT) => {
+            debug!("acpid binary not found; skipping ACPI service");
+            None
+        }
+        Err(err) => {
+            warn!("SPROUT: failed to spawn acpid: {:?}", err);
+            None
+        }
+    }
+}

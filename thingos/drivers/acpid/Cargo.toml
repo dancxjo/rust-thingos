@@ -6,4 +6,4 @@ edition = "2021"
 [dependencies]
 abi = { path = "../../abi" }
 stem = { path = "../../stem", features = ["rt", "global-alloc"] }
-acpi_common = { path = "../acpi_common" }
+ipc_helpers = { path = "../../libs/ipc_helpers" }

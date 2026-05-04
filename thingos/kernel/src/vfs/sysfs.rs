@@ -75,7 +75,7 @@ impl VfsDriver for SysFs {
                 Ok(Arc::new(node))
             }
             SysPath::Firmware => {
-                Ok(Arc::new(StaticDirNode::new(302, &["acpi", "dtb", "hhdm", "framebuffer"])))
+                Ok(Arc::new(StaticDirNode::new(302, &["acpi", "dtb", "hhdm", "framebuffer", "acpi_tables"])))
             }
             SysPath::FirmwareFile("acpi") => {
                 if let Some(rsdp) = crate::boot_info::get().and_then(|i| i.acpi_rsdp) {
@@ -113,6 +113,11 @@ impl VfsDriver for SysFs {
                 }
             }
             SysPath::FirmwareFile(_) => Err(Errno::ENOENT),
+            SysPath::AcpiTablesDir => Ok(Arc::new(AcpiTablesDirNode)),
+            SysPath::AcpiTableFile(name) => {
+                let data = acpi_table_data(name).ok_or(Errno::ENOENT)?;
+                Ok(Arc::new(StaticTextNode::new(data, acpi_table_ino(name))))
+            }
         }
     }
 }
@@ -129,6 +134,8 @@ enum SysPath<'a> {
     VirtioFile(&'a str, &'a str),
     Firmware,
     FirmwareFile(&'a str),
+    AcpiTablesDir,
+    AcpiTableFile(&'a str),
 }
 
 impl<'a> SysPath<'a> {
@@ -150,6 +157,10 @@ impl<'a> SysPath<'a> {
             }
             (Some("devices"), Some(dev), Some(file), None) => Ok(Self::DeviceFile(dev, file)),
             (Some("firmware"), None, None, None) => Ok(Self::Firmware),
+            (Some("firmware"), Some("acpi_tables"), None, None) => Ok(Self::AcpiTablesDir),
+            (Some("firmware"), Some("acpi_tables"), Some(name), None) => {
+                Ok(Self::AcpiTableFile(name))
+            }
             (Some("firmware"), Some(file), None, None) => Ok(Self::FirmwareFile(file)),
             _ => Err(Errno::ENOENT),
         }
@@ -523,4 +534,69 @@ fn lookup_virtio_file(
 
     let ino_base = 0x4000 + (device_index as u64) * 32;
     Ok(StaticTextNode::new(text.into_bytes(), ino_base))
+}
+
+// ── ACPI table sysfs helpers ─────────────────────────────────────────────────
+
+/// Enumerate ACPI tables from boot_info and return them with their sysfs names.
+fn acpi_entries() -> alloc::vec::Vec<(usize, alloc::string::String, crate::acpi_tables::AcpiEntry)> {
+    let info = match crate::boot_info::get() {
+        Some(i) => i,
+        None => return alloc::vec![],
+    };
+    let rsdp_phys = match info.acpi_rsdp {
+        Some(p) => p,
+        None => return alloc::vec![],
+    };
+    let entries = crate::acpi_tables::enumerate(rsdp_phys, info.hhdm_offset);
+    let names = crate::acpi_tables::sysfs_names(&entries);
+    names
+        .into_iter()
+        .zip(entries)
+        .map(|((idx, name), entry)| (idx, name, entry))
+        .collect()
+}
+
+/// Get raw bytes for a specific ACPI table by its sysfs name (e.g. `APIC`,
+/// `DSDT`, `SSDT1`).
+fn acpi_table_data(name: &str) -> Option<alloc::vec::Vec<u8>> {
+    for (_idx, sname, entry) in acpi_entries() {
+        if sname == name {
+            return Some(entry.data);
+        }
+    }
+    None
+}
+
+/// Stable inode number derived from the table name.
+fn acpi_table_ino(name: &str) -> u64 {
+    let mut h = 0x5000u64;
+    for &b in name.as_bytes() {
+        h = h.wrapping_mul(31).wrapping_add(b as u64);
+    }
+    h
+}
+
+/// Dynamic directory node listing available ACPI tables.
+struct AcpiTablesDirNode;
+
+impl VfsNode for AcpiTablesDirNode {
+    fn read(&self, _offset: u64, _buf: &mut [u8]) -> SysResult<usize> {
+        Err(Errno::EISDIR)
+    }
+
+    fn write(&self, _offset: u64, _buf: &[u8]) -> SysResult<usize> {
+        Err(Errno::EISDIR)
+    }
+
+    fn stat(&self) -> SysResult<VfsStat> {
+        Ok(VfsStat { mode: VfsStat::S_IFDIR | 0o555, size: 0, ino: 0x5ffe, ..Default::default() })
+    }
+
+    fn readdir(&self, offset: u64, buf: &mut [u8]) -> SysResult<usize> {
+        let entries = acpi_entries();
+        let names: alloc::vec::Vec<alloc::string::String> =
+            entries.into_iter().map(|(_, name, _)| name).collect();
+        super::write_readdir_entries(names.iter().map(|s| s.as_str()), offset, buf)
+    }
 }
