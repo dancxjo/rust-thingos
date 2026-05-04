@@ -479,9 +479,10 @@ fn handle_write(state: &mut PowerState, payload: &[u8]) -> ProviderResponse {
 
     match handle {
         HANDLE_ACTION => {
-            let cmd = core::str::from_utf8(data)
-                .unwrap_or("")
-                .trim_end_matches(['\n', '\r', ' ']);
+            let cmd = match core::str::from_utf8(data) {
+                Ok(s) => s.trim_end_matches(['\n', '\r', ' ']),
+                Err(_) => return ProviderResponse::err(Errno::EINVAL),
+            };
             match cmd {
                 "reboot" => {
                     info!("Reboot requested via /run/power/action");
@@ -636,8 +637,11 @@ fn main(_raw_arg: usize) -> ! {
 
     // Subscribe to the ACPI SCI so we wake promptly on fixed hardware events.
     match irq_subscribe(SCI_VECTOR) {
-        Ok(()) => trace!("Subscribed to SCI vector 0x{:02x}", SCI_VECTOR),
-        Err(_) => info!("SCI IRQ unavailable; relying on polling"),
+        Ok(())   => trace!("Subscribed to SCI vector 0x{:02x}", SCI_VECTOR),
+        Err(err) => {
+            trace!("SCI subscription failed: {:?}", err);
+            info!("SCI IRQ unavailable; relying on polling");
+        }
     }
 
     let (req_write, req_read) = match stem::syscall::port::port_create(PORT_CAPACITY) {
