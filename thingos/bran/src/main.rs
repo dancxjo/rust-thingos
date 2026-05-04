@@ -42,7 +42,7 @@ fn init_onscreen_terminal() {
 
 #[unsafe(no_mangle)]
 unsafe extern "C" fn kmain() -> ! {
-    arch::early_serial_write(b"KMAIN\r\n");
+    arch::early_serial_write(b"Germinating...\r\n");
     early_serial_write(b"[bran] kmain enter\r\n");
 
     // Architecture-specific early initialization (e.g., stack mode switching on AArch64)
