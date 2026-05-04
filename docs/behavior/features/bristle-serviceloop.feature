@@ -24,10 +24,11 @@ Feature: Bristle HID broker — ServiceLoop-based fanout
     Then the log should match pattern "bristle: bloom sink registered"
     And the log should match pattern "bloom: registered with bristle"
 
-  Scenario: bloom publishes display bounds to bristle through the inbox
-    # Bristle must receive compositor display bounds on the same inbox control
-    # plane used for registration so pointer bounds follow output resizes.
-    Then the log should match pattern "Pointer bounds ready at [1-9][0-9]*x[1-9][0-9]*"
+  Scenario: bristle does not track compositor display bounds
+    # Bristle standardizes input sources only. Pointer coordinates and output
+    # bounds belong to Bloom/Blossom, so Bristle must not log pointer bounds.
+    Then the log should not match pattern "Pointer bounds ready at [1-9][0-9]*x[1-9][0-9]*"
+    And the log should not match pattern "Pointer bounds updated to [1-9][0-9]*x[1-9][0-9]*"
 
   Scenario: bristle no longer accepts a packed port argument
     # The packed usize spawn arg path is removed.

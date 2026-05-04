@@ -36,7 +36,7 @@ Bristle owns input state in one place:
 
 - Modifiers and locks (`shift`, `ctrl`, `alt`, `meta`, `altgr`, `caps`, `num`, `scroll`)
 - Pressed keys set
-- Pointer buttons and position (relative/absolute)
+- Pointer buttons and relative motion deltas
 - Wheel deltas
 - Device identities
 
@@ -62,7 +62,7 @@ Apps subscribe to an event stream with filtering:
 - By seat (future)
 - By device kind
 - By focus routing (only focused app gets text/keys)
-- By privileged ports (compositor receives all pointer movement)
+- By privileged ports (compositor receives pointer deltas)
 
 ---
 
@@ -128,7 +128,7 @@ Bristle owns repeat (per-device but unified per seat). Repeat generates `KeyDown
 | **Ingress** | Per-driver port readers, decode envelopes |
 | **Device Registry** | Map `device_id` → device state machine, store capabilities |
 | **Normalizers** | `ps2_normalizer`, `hid_normalizer`, `mouse_normalizer` |
-| **State** | Keyboard state (pressed set, mods, locks), pointer state |
+| **State** | Keyboard state (pressed set, mods, locks), pointer button state |
 | **Router** | Focus-based event routing, privileged ports |
 
 ---

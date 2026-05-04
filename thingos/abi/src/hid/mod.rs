@@ -46,10 +46,7 @@ pub const BRISTLE_EVENT_MAGIC: u32 = 0x48494445;
 /// Protocol version
 pub const BRISTLE_EVENT_VERSION: u16 = 0;
 
-pub use bristle::{
-    BristleEventHeader, KeyEventPayload, KeyboardMessage, WaylandIpcHeader, WaylandPointerAxis,
-    WaylandPointerButton, WaylandPointerMotion,
-};
+pub use bristle::{BristleEventHeader, KeyEventPayload, KeyboardMessage};
 pub use event::{EventType, HidParseError};
 pub use input::{InputDeviceKind, Ps2KeyPayload, RawInputEnvelope};
 pub use key::Key;
@@ -60,8 +57,7 @@ pub use pointer::{
 pub use registration::{
     BRISTLE_EVENT_CLASS_ALL, BRISTLE_EVENT_CLASS_KEYBOARD, BRISTLE_EVENT_CLASS_POINTER,
     BRISTLE_SINK_TAG_BLOOM, BRISTLE_SINK_TAG_ECHO, KIND_BRISTLE_DEVICE_EVENT,
-    KIND_BRISTLE_REGISTER_SINK, KIND_BRISTLE_SET_DISPLAY_BOUNDS, decode_display_bounds,
-    decode_register_sink, decode_register_sink_with_mask, encode_display_bounds,
+    KIND_BRISTLE_REGISTER_SINK, decode_register_sink, decode_register_sink_with_mask,
     encode_register_sink, encode_register_sink_with_mask,
 };
 

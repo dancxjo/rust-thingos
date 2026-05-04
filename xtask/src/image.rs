@@ -884,14 +884,22 @@ pub fn build_iso_with_config(
     }
 }
 
-fn build_userspace_app_with_features(
+fn build_userspace_apps_with_features(
     sh: &Shell,
-    name: &str,
+    names: &[&str],
     target: &str,
     profile: &str,
     features: &[&str],
 ) -> Result<()> {
-    println!("Building {name} ...");
+    if names.is_empty() {
+        return Ok(());
+    }
+
+    if names.len() == 1 {
+        println!("Building {} ...", names[0]);
+    } else {
+        println!("Building {} userspace programs ...", names.len());
+    }
 
     let extra_flags =
         if target.ends_with(".json") { vec!["-Z", "json-target-spec"] } else { vec![] };
@@ -913,9 +921,13 @@ fn build_userspace_app_with_features(
     let rustflags = String::from("-Awarnings");
     let mut cmd_obj = cmd!(
         sh,
-        "cargo -Z build-std={build_std_crates} -Z build-std-features=compiler-builtins-mem {extra_flags...} build --target {target} --profile {profile} -p {name}"
+        "cargo -Z build-std={build_std_crates} -Z build-std-features=compiler-builtins-mem {extra_flags...} build --target {target} --profile {profile}"
     )
     .env("RUSTFLAGS", &rustflags);
+
+    for name in names {
+        cmd_obj = cmd_obj.arg("-p").arg(name);
+    }
 
     if target.ends_with(".json") && target.contains("thingos") {
         cmd_obj = cmd_obj.env("__CARGO_TESTS_ONLY_SRC_ROOT", std_src.to_str().unwrap());
@@ -937,41 +949,23 @@ fn build_userspace_app_with_features(
     Ok(())
 }
 
-/// Build all programs concurrently using a pool of parallel vines.
+/// Build all programs using Cargo's internal parallelism.
 ///
-/// Each vine creates its own `Shell` in the current working directory and
-/// invokes `build_userspace_app_with_features` for its assigned program.
-/// Programs are processed in batches whose size is bounded by the available
-/// CPU parallelism (capped at 8 to avoid overwhelming `cargo`'s file locks).
-/// After all vines in a batch finish the next batch starts, so errors are
-/// surfaced promptly without letting a later batch race past them.
+/// Programs are grouped by feature sets to allow Cargo to build multiple
+/// packages simultaneously, eliminating file lock contention on `target/`.
 fn build_programs_parallel(programs: &[ProgramConfig], target: &str, profile: &str) -> Result<()> {
-    let num_parallel =
-        std::thread::available_parallelism().map(|n| n.get()).unwrap_or(4).min(8).max(1);
+    println!("Building {} userspace programs...", programs.len());
 
-    println!("Building {} userspace programs ({num_parallel} build vines)...", programs.len());
+    let mut groups: std::collections::HashMap<Vec<&str>, Vec<&str>> =
+        std::collections::HashMap::new();
 
-    for chunk in programs.chunks(num_parallel) {
-        let handles: Vec<std::thread::JoinHandle<Result<()>>> = chunk
-            .iter()
-            .map(|prog| {
-                let target = target.to_string();
-                let profile = profile.to_string();
-                let features: Vec<String> = prog.features.iter().map(|s| s.to_string()).collect();
-                let name = prog.name;
-                std::thread::spawn(move || -> Result<()> {
-                    // Each vine creates its own Shell so none share mutable
-                    // state; Shell::new() anchors to the process working dir.
-                    let sh = Shell::new()?;
-                    let feature_refs: Vec<&str> = features.iter().map(|s| s.as_str()).collect();
-                    build_userspace_app_with_features(&sh, name, &target, &profile, &feature_refs)
-                })
-            })
-            .collect();
+    for prog in programs {
+        groups.entry(prog.features.clone()).or_default().push(prog.name);
+    }
 
-        for handle in handles {
-            handle.join().map_err(|_| anyhow::anyhow!("build vine panicked"))??;
-        }
+    let sh = Shell::new()?;
+    for (features, names) in groups {
+        build_userspace_apps_with_features(&sh, &names, target, profile, &features)?;
     }
 
     Ok(())
@@ -993,7 +987,7 @@ fn copy_userspace_binary(
 }
 
 fn build_shared_library(sh: &Shell, package: &str, target: &str, profile: &str) -> Result<()> {
-    build_userspace_app_with_features(sh, package, target, profile, &[])
+    build_userspace_apps_with_features(sh, &[package], target, profile, &[])
 }
 
 fn copy_shared_library(

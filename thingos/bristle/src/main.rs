@@ -380,7 +380,7 @@ fn handle_register_sink(
 }
 
 /// Accumulate raw bytes into `event_accum`, parse complete bristle events,
-/// apply hotkey handling, and forward to registered sinks.
+/// and forward normalized events to registered sinks.
 fn accumulate_and_dispatch(
     input: &[u8],
     source: &str,

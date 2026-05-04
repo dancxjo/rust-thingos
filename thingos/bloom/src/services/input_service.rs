@@ -7,7 +7,7 @@ use core::sync::atomic::{AtomicU64, Ordering};
 
 use abi::KindId;
 use abi::hid::{
-    BRISTLE_EVENT_CLASS_ALL, BRISTLE_SINK_TAG_BLOOM, BristleEventHeader, EventType,
+    BRISTLE_EVENT_CLASS_ALL, BRISTLE_SINK_TAG_BLOOM, BristleEventHeader,
     KIND_BRISTLE_REGISTER_SINK, encode_register_sink_with_mask,
 };
 use abi::syscall::vfs_flags::O_RDONLY;
@@ -93,7 +93,6 @@ impl BloomService for InputService {
                 if self.try_register_with_bristle() {
                     self.registered = true;
                     stem::debug!("Registered bristle pointer sink.");
-                    world.send_current_display_bounds_to_bristle();
                     LoopAction::None
                 } else {
                     LoopAction::ArmTimer {
@@ -222,17 +221,19 @@ impl InputService {
             self.accum_len += to_copy;
             cursor += to_copy;
 
-            while self.accum_len >= abi::hid::WaylandIpcHeader::SIZE {
-                let mut header_bytes = [0u8; abi::hid::WaylandIpcHeader::SIZE];
-                header_bytes.copy_from_slice(&self.event_accum[..abi::hid::WaylandIpcHeader::SIZE]);
-                let header = abi::hid::WaylandIpcHeader::from_bytes(&header_bytes);
+            while self.accum_len >= BristleEventHeader::SIZE {
+                let mut header_bytes = [0u8; BristleEventHeader::SIZE];
+                header_bytes.copy_from_slice(&self.event_accum[..BristleEventHeader::SIZE]);
+                let Ok(header) = BristleEventHeader::from_bytes(&header_bytes) else {
+                    self.resync_accumulator();
+                    continue;
+                };
 
-                let event_type = header.opcode();
-                let total_len = header.total_len() as usize;
+                let event_type = header.event_type;
+                let payload_len = header.payload_len as usize;
+                let total_len = BristleEventHeader::SIZE.saturating_add(payload_len);
 
-                if total_len > self.event_accum.len()
-                    || total_len < abi::hid::WaylandIpcHeader::SIZE
-                {
+                if total_len > self.event_accum.len() || total_len < BristleEventHeader::SIZE {
                     self.resync_accumulator();
                     continue;
                 }
@@ -247,7 +248,7 @@ impl InputService {
                         "bloom: input event entry event={} type={:x} payload_len={} accum_depth={}",
                         event_no,
                         event_type,
-                        total_len - abi::hid::WaylandIpcHeader::SIZE,
+                        total_len - BristleEventHeader::SIZE,
                         self.accum_len
                     );
                 }
@@ -331,16 +332,4 @@ fn parse_u32(bytes: &[u8]) -> Option<u32> {
 
 fn should_log_input(count: u64) -> bool {
     count <= INPUT_TRACE_INITIAL || count % INPUT_TRACE_INTERVAL == 0
-}
-
-fn event_type_name(raw: u16) -> &'static str {
-    match EventType::from_raw(raw) {
-        Ok(EventType::KeyDown) => "KeyDown",
-        Ok(EventType::KeyUp) => "KeyUp",
-        Ok(EventType::PointerMove) => "PointerMove",
-        Ok(EventType::PointerButtonDown) => "PointerButtonDown",
-        Ok(EventType::PointerButtonUp) => "PointerButtonUp",
-        Ok(EventType::Scroll) => "Scroll",
-        _ => "Unknown",
-    }
 }

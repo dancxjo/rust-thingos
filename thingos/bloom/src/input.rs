@@ -3,7 +3,7 @@ use alloc::string::{String, ToString};
 use alloc::vec::Vec;
 use core::sync::atomic::{AtomicU32, AtomicU64, Ordering};
 
-use abi::hid::{EventType, Key, KeyEventPayload};
+use abi::hid::{BristleEventHeader, EventType, Key, KeyEventPayload, PointerButtonPayload, PointerMovePayload, ScrollPayload};
 use abi::{KindId, ui_event};
 use stem::syscall::message::msg_send;
 use stem::syscall::port_send_all;
@@ -40,8 +40,8 @@ const INPUT_TRACE_INITIAL: u64 = 24;
 const INPUT_TRACE_INTERVAL: u64 = 128;
 
 pub struct InputState {
-    /// Latest logical pointer position from Bristle input. Clients and focus
-    /// tracking see this immediately so input latency stays low.
+    /// Latest compositor-owned logical pointer position. Bristle supplies
+    /// normalized deltas; Bloom integrates them against its output bounds.
     pointer_x: i32,
     pointer_y: i32,
     /// Position of the cursor plane from the last successful present. Raw input
@@ -348,26 +348,34 @@ impl InputState {
         defer_cursor_motion: bool,
     ) -> bool {
         let mut immediate_repaint = false;
-        if bytes.len() < abi::hid::WaylandIpcHeader::SIZE {
+        if bytes.len() < BristleEventHeader::SIZE {
             return false;
         }
-        let mut hdr_bytes = [0u8; abi::hid::WaylandIpcHeader::SIZE];
-        hdr_bytes.copy_from_slice(&bytes[..abi::hid::WaylandIpcHeader::SIZE]);
-        let header = abi::hid::WaylandIpcHeader::from_bytes(&hdr_bytes);
+        let mut hdr_bytes = [0u8; BristleEventHeader::SIZE];
+        hdr_bytes.copy_from_slice(&bytes[..BristleEventHeader::SIZE]);
+        let Ok(header) = BristleEventHeader::from_bytes(&hdr_bytes) else {
+            return false;
+        };
 
-        let event_type = header.opcode();
+        let event_type = header.event_type;
         let timestamp_ns = stem::monotonic_ns();
         let event_no = BLOOM_HANDLE_EVENT_COUNT.fetch_add(1, Ordering::Relaxed) + 1;
         let _trace = BloomInputTrace::new(event_no, event_type);
-        let payload = &bytes[abi::hid::WaylandIpcHeader::SIZE..];
+        let payload = &bytes[BristleEventHeader::SIZE..];
 
         match EventType::from_raw(event_type) {
-            Ok(EventType::PointerMove) if payload.len() >= abi::hid::WaylandPointerMotion::SIZE => {
-                let mut p = [0u8; abi::hid::WaylandPointerMotion::SIZE];
-                p.copy_from_slice(&payload[..abi::hid::WaylandPointerMotion::SIZE]);
-                let move_ev = abi::hid::WaylandPointerMotion::from_bytes(&p);
-                let target_x = move_ev.x.clamp(0, self.output_w.saturating_sub(1));
-                let target_y = move_ev.y.clamp(0, self.output_h.saturating_sub(1));
+            Ok(EventType::PointerMove) if payload.len() >= PointerMovePayload::SIZE => {
+                let mut p = [0u8; PointerMovePayload::SIZE];
+                p.copy_from_slice(&payload[..PointerMovePayload::SIZE]);
+                let move_ev = PointerMovePayload::from_bytes(&p);
+                let target_x = self
+                    .pointer_x
+                    .saturating_add(move_ev.dx as i32)
+                    .clamp(0, self.output_w.saturating_sub(1));
+                let target_y = self
+                    .pointer_y
+                    .saturating_add(move_ev.dy as i32)
+                    .clamp(0, self.output_h.saturating_sub(1));
                 let dx = target_x.saturating_sub(self.pointer_x);
                 let dy = target_y.saturating_sub(self.pointer_y);
                 if defer_cursor_motion {
@@ -422,11 +430,11 @@ impl InputState {
                 // deferred — do NOT call update_pointer_focus here.
             }
             Ok(EventType::PointerButtonDown)
-                if payload.len() >= abi::hid::WaylandPointerButton::SIZE =>
+                if payload.len() >= PointerButtonPayload::SIZE =>
             {
-                let mut p = [0u8; abi::hid::WaylandPointerButton::SIZE];
-                p.copy_from_slice(&payload[..abi::hid::WaylandPointerButton::SIZE]);
-                let btn = abi::hid::WaylandPointerButton::from_bytes(&p);
+                let mut p = [0u8; PointerButtonPayload::SIZE];
+                p.copy_from_slice(&payload[..PointerButtonPayload::SIZE]);
+                let btn = PointerButtonPayload::from_bytes(&p);
                 stem::debug!(
                     "PointerButtonDown at {},{} button={}",
                     self.pointer_x,
@@ -596,11 +604,11 @@ impl InputState {
                 );
             }
             Ok(EventType::PointerButtonUp)
-                if payload.len() >= abi::hid::WaylandPointerButton::SIZE =>
+                if payload.len() >= PointerButtonPayload::SIZE =>
             {
-                let mut p = [0u8; abi::hid::WaylandPointerButton::SIZE];
-                p.copy_from_slice(&payload[..abi::hid::WaylandPointerButton::SIZE]);
-                let btn = abi::hid::WaylandPointerButton::from_bytes(&p);
+                let mut p = [0u8; PointerButtonPayload::SIZE];
+                p.copy_from_slice(&payload[..PointerButtonPayload::SIZE]);
+                let btn = PointerButtonPayload::from_bytes(&p);
                 if btn.button == 0 {
                     self.primary_button_down = false;
                 }
@@ -677,22 +685,20 @@ impl InputState {
                     self.pointer_y,
                 );
             }
-            Ok(EventType::Scroll) if payload.len() >= abi::hid::WaylandPointerAxis::SIZE => {
-                let mut p = [0u8; abi::hid::WaylandPointerAxis::SIZE];
-                p.copy_from_slice(&payload[..abi::hid::WaylandPointerAxis::SIZE]);
-                let axis = abi::hid::WaylandPointerAxis::from_bytes(&p);
+            Ok(EventType::Scroll) if payload.len() >= ScrollPayload::SIZE => {
+                let mut p = [0u8; ScrollPayload::SIZE];
+                p.copy_from_slice(&payload[..ScrollPayload::SIZE]);
+                let scroll = ScrollPayload::from_bytes(&p);
                 if self.launcher.visible {
                     return true;
                 }
                 if let Some(surface_id) = scene.pointer_focus {
                     if scene.surface_client(surface_id).is_some() {
-                        let dx = if axis.axis == 1 { axis.value as i16 } else { 0 };
-                        let dy = if axis.axis == 0 { axis.value as i16 } else { 0 };
                         send_wayland_pointer_scroll(
                             wayland_evt_write,
                             surface_id,
-                            dx,
-                            dy,
+                            scroll.dx,
+                            scroll.dy,
                             timestamp_ns,
                         );
                     }
