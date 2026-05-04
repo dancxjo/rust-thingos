@@ -25,10 +25,11 @@
 #![cfg_attr(not(test), no_main)]
 extern crate alloc;
 
+use acpi_common::{AcpiEvent, KIND_EC_QUERY, KIND_UNKNOWN, SOURCE_EC};
 use abi::errors::Errno;
 use abi::vfs_rpc::VfsRpcOp;
 use ipc_helpers::provider::{ProviderLoop, ProviderResponse};
-use stem::syscall::vfs::vfs_mount;
+use stem::syscall::vfs::{vfs_mount, vfs_write};
 use stem::syscall::{ioport_read, ioport_write, irq_subscribe};
 use stem::{debug, info, trace, warn};
 
@@ -62,6 +63,8 @@ const SCI_VECTOR: u8 = 0x29;
 // ── VFS layout ────────────────────────────────────────────────────────────────
 
 const MOUNT_PATH: &str = "/services/ec";
+/// Path to the normalized ACPI event bus maintained by `acpid`.
+const ACPI_EVENT_BUS: &str = "/sys/firmware/acpi/events";
 const PORT_CAPACITY: usize = 4096;
 
 const HANDLE_ROOT: u64   = 1;
@@ -425,11 +428,52 @@ fn dispatch(state: &mut EcState, op: VfsRpcOp, payload: &[u8]) -> ProviderRespon
     }
 }
 
+// ── ACPI event bus publishing ─────────────────────────────────────────────────
+
+/// Attempt to open the normalized ACPI event bus for writing.
+///
+/// Returns `None` gracefully when `acpid` has not yet mounted its service,
+/// so the caller can retry or fall back to local-only event buffering.
+fn open_acpi_bus() -> Option<u32> {
+    use abi::syscall::vfs_flags::O_WRONLY;
+    stem::syscall::vfs::vfs_open(ACPI_EVENT_BUS, O_WRONLY).ok()
+}
+
+/// Publish a normalized event to the ACPI event bus (best-effort).
+///
+/// Silently drops the event if the bus fd is `None` (acpid not ready) or
+/// if the write fails.  The EC's own local ring buffer is always updated
+/// first, so local consumers of `/services/ec/events` are unaffected.
+fn publish_to_bus(bus_fd: Option<u32>, code: u8) {
+    let fd = match bus_fd {
+        Some(f) => f,
+        None => return,
+    };
+    let ts_ms = stem::time::monotonic_ns() / 1_000_000;
+    let ev = AcpiEvent {
+        timestamp_ms: ts_ms,
+        kind:     if code != 0 { KIND_EC_QUERY } else { KIND_UNKNOWN },
+        raw_code: code,
+        source:   SOURCE_EC,
+        flags:    0,
+        extra:    0,
+    };
+    let _ = vfs_write(fd, &ev.to_bytes());
+}
+
 // ── Main loop ─────────────────────────────────────────────────────────────────
 
 fn run_loop(req_read: u32) -> ! {
     let mut lp    = ProviderLoop::new(req_read);
     let mut state = EcState::new();
+
+    // Try to open the ACPI event bus; non-fatal if acpid isn't up yet.
+    let bus_fd = open_acpi_bus();
+    if bus_fd.is_some() {
+        debug!("Connected to ACPI event bus at {}", ACPI_EVENT_BUS);
+    } else {
+        debug!("ACPI event bus not available; EC events published to local ring only");
+    }
 
     loop {
         // 1. Drain all pending VFS requests (non-blocking).
@@ -455,6 +499,8 @@ fn run_loop(req_read: u32) -> ! {
             if let Some(code) = ec_do_query() {
                 debug!("EC query event=0x{:02x}", code);
                 state.enqueue_event(code);
+                // Also publish to the normalized ACPI event bus.
+                publish_to_bus(bus_fd, code);
             }
         }
 

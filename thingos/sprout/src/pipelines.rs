@@ -321,7 +321,7 @@ pub fn spawn_blossom() -> Option<u64> {
 /// Spawn the ACPI namespace service (`/drivers/acpid`).
 ///
 /// acpid parses firmware ACPI tables and mounts a device inventory at
-/// `/services/acpi`.  It is spawned early, before cambium, so that driver
+/// `/sys/firmware/acpi`.  It is spawned early, before cambium, so that driver
 /// probing can consume the namespace on first boot.
 ///
 /// Missing binary is non-fatal — non-ACPI platforms simply skip this step.
