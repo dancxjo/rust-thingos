@@ -7,6 +7,7 @@ extern crate alloc;
 pub mod calc;
 pub mod chrome;
 pub mod clock;
+pub mod debug_overlay;
 pub mod description;
 pub mod launcher;
 pub mod layout;
@@ -27,6 +28,7 @@ pub use chrome::{
     window_chrome_rules_for_theme, window_chrome_tree,
 };
 pub use clock::{Clock, ClockNodes, ClockService, ClockState};
+pub use debug_overlay::draw_layout_debug;
 pub use description::Description;
 pub use launcher::{
     ApplicationEntry, ApplicationLauncher, ApplicationLauncherNodes, ApplicationLauncherService,
