@@ -307,9 +307,11 @@ fn handle_lookup(ctx: &AcpiContext, payload: &[u8]) -> ProviderResponse {
         "tables" => ProviderResponse::ok_u64(HANDLE_TABLES_DIR),
         "devices" => ProviderResponse::ok_u64(HANDLE_DEVICES),
         other => {
-            // Could be "tables/<name>" or just "<name>" if mounted subdirectory.
-            let name =
-                if let Some(rest) = other.strip_prefix("tables/") { rest } else { return ProviderResponse::err(Errno::ENOENT) };
+            // Only "tables/<name>" paths are valid.
+            let name = match other.strip_prefix("tables/") {
+                Some(rest) => rest,
+                None => return ProviderResponse::err(Errno::ENOENT),
+            };
             for (i, t) in ctx.tables.iter().enumerate() {
                 if t.name == name {
                     return ProviderResponse::ok_u64(HANDLE_TABLE_BASE + i as u64);

@@ -82,19 +82,23 @@ unsafe fn do_enumerate(rsdp_phys: u64, hhdm: u64) -> Vec<AcpiEntry> {
     if revision >= 2 {
         // ACPI 2.0+: read extended checksum if length is sensible.
         let ext_len = unsafe {
-            core::ptr::read_unaligned((rsdp_virt + RSDP_OFF_LENGTH as u64) as *const u32)
+            core::ptr::read_unaligned(rsdp_virt.wrapping_add(RSDP_OFF_LENGTH as u64) as *const u32)
         } as usize;
         if (36..=64).contains(&ext_len) && !unsafe { checksum_ok(rsdp_virt, ext_len) } {
             crate::kwarn!("ACPI: RSDP extended checksum failed (continuing)");
         }
         let xsdt_phys = unsafe {
-            core::ptr::read_unaligned((rsdp_virt + RSDP_OFF_XSDT_ADDR as u64) as *const u64)
+            core::ptr::read_unaligned(
+                rsdp_virt.wrapping_add(RSDP_OFF_XSDT_ADDR as u64) as *const u64,
+            )
         };
         crate::kdebug!("ACPI: using XSDT at phys 0x{:x}", xsdt_phys);
         unsafe { walk_xsdt(xsdt_phys, hhdm) }
     } else {
         let rsdt_phys = unsafe {
-            core::ptr::read_unaligned((rsdp_virt + RSDP_OFF_RSDT_ADDR as u64) as *const u32)
+            core::ptr::read_unaligned(
+                rsdp_virt.wrapping_add(RSDP_OFF_RSDT_ADDR as u64) as *const u32,
+            )
         } as u64;
         crate::kdebug!("ACPI: using RSDT at phys 0x{:x}", rsdt_phys);
         unsafe { walk_rsdt(rsdt_phys, hhdm) }
