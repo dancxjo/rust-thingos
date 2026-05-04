@@ -19,14 +19,13 @@
 use alloc::vec::Vec;
 
 use stile::Theme;
+use stile::values::{AlignItems, Color, FlexDirection, JustifyContent};
 use taffy::TaffyError;
 
 use crate::description::Description;
 use crate::layout::UiTree;
 use crate::node::{AttrValue, NodeId};
-use crate::Declaration;
-use crate::Rule;
-use stile::values::{AlignItems, Color, FlexDirection, JustifyContent};
+use crate::{Declaration, Rule};
 
 /// Node handles for the desktop scene tree.
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
@@ -46,13 +45,15 @@ const fn color_from_argb(argb: u32) -> Color {
     )
 }
 
+const FALLBACK_WALLPAPER_PATH: &str = "/public/wallpapers/flower.bmp";
+
 /// Return the wallpaper image path for `theme`.
 ///
 /// This is the canonical source of truth for the per-theme default wallpaper.
 /// Callers that need only the path and not the full `UiTree` should use this
 /// function in preference to constructing a tree and reading an attr.
 pub fn wallpaper_path_for_theme(theme: Theme) -> &'static str {
-    theme.wallpaper_path
+    theme.wallpaper_path.unwrap_or(FALLBACK_WALLPAPER_PATH)
 }
 
 /// Return styling rules for the desktop scene expressed against `theme`.
@@ -100,7 +101,7 @@ pub fn desktop_tree_for_theme(theme: Theme) -> Result<(UiTree, DesktopNodes), Ta
     if let Some(node) = tree.node_mut(wallpaper) {
         node.attrs.insert(
             alloc::string::String::from("path"),
-            AttrValue::Str(alloc::string::String::from(theme.wallpaper_path)),
+            AttrValue::Str(alloc::string::String::from(wallpaper_path_for_theme(theme))),
         );
     }
 
@@ -132,7 +133,7 @@ mod tests {
             let path_attr = wallpaper_node.attrs.get("path").expect("missing path attr");
             assert_eq!(
                 *path_attr,
-                AttrValue::Str(alloc::string::String::from(theme.wallpaper_path)),
+                AttrValue::Str(alloc::string::String::from(wallpaper_path_for_theme(*theme))),
                 "wrong path attr for theme {}",
                 theme.name
             );

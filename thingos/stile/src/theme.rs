@@ -11,6 +11,8 @@ pub const DEFAULT_THEME_NAME: &str = "SolarisWarm";
 pub struct Theme {
     pub name: &'static str,
     pub renderer: ThemeRenderer,
+    /// The default wallpaper image path for this theme. Blossom reads this
+    /// via the petals desktop module to choose what to display at first paint.
     pub wallpaper_path: Option<&'static str>,
     pub active: WindowStateTokens,
     pub inactive: WindowStateTokens,
@@ -46,9 +48,6 @@ pub struct Theme {
     pub content_edge: u32,
     pub grid_line: u32,
     pub contact_shadow: u32,
-    /// The default wallpaper image path for this theme.  Blossom reads this
-    /// via the petals desktop module to choose what to display at first paint.
-    pub wallpaper_path: &'static str,
 }
 
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
@@ -96,7 +95,7 @@ pub const SOLARIS_WARM_PALETTE: SolarisWarmPalette = SolarisWarmPalette {
 pub const SOLARIS_WARM: Theme = Theme {
     name: DEFAULT_THEME_NAME,
     renderer: ThemeRenderer::SolarisWarm,
-    wallpaper_path: None,
+    wallpaper_path: Some("/public/wallpapers/flower.bmp"),
     active: WindowStateTokens {
         border: color_argb(SOLARIS_WARM_PALETTE.border),
         title_top: color_argb(SOLARIS_WARM_PALETTE.bg_secondary),
@@ -139,13 +138,12 @@ pub const SOLARIS_WARM: Theme = Theme {
     content_edge: color_argb(SOLARIS_WARM_PALETTE.border),
     grid_line: color_with_alpha(SOLARIS_WARM_PALETTE.border, 31),
     contact_shadow: color_argb(SOLARIS_WARM_PALETTE.shadow),
-    wallpaper_path: "/public/wallpapers/flower.bmp",
 };
 
 pub const OBSIDIAN_BLOOM: Theme = Theme {
     name: "Obsidian Bloom",
     renderer: ThemeRenderer::ObsidianFacet,
-    wallpaper_path: None,
+    wallpaper_path: Some("/public/wallpapers/flower.png"),
     active: WindowStateTokens {
         border: 0xFF11131D,
         title_top: 0xFF2A3147,
@@ -188,13 +186,12 @@ pub const OBSIDIAN_BLOOM: Theme = Theme {
     content_edge: 0xFF1B2638,
     grid_line: 0x221F3148,
     contact_shadow: 0x72000000,
-    wallpaper_path: "/public/wallpapers/flower.png",
 };
 
 pub const AURORA_GLASS: Theme = Theme {
     name: "Aurora Glass",
     renderer: ThemeRenderer::AuroraGlass,
-    wallpaper_path: None,
+    wallpaper_path: Some("/public/wallpapers/clouds.bmp"),
     active: WindowStateTokens {
         border: 0x8A174A5A,
         title_top: 0x70406B87,
@@ -237,7 +234,6 @@ pub const AURORA_GLASS: Theme = Theme {
     content_edge: 0x55406B87,
     grid_line: 0x1F7DE7FF,
     contact_shadow: 0x8A000000,
-    wallpaper_path: "/public/wallpapers/clouds.bmp",
 };
 
 pub const NOCTURNE_IRIS: Theme = Theme {
@@ -1200,17 +1196,18 @@ mod tests {
 
     #[test]
     fn bundled_themes_have_correct_wallpaper_paths() {
-        assert_eq!(SOLARIS_WARM.wallpaper_path, "/public/wallpapers/flower.bmp");
-        assert_eq!(OBSIDIAN_BLOOM.wallpaper_path, "/public/wallpapers/flower.png");
-        assert_eq!(AURORA_GLASS.wallpaper_path, "/public/wallpapers/clouds.bmp");
+        assert_eq!(SOLARIS_WARM.wallpaper_path, Some("/public/wallpapers/flower.bmp"));
+        assert_eq!(OBSIDIAN_BLOOM.wallpaper_path, Some("/public/wallpapers/flower.png"));
+        assert_eq!(AURORA_GLASS.wallpaper_path, Some("/public/wallpapers/clouds.bmp"));
         // All paths are non-empty and rooted under /public/
         for theme in available_themes() {
-            assert!(!theme.wallpaper_path.is_empty(), "{} has empty wallpaper_path", theme.name);
+            let path = theme.wallpaper_path.expect("Bundled themes must define wallpaper_path");
+            assert!(!path.is_empty(), "{} has empty wallpaper_path", theme.name);
             assert!(
-                theme.wallpaper_path.starts_with("/public/"),
+                path.starts_with("/public/"),
                 "{} wallpaper_path '{}' not under /public/",
                 theme.name,
-                theme.wallpaper_path
+                path
             );
         }
     }

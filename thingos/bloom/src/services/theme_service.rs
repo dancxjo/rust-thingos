@@ -10,13 +10,14 @@ use abi::syscall::vfs_flags::{O_CREAT, O_RDONLY, O_RDWR, O_TRUNC};
 use stem::syscall::vfs::{vfs_close, vfs_open, vfs_read, vfs_stat, vfs_write};
 
 use crate::loop_types::{BloomService, Interest, LoopAction, LoopEvent};
-use crate::theme::{DEFAULT_THEME_NAME, theme_by_name};
+use crate::theme::{DEFAULT_THEME_NAME, Theme, default_theme, theme_by_name};
 use crate::world::BloomWorld;
 
 pub const DEFAULT_THEME_CONFIG_PATH: &str = "/session/desktop/theme";
 pub const WALLPAPER_CONFIG_PATH: &str = "/session/desktop/wallpaper";
 const THEME_FALLBACK_POLL_TIMER: u64 = 11;
 const THEME_FALLBACK_POLL_MS: u64 = 1000;
+const FALLBACK_THEME_WALLPAPER_PATH: &str = "/public/wallpapers/flower.bmp";
 
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 struct ThemeStamp {
@@ -75,6 +76,13 @@ pub fn write_themed_wallpaper(config_path: &str, wallpaper_path: &str) {
             stem::warn!("Could not open wallpaper config {}: {:?}", config_path, e);
         }
     }
+}
+
+pub fn theme_wallpaper_path(theme: Theme) -> &'static str {
+    theme
+        .wallpaper_path
+        .or(default_theme().wallpaper_path)
+        .unwrap_or(FALLBACK_THEME_WALLPAPER_PATH)
 }
 
 fn theme_config_stamp(config_path: &str) -> Option<ThemeStamp> {
@@ -147,19 +155,17 @@ impl ThemeService {
         self.last_stamp = theme_config_stamp(self.config_path);
         let requested = theme_target_or_default(self.config_path);
         let theme = theme_by_name(&requested);
+        let wallpaper_path = theme_wallpaper_path(theme);
         let applied = world.visuals.set_theme_by_name(&requested);
         stem::info!("Applying theme {}", applied);
-        if let (Some(config_path), Some(wallpaper_path)) =
-            (self.wallpaper_config_path, theme.wallpaper_path)
-        {
+        if let Some(config_path) = self.wallpaper_config_path {
             let _ = write_wallpaper_target(config_path, wallpaper_path);
             stem::info!("Applying theme wallpaper {}", wallpaper_path);
             world.visuals.start_background_load(&world.display, wallpaper_path);
         }
         world.damage.mark_full(world.primary.width, world.primary.height);
         // Write the theme's wallpaper path so blossom picks it up via its watch.
-        let theme = theme_by_name(&requested);
-        write_themed_wallpaper(WALLPAPER_CONFIG_PATH, theme.wallpaper_path);
+        write_themed_wallpaper(WALLPAPER_CONFIG_PATH, wallpaper_path);
     }
 
     fn poll_config(&mut self, world: &mut BloomWorld) -> bool {

@@ -35,7 +35,7 @@ use services::input_service::InputService;
 use services::resources::ResourceRetryService;
 use services::theme_service::{
     DEFAULT_THEME_CONFIG_PATH, WALLPAPER_CONFIG_PATH, ThemeService, ensure_theme_config,
-    write_themed_wallpaper,
+    theme_wallpaper_path, write_themed_wallpaper,
 };
 use services::wayland::WaylandService;
 use services::wayland_cmd::WaylandCommandService;
@@ -136,8 +136,9 @@ fn main(_arg: usize) -> ! {
     // Write the theme's wallpaper path so blossom has it before it first paints.
     if !minimal_mode {
         let theme_obj = crate::theme::theme_by_name(&initial_theme);
-        write_themed_wallpaper(WALLPAPER_CONFIG_PATH, theme_obj.wallpaper_path);
-        stem::debug!("bloom: initial wallpaper path set to {}", theme_obj.wallpaper_path);
+        let wallpaper_path = theme_wallpaper_path(theme_obj);
+        write_themed_wallpaper(WALLPAPER_CONFIG_PATH, wallpaper_path);
+        stem::debug!("bloom: initial wallpaper path set to {}", wallpaper_path);
     }
 
     stem::debug!("bloom.phase=init_cursor");
@@ -221,7 +222,7 @@ fn main(_arg: usize) -> ! {
     bloom_loop.add_service(alloc::boxed::Box::new(ThemeService::new(
         theme_watch_fd,
         THEME_PATH,
-        Some(WP_PATH),
+        Some(WALLPAPER_CONFIG_PATH),
     )));
 
     // ── Spawn Wayland server thread + wire IPC ports ──────────────────────────
