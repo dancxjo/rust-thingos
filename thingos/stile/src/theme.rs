@@ -143,7 +143,7 @@ pub const SOLARIS_WARM: Theme = Theme {
 pub const OBSIDIAN_BLOOM: Theme = Theme {
     name: "Obsidian Bloom",
     renderer: ThemeRenderer::ObsidianFacet,
-    wallpaper_path: Some("/public/wallpapers/flower.png"),
+    wallpaper_path: Some("/public/wallpapers/leather.bmp"),
     active: WindowStateTokens {
         border: 0xFF11131D,
         title_top: 0xFF2A3147,
@@ -377,6 +377,7 @@ fn matches_obsidian_bloom(trimmed: &str) -> bool {
     trimmed.eq_ignore_ascii_case("obsidian bloom")
         || trimmed.eq_ignore_ascii_case("obsidian-bloom")
         || trimmed.eq_ignore_ascii_case("obsidian_bloom")
+    || trimmed.eq_ignore_ascii_case("leather.bmp")
 }
 
 fn push_nocturne_iris_window<'a>(
@@ -1191,13 +1192,13 @@ mod tests {
         assert_eq!(theme_by_name("obsidian-bloom").name, OBSIDIAN_BLOOM.name);
         assert_eq!(find_theme_by_name("obsidian_bloom").unwrap().name, OBSIDIAN_BLOOM.name);
         assert!(find_theme_by_name("not-a-theme").is_none());
-        assert_eq!(theme_by_name("leather.bmp").name, SOLARIS_WARM.name);
+        assert_eq!(theme_by_name("leather.bmp").name, OBSIDIAN_BLOOM.name);
     }
 
     #[test]
     fn bundled_themes_have_correct_wallpaper_paths() {
         assert_eq!(SOLARIS_WARM.wallpaper_path, Some("/public/wallpapers/flower.bmp"));
-        assert_eq!(OBSIDIAN_BLOOM.wallpaper_path, Some("/public/wallpapers/flower.png"));
+        assert_eq!(OBSIDIAN_BLOOM.wallpaper_path, Some("/public/wallpapers/leather.bmp"));
         assert_eq!(AURORA_GLASS.wallpaper_path, Some("/public/wallpapers/clouds.bmp"));
         // All paths are non-empty and rooted under /public/
         for theme in available_themes() {

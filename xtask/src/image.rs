@@ -324,6 +324,7 @@ pub fn default_programs() -> Vec<ProgramConfig> {
         ProgramConfig { name: "rtc_cmos", is_init: true, boot_module: true, features: vec![] },
         ProgramConfig { name: "hwrng", is_init: true, boot_module: true, features: vec![] },
         ProgramConfig { name: "ps2_kbd", is_init: false, boot_module: true, features: vec![] },
+        ProgramConfig { name: "ec_kbd", is_init: false, boot_module: true, features: vec![] },
         ProgramConfig { name: "sh", is_init: true, boot_module: true, features: vec![] },
         ProgramConfig { name: "ls", is_init: true, boot_module: true, features: vec![] },
         ProgramConfig { name: "lsusb", is_init: true, boot_module: true, features: vec![] },
@@ -1207,6 +1208,7 @@ fn is_driver(name: &str) -> bool {
         "display_nvidia_gpu",
         "display_virtio_gpu",
         "driver_wasm_host",
+        "ec_kbd",
         "hdaudio",
         "hwrng",
         "fatd",
@@ -1314,7 +1316,7 @@ fn is_non_bootfb_graphics_driver(name: &str) -> bool {
 
 fn is_safe_shell_program(name: &str) -> bool {
     is_bin_program(name)
-        || matches!(name, "sprout" | "bristle" | "cambium" | "ps2_kbd" | "ps2_mouse")
+        || matches!(name, "sprout" | "bristle" | "cambium" | "ps2_kbd" | "ps2_mouse" | "ec_kbd")
 }
 
 fn userspace_aliases(name: &str) -> &'static [&'static str] {
@@ -1383,7 +1385,7 @@ mod tests {
     }
 
     #[test]
-    fn safe_shell_entry_loads_only_sprout_sh_bristle_cambium_and_ps2() {
+    fn safe_shell_entry_loads_only_sprout_sh_bristle_cambium_and_input_drivers() {
         let sh = Shell::new().expect("shell");
         let mut sprout = test_program("sprout");
         sprout.is_init = true;
@@ -1402,6 +1404,7 @@ mod tests {
             test_program("bristle"),
             test_program("cambium"),
             test_program("ps2_kbd"),
+            test_program("ec_kbd"),
             test_program("ps2_mouse"),
             test_program("display_bootfb"),
             test_program("display_amd_gpu"),
@@ -1426,6 +1429,7 @@ mod tests {
         assert!(safe_entry.contains("module_path: boot():/services/bristle"));
         assert!(safe_entry.contains("module_path: boot():/services/cambium"));
         assert!(safe_entry.contains("module_path: boot():/drivers/ps2_kbd"));
+        assert!(safe_entry.contains("module_path: boot():/drivers/ec_kbd"));
         assert!(safe_entry.contains("module_path: boot():/drivers/ps2_mouse"));
         assert!(!safe_entry.contains("module_path: boot():/services/bloom"));
         assert!(!safe_entry.contains("module_path: boot():/lib/libpistil.so"));

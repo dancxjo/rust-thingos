@@ -18,6 +18,7 @@ members = [
   "thingos/drivers/display_nvidia_gpu",
   "thingos/drivers/display_virtio_gpu",
   "thingos/drivers/driver_wasm_host",
+  "thingos/drivers/ec_kbd",
   "thingos/drivers/hdaudio",
   "thingos/drivers/hwrng",
   "thingos/drivers/iso9660",
