@@ -12,28 +12,29 @@ use abi::hid::{
     BRISTLE_EVENT_MAGIC, BRISTLE_EVENT_VERSION, BristleEventHeader, EventType,
     KIND_BRISTLE_DEVICE_EVENT, KeyEventPayload,
 };
+use abi::syscall::vfs_flags::O_RDONLY;
 use stem::abi::module_manifest::{MANIFEST_MAGIC, ManifestHeader, ModuleKind, device_kind_bytes};
 use stem::syscall::message::msg_send;
 use stem::syscall::vfs::{vfs_close, vfs_open, vfs_read};
-use stem::syscall::{ioport_read, ioport_write, irq_subscribe};
-use stem::time::Duration;
-use stem::wait_set::WaitSet;
 use stem::{debug, info, trace, warn};
 
 mod ec;
 mod keyboard;
 mod normalizer;
 
-use ec::{CMD_QUERY, COMMAND_PORT, DATA_PORT, EcStatus};
+use ec::EcStatus;
 use keyboard::{KeyEdge, KeyboardState};
 
 const THINGOS_DRIVER_NAME: &[u8] = b"ec_kbd";
 const KIND_DRV_EC_KBD: &str = "drv.EcKeyboard";
 const BRISTLE_PID_PATH: &str = "/run/bristle/pid";
-const SCI_VECTOR: u8 = 0x29;
+
+/// Path to the EC core service status file.
+const EC_SERVICE_STATUS: &str = "/services/ec/status";
+/// Path to the EC core service data (OBF byte) file.
+const EC_SERVICE_DATA: &str = "/services/ec/data";
+
 const POLL_INTERVAL_MS: u64 = 25;
-const WAIT_TIMEOUT_MS: u64 = 25;
-const WAIT_SPINS: usize = 512;
 const DRAIN_LIMIT: usize = 16;
 const INPUT_TRACE_INITIAL: u64 = 24;
 const INPUT_TRACE_INTERVAL: u64 = 128;
@@ -111,6 +112,8 @@ pub static MANIFEST: ManifestHeader = ManifestHeader {
     _reserved: 0,
 };
 
+// ── Entry point ───────────────────────────────────────────────────────────────
+
 #[stem::main]
 fn main(_raw_arg: usize) -> ! {
     debug!("EC keyboard service online; waiting for bristle pid");
@@ -130,22 +133,44 @@ fn main(_raw_arg: usize) -> ! {
 
     debug!("Connected EC keyboard events to bristle pid={}", bristle_pid);
 
-    if !ec_present() {
-        info!("EC keyboard controller unavailable");
+    // Wait for the EC core driver to publish its service.
+    if let Err(e) = stem::fs::wait_until_exists(EC_SERVICE_STATUS) {
+        warn!("EC service unavailable ({}): {:?}", EC_SERVICE_STATUS, e);
         idle_forever();
     }
 
-    match irq_subscribe(SCI_VECTOR) {
-        Ok(()) => interrupt_loop(bristle_pid),
+    let status_fd = match vfs_open(EC_SERVICE_STATUS, O_RDONLY) {
+        Ok(fd) => fd,
         Err(e) => {
-            debug!("SCI IRQ subscribe failed ({:?}); using polling", e);
-            polling_loop(bristle_pid);
+            warn!("Failed to open {}: {:?}", EC_SERVICE_STATUS, e);
+            idle_forever();
         }
+    };
+
+    let data_fd = match vfs_open(EC_SERVICE_DATA, O_RDONLY) {
+        Ok(fd) => fd,
+        Err(e) => {
+            warn!("Failed to open {}: {:?}", EC_SERVICE_DATA, e);
+            let _ = vfs_close(status_fd);
+            idle_forever();
+        }
+    };
+
+    if !ec_present(status_fd) {
+        info!("EC keyboard controller unavailable");
+        let _ = vfs_close(status_fd);
+        let _ = vfs_close(data_fd);
+        idle_forever();
     }
+
+    debug!("EC keyboard polling via /services/ec (interval={}ms)", POLL_INTERVAL_MS);
+    polling_loop(bristle_pid, status_fd, data_fd)
 }
 
+// ── Helpers ───────────────────────────────────────────────────────────────────
+
 fn read_u32_file(path: &str) -> Option<u32> {
-    let fd = vfs_open(path, abi::syscall::vfs_flags::O_RDONLY).ok()?;
+    let fd = vfs_open(path, O_RDONLY).ok()?;
     let mut buf = [0u8; 32];
     let n = vfs_read(fd, &mut buf).unwrap_or(0);
     let _ = vfs_close(fd);
@@ -162,77 +187,62 @@ fn idle_forever() -> ! {
     }
 }
 
-fn ec_present() -> bool {
+/// Read a single byte from an open EC service file descriptor.
+fn read_ec_byte(fd: u32) -> Option<u8> {
+    let mut buf = [0u8; 1];
+    match vfs_read(fd, &mut buf) {
+        Ok(1) => Some(buf[0]),
+        _ => None,
+    }
+}
+
+fn ec_present(status_fd: u32) -> bool {
     for _ in 0..4 {
-        if !EcStatus(read_status()).looks_absent() {
-            return true;
+        if let Some(s) = read_ec_byte(status_fd) {
+            if !EcStatus(s).looks_absent() {
+                return true;
+            }
         }
         stem::time::sleep_ms(1);
     }
     false
 }
 
-fn interrupt_loop(bristle_pid: u32) -> ! {
-    debug!("Using SCI-assisted EC keyboard loop: vector=0x{:02x}", SCI_VECTOR);
-    let mut waitset = WaitSet::new();
-    let irq_token = match waitset.add_irq(SCI_VECTOR as u64) {
-        Ok(token) => token,
-        Err(e) => {
-            debug!("SCI wait source unavailable ({:?}); using polling", e);
-            polling_loop(bristle_pid);
-        }
-    };
+// ── Main polling loop ─────────────────────────────────────────────────────────
+
+fn polling_loop(bristle_pid: u32, status_fd: u32, data_fd: u32) -> ! {
     let mut state = KeyboardState::new();
     let mut drop_counter = 0u32;
 
     loop {
-        match waitset.wait(Some(Duration::from_millis(WAIT_TIMEOUT_MS))) {
-            Ok(events) => {
-                for event in events {
-                    if event.token() == irq_token && event.is_irq() {
-                        trace!("SCI wake for EC keyboard pending={}", event.value());
-                    }
-                }
-                drain_ec_events(bristle_pid, &mut state, &mut drop_counter);
-            }
-            Err(e) => {
-                warn!("SCI wait error ({:?}); switching to polling", e);
-                polling_loop(bristle_pid);
-            }
-        }
-    }
-}
-
-fn polling_loop(bristle_pid: u32) -> ! {
-    debug!("Using EC keyboard polling loop: interval={}ms", POLL_INTERVAL_MS);
-    let mut state = KeyboardState::new();
-    let mut drop_counter = 0u32;
-
-    loop {
-        drain_ec_events(bristle_pid, &mut state, &mut drop_counter);
+        drain_ec_events(bristle_pid, status_fd, data_fd, &mut state, &mut drop_counter);
         stem::time::sleep_ms(POLL_INTERVAL_MS);
     }
 }
 
-fn drain_ec_events(bristle_pid: u32, state: &mut KeyboardState, drop_counter: &mut u32) -> usize {
+fn drain_ec_events(
+    bristle_pid: u32,
+    status_fd: u32,
+    data_fd: u32,
+    state: &mut KeyboardState,
+    drop_counter: &mut u32,
+) -> usize {
     let mut events = 0usize;
 
     for _ in 0..DRAIN_LIMIT {
-        let status = EcStatus(read_status());
+        // Read EC status from the core service (never touches hardware directly).
+        let status = EcStatus(read_ec_byte(status_fd).unwrap_or(0xff));
         if status.looks_absent() {
             break;
         }
-
-        let byte = if status.sci_event() {
-            query_ec_event()
-        } else if status.output_full() {
-            Some(read_data())
-        } else {
-            None
-        };
-
-        let Some(byte) = byte else {
+        if !status.output_full() {
             break;
+        }
+
+        // OBF is set — read the keyboard scancode.
+        let byte = match read_ec_byte(data_fd) {
+            Some(b) => b,
+            None    => break,
         };
 
         let event_no = EC_EVENT_COUNT.fetch_add(1, Ordering::Relaxed) + 1;
@@ -251,52 +261,7 @@ fn drain_ec_events(bristle_pid: u32, state: &mut KeyboardState, drop_counter: &m
     events
 }
 
-fn query_ec_event() -> Option<u8> {
-    if !wait_input_clear() {
-        return None;
-    }
-    ioport_write(COMMAND_PORT, CMD_QUERY as usize, 1);
-    if !wait_output_full() {
-        return None;
-    }
-    Some(read_data())
-}
-
-fn wait_input_clear() -> bool {
-    for _ in 0..WAIT_SPINS {
-        let status = EcStatus(read_status());
-        if status.looks_absent() {
-            return false;
-        }
-        if !status.input_full() {
-            return true;
-        }
-        core::hint::spin_loop();
-    }
-    false
-}
-
-fn wait_output_full() -> bool {
-    for _ in 0..WAIT_SPINS {
-        let status = EcStatus(read_status());
-        if status.looks_absent() {
-            return false;
-        }
-        if status.output_full() {
-            return true;
-        }
-        core::hint::spin_loop();
-    }
-    false
-}
-
-fn read_status() -> u8 {
-    ioport_read(COMMAND_PORT, 1) as u8
-}
-
-fn read_data() -> u8 {
-    ioport_read(DATA_PORT, 1) as u8
-}
+// ── Key event sender ──────────────────────────────────────────────────────────
 
 fn send_key_event(bristle_pid: u32, edge: KeyEdge, drop_counter: &mut u32) {
     let timestamp_ns = stem::monotonic_ns();

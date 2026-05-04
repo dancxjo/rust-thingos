@@ -1,11 +1,10 @@
-pub const DATA_PORT: usize = 0x62;
-pub const COMMAND_PORT: usize = 0x66;
-
+/// Decoded EC status byte.
+///
+/// The EC hardware status register is read from `/services/ec/status`; bit
+/// interpretation is the same as the raw port 0x66 register.
 pub const STATUS_OBF: u8 = 1 << 0;
 pub const STATUS_IBF: u8 = 1 << 1;
 pub const STATUS_SCI_EVT: u8 = 1 << 5;
-
-pub const CMD_QUERY: u8 = 0x84;
 
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub struct EcStatus(pub u8);
