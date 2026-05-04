@@ -11,6 +11,7 @@ use crate::{
     JustifyContent, NodeId, PetalsEvent, PetalsService, Rule, Selector, ServiceAction, State,
     Theme, UiTree, default_theme,
 };
+use stile::typography::{SCALE_BODY, SCALE_DISPLAY, SCALE_H3, SPACE_LG, SPACE_MD, SPACE_SM};
 
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub enum CalcMode {
@@ -261,8 +262,8 @@ impl Calculator {
                     Declaration::FlexDirection(FlexDirection::Column),
                     Declaration::AlignItems(AlignItems::Stretch),
                     Declaration::JustifyContent(JustifyContent::Start),
-                    Declaration::Gap(8.0),
-                    Declaration::Padding(12.0),
+                    Declaration::Gap(SPACE_SM),
+                    Declaration::Padding(SPACE_MD),
                     Declaration::BackgroundColor(color_from_argb(theme.body_top)),
                 ],
             ),
@@ -272,27 +273,40 @@ impl Calculator {
                     Declaration::FlexDirection(FlexDirection::Column),
                     Declaration::AlignItems(AlignItems::End),
                     Declaration::JustifyContent(JustifyContent::Center),
-                    Declaration::Padding(16.0),
-                    Declaration::Gap(6.0),
+                    Declaration::Padding(SPACE_LG),
+                    Declaration::Gap(SPACE_SM),
                     Declaration::Height(112.0),
                     Declaration::BackgroundColor(color_from_argb(theme.inactive.title_bottom)),
                 ],
             ),
+            // Base text style for all Textual nodes in the calc (key labels, mode label).
+            // Placed before specific overrides so ExpressionLine and ResultLine can win.
+            Rule::new(
+                Selector::has(Description::Textual),
+                alloc::vec![
+                    Declaration::FontSize(SCALE_H3),
+                    Declaration::Width(64.0),
+                    Declaration::Height(20.0),
+                    Declaration::Color(color_from_argb(theme.chrome_text)),
+                ],
+            ),
+            // ExpressionLine overrides the Textual base to a smaller body size.
             Rule::new(
                 Selector::has(Description::ExpressionLine),
                 alloc::vec![
                     Declaration::Width(320.0),
-                    Declaration::Height(22.0),
-                    Declaration::FontSize(18.0),
+                    Declaration::Height(20.0),
+                    Declaration::FontSize(SCALE_BODY),
                     Declaration::Color(color_from_argb(theme.chrome_text_inactive)),
                 ],
             ),
+            // ResultLine overrides the Textual base to the large display size.
             Rule::new(
                 Selector::has(Description::ResultLine),
                 alloc::vec![
                     Declaration::Width(320.0),
                     Declaration::Height(56.0),
-                    Declaration::FontSize(48.0),
+                    Declaration::FontSize(SCALE_DISPLAY),
                     Declaration::FontWeight(FontWeight::Normal),
                     Declaration::Color(color_from_argb(theme.chrome_text)),
                 ],
@@ -303,7 +317,7 @@ impl Calculator {
                     Declaration::FlexDirection(FlexDirection::Column),
                     Declaration::AlignItems(AlignItems::Stretch),
                     Declaration::JustifyContent(JustifyContent::Start),
-                    Declaration::Gap(8.0),
+                    Declaration::Gap(SPACE_SM),
                 ],
             ),
             Rule::new(
@@ -312,7 +326,7 @@ impl Calculator {
                     Declaration::FlexDirection(FlexDirection::Row),
                     Declaration::AlignItems(AlignItems::Stretch),
                     Declaration::JustifyContent(JustifyContent::Start),
-                    Declaration::Gap(8.0),
+                    Declaration::Gap(SPACE_SM),
                     Declaration::Height(72.0),
                 ],
             ),
@@ -352,15 +366,6 @@ impl Calculator {
                 alloc::vec![Declaration::BackgroundColor(color_from_argb(theme.close_icon))],
             ),
             Rule::new(
-                Selector::has(Description::Textual),
-                alloc::vec![
-                    Declaration::FontSize(22.0),
-                    Declaration::Width(64.0),
-                    Declaration::Height(28.0),
-                    Declaration::Color(color_from_argb(theme.chrome_text)),
-                ],
-            ),
-            Rule::new(
                 Selector::has(Description::OperatorKey),
                 alloc::vec![Declaration::Color(Color::rgb(0x11, 0x13, 0x18))],
             ),
@@ -369,7 +374,7 @@ impl Calculator {
                 alloc::vec![
                     Declaration::Height(32.0),
                     Declaration::Width(144.0),
-                    Declaration::Padding(6.0),
+                    Declaration::Padding(SPACE_SM),
                     Declaration::FlexDirection(FlexDirection::Row),
                     Declaration::AlignItems(AlignItems::Center),
                     Declaration::JustifyContent(JustifyContent::Center),
@@ -903,5 +908,27 @@ mod tests {
             calc.narration(CalcInput::Digit(7), &state),
             "Seven pressed. Expression: 7. Result: 7"
         );
+    }
+
+    #[test]
+    fn expression_line_font_size_is_distinct_from_result_line() {
+        use stile::typography::{SCALE_BODY, SCALE_DISPLAY, SCALE_H3};
+        let calc = Calculator::new();
+        let (tree, nodes) = calc.build_tree(&CalcState::default()).unwrap();
+
+        let expr_size = tree.node(nodes.expression_line).unwrap().style.font_size;
+        let result_size = tree.node(nodes.result_line).unwrap().style.font_size;
+        let key_size = tree.node(nodes.keys[0].label).unwrap().style.font_size;
+
+        // ExpressionLine must use body scale — overrides the Textual base.
+        assert_eq!(expr_size, Some(SCALE_BODY));
+        // ResultLine must use the large display scale — overrides the Textual base.
+        assert_eq!(result_size, Some(SCALE_DISPLAY));
+        // Key labels use the component-heading scale from the Textual base rule.
+        assert_eq!(key_size, Some(SCALE_H3));
+        // All three must be distinct from one another.
+        assert_ne!(expr_size, result_size);
+        assert_ne!(expr_size, key_size);
+        assert_ne!(result_size, key_size);
     }
 }

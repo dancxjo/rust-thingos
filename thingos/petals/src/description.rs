@@ -45,6 +45,7 @@ pub enum Description {
     ApplicationGrid,
     ApplicationRow,
     ApplicationTile,
+    ApplicationTitle,
     ApplicationName,
     ApplicationPath,
     ApplicationStatus,

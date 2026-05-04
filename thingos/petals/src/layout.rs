@@ -235,6 +235,7 @@ fn default_stylable_for(descriptions: &[Description]) -> Stylable {
     if descriptions.contains(&Description::Textual)
         || descriptions.contains(&Description::Logogram)
         || descriptions.contains(&Description::Title)
+        || descriptions.contains(&Description::ApplicationTitle)
     {
         stylable.properties.extend_from_slice(&[
             StyleProperty::Color,
