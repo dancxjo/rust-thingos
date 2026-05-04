@@ -38,10 +38,11 @@ const PATCH_W: u32 = PATCH_INSET_LEFT + PATCH_INNER_W + PATCH_INSET_RIGHT;
 const PATCH_H: u32 = PATCH_INSET_TOP + PATCH_INNER_H + PATCH_INSET_BOTTOM;
 const PATCH_PIXELS: usize = (PATCH_W * PATCH_H) as usize;
 
-/// Warm brown shadow colour: rgb(80, 55, 20).
-const SHADOW_R: u32 = 80;
-const SHADOW_G: u32 = 55;
-const SHADOW_B: u32 = 20;
+/// Near-black shadow colour: rgb(0, 0, 0).  A neutral black provides strong
+/// contrast against both light and dark wallpapers.
+const SHADOW_R: u32 = 0;
+const SHADOW_G: u32 = 0;
+const SHADOW_B: u32 = 0;
 const SHADOW_RGB: u32 = (SHADOW_R << 16) | (SHADOW_G << 8) | SHADOW_B;
 
 /// Corner radius used when generating the patch.  This should match the
@@ -59,15 +60,15 @@ struct ShadowLayer {
 }
 
 const ACTIVE_LAYERS: &[ShadowLayer] = &[
-    ShadowLayer { offset_x: 7, offset_y: 8, pad_right: 6, pad_bottom: 8, radius_add: 6, alpha: 13 },
-    ShadowLayer { offset_x: 4, offset_y: 5, pad_right: 3, pad_bottom: 4, radius_add: 3, alpha: 26 },
-    ShadowLayer { offset_x: 2, offset_y: 2, pad_right: 1, pad_bottom: 2, radius_add: 0, alpha: 46 },
+    ShadowLayer { offset_x: 7, offset_y: 8, pad_right: 6, pad_bottom: 8, radius_add: 6, alpha: 30 },
+    ShadowLayer { offset_x: 4, offset_y: 5, pad_right: 3, pad_bottom: 4, radius_add: 3, alpha: 60 },
+    ShadowLayer { offset_x: 2, offset_y: 2, pad_right: 1, pad_bottom: 2, radius_add: 0, alpha: 100 },
 ];
 
 const INACTIVE_LAYERS: &[ShadowLayer] = &[
-    ShadowLayer { offset_x: 5, offset_y: 6, pad_right: 4, pad_bottom: 6, radius_add: 4, alpha: 10 },
-    ShadowLayer { offset_x: 3, offset_y: 4, pad_right: 2, pad_bottom: 3, radius_add: 2, alpha: 20 },
-    ShadowLayer { offset_x: 1, offset_y: 1, pad_right: 1, pad_bottom: 1, radius_add: 0, alpha: 32 },
+    ShadowLayer { offset_x: 5, offset_y: 6, pad_right: 4, pad_bottom: 6, radius_add: 4, alpha: 18 },
+    ShadowLayer { offset_x: 3, offset_y: 4, pad_right: 2, pad_bottom: 3, radius_add: 2, alpha: 40 },
+    ShadowLayer { offset_x: 1, offset_y: 1, pad_right: 1, pad_bottom: 1, radius_add: 0, alpha: 64 },
 ];
 
 // ---------------------------------------------------------------------------

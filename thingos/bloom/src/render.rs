@@ -2097,16 +2097,30 @@ fn draw_contact_shadow(
     rect: abi::display_protocol::Rect,
     theme: Theme,
 ) {
-    fill_rect_i32(
-        dst,
-        stride,
-        height,
-        rect.x as i32 + 2,
-        rect.y as i32 + 2,
-        rect.w as i32,
-        rect.h as i32,
-        theme.contact_shadow,
-    );
+    let base_alpha = (theme.contact_shadow >> 24) & 0xFF;
+    let rgb = theme.contact_shadow & 0x00FFFFFF;
+
+    // Soft multi-layer drop shadow offset to the right and down.
+    // Layers are drawn outermost-first (lightest) and innermost-last
+    // (darkest), so later layers overwrite the overlap region and the
+    // visible outer ring fades smoothly from full opacity to transparent.
+    const OFFSET_X: i32 = 4;
+    const OFFSET_Y: i32 = 6;
+    const LAYERS: u32 = 5;
+    for layer in 0..LAYERS {
+        let expand = (LAYERS - 1 - layer) as i32;
+        let alpha = (base_alpha as u32) * (layer + 1) / LAYERS;
+        fill_rect_i32(
+            dst,
+            stride,
+            height,
+            rect.x as i32 + OFFSET_X,
+            rect.y as i32 + OFFSET_Y,
+            rect.w as i32 + expand,
+            rect.h as i32 + expand,
+            (alpha << 24) | rgb,
+        );
+    }
 }
 
 fn draw_content_field(
