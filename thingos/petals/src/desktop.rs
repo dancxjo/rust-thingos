@@ -121,7 +121,7 @@ mod tests {
     #[test]
     fn wallpaper_path_for_theme_returns_per_theme_path() {
         assert_eq!(wallpaper_path_for_theme(SOLARIS_WARM), "/public/wallpapers/flower.bmp");
-        assert_eq!(wallpaper_path_for_theme(OBSIDIAN_BLOOM), "/public/wallpapers/flower.png");
+        assert_eq!(wallpaper_path_for_theme(OBSIDIAN_BLOOM), "/public/wallpapers/leather.bmp");
         assert_eq!(wallpaper_path_for_theme(AURORA_GLASS), "/public/wallpapers/clouds.bmp");
     }
 

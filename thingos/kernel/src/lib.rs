@@ -1278,6 +1278,11 @@ pub fn start<R: BootRuntime>(runtime: &'static R) -> ! {
             crate::device_registry::PS2_IOPORT_RANGES,
             0x64,
         ));
+        reg.register(crate::device_registry::DeviceEntry::new_legacy(
+            "drv.EcKeyboard",
+            crate::device_registry::ACPI_EC_IOPORT_RANGES,
+            0x66,
+        ));
         // Legacy ISA IDE controller: primary (0x1F0) + secondary (0x170) channels.
         // Exposed as `isa-01f0` in sysfs with kind="dev.storage.ata" so cambium
         // can auto-discover and spawn the ata_disk userland driver.

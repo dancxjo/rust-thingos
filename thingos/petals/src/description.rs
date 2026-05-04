@@ -57,4 +57,13 @@ pub enum Description {
     Desktop,
     Wallpaper,
     ScrollContainer,
+    /// A full-width pressable list row.  Nodes with this description expand
+    /// to fill the container's cross-axis when the parent uses
+    /// `align_items: Stretch` (e.g. a `flex-direction: column` list where
+    /// children should span the full container width).
+    ///
+    /// The [`Description::ListRow`] tag enables targeted CSS-like rules (for
+    /// minimum height, padding, etc.) and is recognised by the debug overlay
+    /// as a hit region marker alongside [`Description::Pressable`].
+    ListRow,
 }
