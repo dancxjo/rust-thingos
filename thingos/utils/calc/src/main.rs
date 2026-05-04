@@ -214,6 +214,11 @@ impl Application for CalcApp {
                 return AppAction::Quit;
             }
             ServiceEvent::Timeout => {}
+            ServiceEvent::Message { kind, .. }
+                if kind.0 == stem::kinds::KIND_ID_THINGOS_UI_THEME_CHANGED =>
+            {
+                changed = true;
+            }
             ServiceEvent::Message { .. } | ServiceEvent::Ready { .. } => {}
             ServiceEvent::InboxClosed => return AppAction::Quit,
         }

@@ -19,9 +19,11 @@ use stem::service_loop::ServiceEvent;
 use stem::syscall::socket::{connect, sendmsg, socket};
 use stem::syscall::socket_domain::AF_UNIX;
 use stem::syscall::socket_type::SOCK_STREAM;
+use stem::kinds::KIND_ID_THINGOS_UI_THEME_CHANGED;
+use stem::syscall::message::{KindId, msg_broadcast};
 use stem::syscall::{
-    argv_get, exit, memfd_create, sleep_ms, vfs_close, vfs_mkdir, vfs_open, vfs_read, vfs_write,
-    vm_map,
+    argv_get, exit, getpgrp, memfd_create, sleep_ms, vfs_close, vfs_mkdir, vfs_open, vfs_read,
+    vfs_write, vm_map,
 };
 use stem::time::Duration;
 use stem::wait_set::WaitToken;
@@ -115,6 +117,7 @@ fn set_theme_cli(name: &str) -> ! {
 
     match write_theme_name(theme.name) {
         Ok(()) => {
+            broadcast_theme_changed(theme.name);
             print(&alloc::format!("Selected theme {}\n", theme.name));
             exit(0);
         }
@@ -407,6 +410,7 @@ fn read_events(
 fn apply_theme_index(index: usize) {
     if let Some(theme) = available_themes().get(index) {
         if write_theme_name(theme.name).is_ok() {
+            broadcast_theme_changed(theme.name);
             info!("Selected theme {}", theme.name);
         } else {
             stem::warn!("Could not write theme selection");
@@ -566,6 +570,20 @@ fn write_theme_name(name: &str) -> Result<(), &'static str> {
     let ok = vfs_write(fd, line.as_bytes()).is_ok();
     let _ = vfs_close(fd);
     if ok { Ok(()) } else { Err("could not write /session/desktop/theme") }
+}
+
+fn broadcast_theme_changed(name: &str) {
+    let pgid = getpgrp();
+    let result = msg_broadcast(pgid, KindId(KIND_ID_THINGOS_UI_THEME_CHANGED), name.as_bytes());
+    match result {
+        Ok(r) if r.succeeded > 0 => {
+            stem::debug!("Theme-changed broadcast delivered to {} peer(s)", r.succeeded);
+        }
+        Ok(_) => {}
+        Err(e) => {
+            stem::debug!("Theme-changed broadcast failed: {:?}", e);
+        }
+    }
 }
 
 fn get_args() -> Vec<String> {

@@ -78,6 +78,7 @@ Feature: Bloom compositor desktop behavior
     When I type "themes --set aurora-glass" on the serial console
     Then the command output should contain "Selected theme Aurora Glass"
     And the serial output should contain "Applying theme Aurora Glass" within 60s
+    And the serial output should contain "clock: applying theme Aurora Glass" within 10s
     When I type "themes --current" on the serial console
     Then the command output should strictly be "Aurora Glass"
 
